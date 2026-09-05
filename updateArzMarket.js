@@ -1,5 +1,5 @@
 {
   "updateurl": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/by_Quant_ArzMarket%5B3_56%5D.lua",
-  "latest": "3.56.107",
+  "latest": "3.56.108",
   "itemsUpdate": 1
 }
