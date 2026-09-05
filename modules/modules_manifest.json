@@ -1,0 +1,15 @@
+{
+  "manifest_version": 1,
+  "modules": {
+    "storage_core": {
+      "api_version": 1,
+      "module_version": 3,
+      "url": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/modules/storage_core.lua"
+    },
+    "buyroute_core": {
+      "api_version": 1,
+      "module_version": 1,
+      "url": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/modules/buyroute_core.lua"
+    }
+  }
+}
