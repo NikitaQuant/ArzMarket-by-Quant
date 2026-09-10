@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="referrer" content="no-referrer">
+  <title>ArzMarket</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body data-token="__ARZMARKET_TOKEN__">
+  <div id="app" class="app-shell" data-page="buy">
+    <div class="game-dim"></div>
+    <main class="window">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span>A</span></div>
+          <div class="brand-copy"><div class="brand-title">ArzMarket</div><div class="brand-subtitle">ARIZONA RP</div></div>
+        </div>
+        <div class="topbar-actions">
+          <div class="mode-switch" aria-label="Режим интерфейса">
+            <button class="mode-btn active" type="button" data-action="mode-html">HTML</button>
+            <button class="mode-btn" type="button" data-action="mode-lua">Lua</button>
+          </div>
+          <button class="window-btn" type="button" data-action="close" aria-label="Закрыть">×</button>
+        </div>
+      </header>
+      <div class="body-grid">
+        <aside class="sidebar">
+          <nav class="nav-list" aria-label="Разделы ArzMarket">
+            <button class="nav-item" type="button" data-page="sell"><span class="nav-icon">↥</span><span>Продажа</span></button>
+            <button class="nav-item active" type="button" data-page="buy"><span class="nav-icon">⌑</span><span>Скупка</span></button>
+            <button class="nav-item disabled" type="button" disabled><span class="nav-icon">⚙</span><span>Настройки</span></button>
+            <button class="nav-item disabled" type="button" disabled><span class="nav-icon">☷</span><span>Логи</span></button>
+            <button class="nav-item disabled" type="button" disabled><span class="nav-icon">⌂</span><span>Маркетплейс</span></button>
+            <button class="nav-item disabled" type="button" disabled><span class="nav-icon">▣</span><span>Хранилище</span></button>
+          </nav>
+          <div class="sidebar-footer">
+            <div class="arizona-card"><div class="arizona-card-glow"></div><div class="arizona-card-title">ARIZONA RP</div><div class="arizona-card-subtitle">Players make legends</div></div>
+            <div class="runtime-state"><span class="status-dot"></span><span id="runtimeText">Подключение...</span></div>
+            <div class="version">HTML UI Block 1</div>
+          </div>
+        </aside>
+        <section class="content">
+          <div class="page-header">
+            <div class="page-header-icon" id="pageHeaderIcon">⌑</div>
+            <div class="page-header-copy"><h1 id="pageTitle">Скупка</h1><p id="pageSubtitle">Автоматический выкуп товаров с Arizona RP</p></div>
+            <div class="page-header-meta">
+              <label class="config-label">Конфиг<select id="configSelect" class="select" disabled><option>Не выбран</option></select></label>
+              <div id="automationBadge" class="badge badge-muted">Готов</div>
+              <div id="saveBadge" class="save-state"><span class="status-dot"></span><span>Автосохранение</span></div>
+            </div>
+            <div class="hero-watermark">A</div>
+          </div>
+          <div class="toolbar">
+            <label class="search-wrap"><span class="search-icon">⌕</span><input id="searchInput" type="text" autocomplete="off" placeholder="Поиск товара..."><kbd>Ctrl + F</kbd></label>
+            <button id="addButton" class="btn btn-secondary" type="button">+ Добавить</button>
+            <button id="averageButton" class="btn btn-secondary" type="button">Средние цены</button>
+            <button id="startButton" class="btn btn-primary" type="button">Старт</button>
+          </div>
+          <div class="workspace">
+            <section class="table-card">
+              <div class="table-head" id="tableHead"></div>
+              <div class="table-scroll" id="tableRows"></div>
+              <div class="empty-state hidden" id="emptyState"><div class="empty-icon">▧</div><div class="empty-title">Список пуст</div><div class="empty-text">Добавьте товары в активный конфиг.</div></div>
+            </section>
+            <aside class="detail-card" id="detailCard">
+              <div class="detail-empty" id="detailEmpty"><div class="detail-empty-icon">◇</div><div>Выберите товар</div><small>Параметры появятся здесь</small></div>
+              <div class="detail-content hidden" id="detailContent">
+                <div class="detail-top"><div class="detail-icon-box"><img id="detailIcon" class="detail-icon" alt=""></div><div class="detail-title-wrap"><div id="detailName" class="detail-title"></div><div id="detailStatus" class="badge badge-success">Активен</div></div></div>
+                <div class="detail-tabs"><button class="detail-tab active" type="button">Основные</button></div>
+                <div id="detailFields" class="detail-fields"></div>
+                <div class="autosave-note"><span class="status-dot"></span><span>Изменения сохраняются автоматически</span></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+    <div id="pickerBackdrop" class="modal-backdrop hidden">
+      <div class="modal">
+        <div class="modal-head"><div><h2 id="pickerTitle">Добавить товар</h2><p>Выберите товар из данных ArzMarket</p></div><button class="window-btn" type="button" data-action="picker-close">×</button></div>
+        <input id="pickerSearch" class="modal-search" type="text" autocomplete="off" placeholder="Поиск товара...">
+        <div id="pickerRows" class="picker-list"></div>
+      </div>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+  </div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
