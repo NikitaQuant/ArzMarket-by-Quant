@@ -2,10 +2,6 @@
   'use strict';
 
   const token = document.body.dataset.token || '';
-  const ITEM_DICT_URL = 'https://arzhub.top/api/public/marketplace/items/all';
-  const ITEM_DICT_CACHE = 'arzmarket-item-dict-v1';
-  const itemIdsByName = new Map();
-
   const state = {
     page: 'buy',
     revision: 0,
@@ -15,7 +11,6 @@
     search: '',
     pickerSearch: '',
     requestBusy: false,
-    pollTimer: 0,
     toastTimer: 0
   };
 
@@ -38,62 +33,10 @@
     const n = Number(value);
     return Number.isFinite(n) ? Math.trunc(n).toLocaleString('ru-RU').replace(/\u00a0/g, ' ') : '0';
   };
-
-  function indexDictionary(items) {
-    if (!items || typeof items !== 'object') return false;
-    let added = 0;
-    for (const [key, raw] of Object.entries(items)) {
-      let id = key;
-      let name = raw;
-      if (raw && typeof raw === 'object') {
-        id = raw.id ?? raw.item_id ?? key;
-        name = raw.name ?? raw.title ?? raw.item_name ?? '';
-      }
-      if (typeof name !== 'string' || name.trim() === '') continue;
-      const normalized = normalizeName(name);
-      if (!normalized || id == null || String(id) === '') continue;
-      itemIdsByName.set(normalized, String(id));
-      added++;
-    }
-    return added > 0;
-  }
-
-  function loadCachedDictionary() {
-    try {
-      const cached = JSON.parse(localStorage.getItem(ITEM_DICT_CACHE) || 'null');
-      if (cached && cached.items) indexDictionary(cached.items);
-      return cached;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  async function loadItemDictionary() {
-    const cached = loadCachedDictionary();
-    const headers = {};
-    if (cached?.etag) headers['If-None-Match'] = cached.etag;
-    try {
-      const response = await fetch(ITEM_DICT_URL, {cache: 'no-store', headers});
-      if (response.status === 304) return;
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json();
-      const items = payload?.items;
-      if (!indexDictionary(items)) throw new Error('empty_items');
-      try {
-        localStorage.setItem(ITEM_DICT_CACHE, JSON.stringify({etag: response.headers.get('ETag') || '', items}));
-      } catch (_) {}
-      if (state.data) render();
-    } catch (err) {
-      if (!cached) console.warn('[ArzMarket HTML] item dictionary unavailable:', err);
-    }
-  }
-
   const getItemId = item => {
-    const direct = item && (item.item_id ?? item.identity?.item_id);
-    if (direct != null && String(direct) !== '') return String(direct);
-    return item ? itemIdsByName.get(normalizeName(item.name)) || null : null;
+    const value = item && (item.item_id ?? item.identity?.item_id);
+    return value == null || String(value) === '' ? null : String(value);
   };
-
   const placeholder = () => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="10" fill="#101b24"/><path d="M20 23h24v20H20zM25 18h14" fill="none" stroke="#405461" stroke-width="2"/><path d="m25 37 5-6 5 5 4-4 5 5" fill="none" stroke="#536b78" stroke-width="2"/></svg>');
 
   function setIcon(img, item, size) {
@@ -108,7 +51,7 @@
       const stage = Number(img.dataset.stage || 0);
       if (stage === 0) {
         img.dataset.stage = '1';
-        img.src = `/api/icon/${size}/${encodeURIComponent(id)}.webp`;
+        img.src = `/api/icon/${size}/${encodeURIComponent(id)}.webp?token=${encodeURIComponent(token)}`;
       } else {
         img.dataset.stage = '2';
         img.onerror = null;
@@ -147,7 +90,11 @@
     body: JSON.stringify({action: name, payload, revision: state.revision})
   });
 
-  const keyOf = item => item?.identity ? [item.identity.index, item.identity.name, item.identity.slot_id ?? '', item.identity.item_id ?? ''].join('|') : '';
+  const keyOf = item => item?.identity
+    ? [item.identity.index, item.identity.name, item.identity.slot_id ?? '', item.identity.item_id ?? ''].join('|')
+    : '';
+
+  const tradeActive = () => state.data?.common?.automation === true;
 
   function syncSelected() {
     const items = state.data?.data?.items || [];
@@ -186,35 +133,39 @@
 
   function renderHeader() {
     const buy = state.page === 'buy';
+    const active = tradeActive();
     refs.app.dataset.page = state.page;
     refs.pageTitle.textContent = buy ? 'Скупка' : 'Продажа';
-    refs.pageSubtitle.textContent = buy ? 'Автоматический выкуп товаров с Arizona RP' : 'Управление товарами для продажи на Arizona RP';
+    refs.pageSubtitle.textContent = buy ? 'Автоматический выкуп товаров с Arizona RP' : 'Автоматическая продажа товаров с Arizona RP';
     refs.pageHeaderIcon.textContent = buy ? '⌑' : '↥';
-    document.querySelectorAll('.nav-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === state.page));
+    document.querySelectorAll('.nav-item[data-page]').forEach(node => node.classList.toggle('active', node.dataset.page === state.page));
+
     refs.configSelect.innerHTML = '';
     const option = document.createElement('option');
     option.textContent = state.data?.common?.activeConfig || 'Не выбран';
     refs.configSelect.append(option);
 
-    const active = state.data?.common?.automation === true;
     const score = Number(state.data?.common?.automationScore || 0);
     const total = Number(state.data?.common?.automationTotal || 0);
     refs.automationBadge.textContent = active && total > 0 ? `Активен ${Math.min(score, total)}/${total}` : (active ? 'Активен' : 'Готов');
     refs.automationBadge.className = active ? 'badge badge-success' : 'badge badge-muted';
     refs.startButton.textContent = active ? 'Отмена' : (buy ? 'Старт скупки' : 'Начать продажу');
     refs.averageButton.classList.toggle('hidden', !buy);
+    refs.averageButton.disabled = active;
+    refs.addButton.disabled = active;
   }
 
   function renderTable() {
     const buy = state.page === 'buy';
+    const locked = tradeActive();
     refs.tableHead.className = `table-head ${state.page}`;
     refs.tableHead.innerHTML = '';
-    (buy ? ['Товар', 'Цена', 'Кол-во', 'Остаток', 'Статус', ''] : ['Товар', 'Цена', 'Кол-во', 'Доступно', 'Статус', ''])
-      .forEach(x => refs.tableHead.append(div(x)));
+    (buy ? ['Товар','Цена','Кол-во','Остаток','Статус',''] : ['Товар','Цена','Кол-во','Доступно','Статус',''])
+      .forEach(value => refs.tableHead.append(div(value)));
 
     const all = state.data?.data?.items || [];
     const q = normalizeName(state.search);
-    const items = q ? all.filter(x => normalizeName(x.name).includes(q)) : all;
+    const items = q ? all.filter(item => normalizeName(item.name).includes(q)) : all;
     refs.tableRows.innerHTML = '';
     refs.emptyState.classList.toggle('hidden', items.length !== 0);
     const fragment = document.createDocumentFragment();
@@ -252,9 +203,10 @@
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = `toggle ${item.enabled !== false ? 'on' : ''}`;
+      toggle.disabled = locked;
       toggle.addEventListener('click', async event => {
         event.stopPropagation();
-        await patchItem(item, {enabled: item.enabled === false});
+        if (!locked) await patchItem(item, {enabled: item.enabled === false});
       });
       status.append(toggle);
       row.append(status);
@@ -263,19 +215,19 @@
       trash.type = 'button';
       trash.className = 'trash';
       trash.textContent = '×';
-      trash.title = 'Удалить товар';
+      trash.title = locked ? 'Остановите торговлю для редактирования' : 'Удалить товар';
+      trash.disabled = locked;
       trash.addEventListener('click', async event => {
         event.stopPropagation();
-        await removeItem(item);
+        if (!locked) await removeItem(item);
       });
       row.append(trash);
       fragment.append(row);
     }
-
     refs.tableRows.append(fragment);
   }
 
-  function numberField(label, value, key, disabled = false) {
+  function numberField(label, value, key, readOnly = false) {
     const wrap = document.createElement('label');
     wrap.className = 'field';
     wrap.append(div(label, 'field-label'));
@@ -285,8 +237,8 @@
     input.min = '0';
     input.step = '1';
     input.value = String(value ?? 0);
-    input.disabled = disabled;
-    if (!disabled) {
+    input.disabled = readOnly || tradeActive();
+    if (!input.disabled) {
       let timer = 0;
       const commit = async () => {
         clearTimeout(timer);
@@ -299,9 +251,7 @@
       });
       input.addEventListener('change', commit);
       input.addEventListener('blur', commit);
-      input.addEventListener('keydown', event => {
-        if (event.key === 'Enter') input.blur();
-      });
+      input.addEventListener('keydown', event => { if (event.key === 'Enter') input.blur(); });
     }
     wrap.append(input);
     return wrap;
@@ -313,7 +263,8 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `toggle ${enabled ? 'on' : ''}`;
-    button.addEventListener('click', () => patchItem(state.selectedItem, {[key]: !enabled}));
+    button.disabled = tradeActive();
+    button.addEventListener('click', () => { if (!tradeActive()) patchItem(state.selectedItem, {[key]: !enabled}); });
     wrap.append(button);
     return wrap;
   }
@@ -351,21 +302,22 @@
   }
 
   async function patchItem(item, patch) {
-    if (!item) return;
+    if (!item || tradeActive()) return;
     try {
-      refs.saveBadge.lastChild.textContent = 'Сохранение...';
+      refs.saveBadge.textContent = 'Сохранение...';
       await action('trade.item.update', {side: state.page, identity: item.identity, patch});
-      refs.saveBadge.lastChild.textContent = 'Сохранено';
+      refs.saveBadge.textContent = 'Сохранено';
       await refresh(true);
-      setTimeout(() => { refs.saveBadge.lastChild.textContent = 'Автосохранение'; }, 900);
+      setTimeout(() => { refs.saveBadge.textContent = 'Автосохранение'; }, 900);
     } catch (err) {
-      refs.saveBadge.lastChild.textContent = 'Не сохранено';
-      showToast(err.status === 409 ? 'Список изменился. Обновляю данные.' : `Не удалось сохранить: ${err.message}`, 'error');
+      refs.saveBadge.textContent = 'Не сохранено';
+      showToast(err.status === 409 ? 'Состояние изменилось. Обновляю данные.' : `Не удалось сохранить: ${err.message}`, 'error');
       await refresh(true);
     }
   }
 
   async function removeItem(item) {
+    if (!item || tradeActive()) return;
     try {
       await action('trade.item.remove', {side: state.page, identity: item.identity});
       state.selectedItem = null;
@@ -379,6 +331,7 @@
   }
 
   function openPicker() {
+    if (tradeActive()) return;
     refs.pickerTitle.textContent = state.page === 'buy' ? 'Добавить в скупку' : 'Добавить в продажу';
     state.pickerSearch = '';
     refs.pickerSearch.value = '';
@@ -393,18 +346,27 @@
 
   function renderPicker() {
     const source = state.data?.data?.source || [];
-    const existing = new Set((state.data?.data?.items || []).map(x => normalizeName(x.name)));
+    const existing = new Set((state.data?.data?.items || []).map(item => normalizeName(item.name)));
     const q = normalizeName(state.pickerSearch);
     const filtered = source
-      .filter(x => !existing.has(normalizeName(x.name)) && (!q || normalizeName(x.name).includes(q)))
+      .filter(item => !existing.has(normalizeName(item.name)) && (!q || normalizeName(item.name).includes(q)))
       .slice(0, 400);
 
     refs.pickerRows.innerHTML = '';
     const fragment = document.createDocumentFragment();
     for (const item of filtered) {
       const row = div('', 'picker-row');
-      row.append(div(item.name), div(state.page === 'sell' && item.all_count ? `${money(item.all_count)} шт.` : '+', 'picker-count'));
+      const left = div('', 'item-cell');
+      const box = div('', 'item-thumb-box');
+      const img = document.createElement('img');
+      img.className = 'item-thumb';
+      img.alt = '';
+      setIcon(img, item, 48);
+      box.append(img);
+      left.append(box, div(item.name));
+      row.append(left, div(state.page === 'sell' && item.all_count ? `${money(item.all_count)} шт.` : '+', 'picker-count'));
       row.addEventListener('click', async () => {
+        if (tradeActive()) return;
         try {
           await action('trade.item.add', {side: state.page, source_index: item.index});
           showToast('Товар добавлен', 'success');
@@ -438,9 +400,7 @@
     if (!button) return;
     const name = button.dataset.action;
     if (name === 'close' || name === 'mode-lua') {
-      try {
-        await action(name === 'close' ? 'ui.close' : 'ui.switch_mode', {side: state.page});
-      } catch (_) {}
+      try { await action(name === 'close' ? 'ui.close' : 'ui.switch_mode', {side: state.page}); } catch (_) {}
       return;
     }
     if (name === 'picker-close') closePicker();
@@ -455,12 +415,11 @@
     state.pickerSearch = refs.pickerSearch.value;
     renderPicker();
   });
-  refs.pickerBackdrop.addEventListener('click', event => {
-    if (event.target === refs.pickerBackdrop) closePicker();
-  });
+  refs.pickerBackdrop.addEventListener('click', event => { if (event.target === refs.pickerBackdrop) closePicker(); });
   refs.averageButton.addEventListener('click', async () => {
+    if (tradeActive()) return;
     try {
-      await action('buy.average.apply');
+      await action('buy.average.apply', {side: 'buy'});
       showToast('Средние цены применены', 'success');
       await refresh(true);
     } catch (err) {
@@ -491,7 +450,6 @@
   });
   window.addEventListener('unhandledrejection', event => console.error('[ArzMarket HTML]', event.reason));
 
-  loadItemDictionary();
   refresh(true);
-  state.pollTimer = window.setInterval(() => refresh(false), 450);
+  window.setInterval(() => refresh(false), 450);
 })();
