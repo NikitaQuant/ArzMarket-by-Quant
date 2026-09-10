@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 2,
+    module_version = 3,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -8,517 +8,603 @@ local M = {
     no_scroll = true
 }
 
-local ctx, acef, server, port
+local ctx, acef, server, port, itemIcons
 local running, htmlOpen, suppressAutoOpen = false, false, false
 local clients, token, htmlRoot, currentPage = {}, "", "", "buy"
 local revision, fingerprints = { buy = 1, sell = 1 }, { buy = "", sell = "" }
 local lastInjectCheck = 0
+local sourceCache = { buy = {at=0,data={}}, sell = {at=0,data={}} }
 local globalDecodeJson, globalEncodeJson = decodeJson, encodeJson
 
 local function log(v) print("[ArzMarket HTML] " .. tostring(v)) end
-local function gameTime()
+local function nowMs()
     if type(getGameTimer) == "function" then
-        local ok, v = pcall(getGameTimer)
+        local ok,v = pcall(getGameTimer)
         if ok and tonumber(v) then return tonumber(v) end
     end
-    return math.floor(os.clock() * 1000)
+    return math.floor(os.clock()*1000)
 end
 local function encode(v)
-    if type(globalEncodeJson) == "function" then
-        local ok, out = pcall(globalEncodeJson, v)
-        if ok and type(out) == "string" then return out end
+    if type(globalEncodeJson)=="function" then
+        local ok,out=pcall(globalEncodeJson,v)
+        if ok and type(out)=="string" then return out end
     end
     return "{}"
 end
 local function decode(v)
-    if type(globalDecodeJson) == "function" then
-        local ok, out = pcall(globalDecodeJson, v)
+    if type(globalDecodeJson)=="function" then
+        local ok,out=pcall(globalDecodeJson,v)
         if ok then return out end
     end
 end
 local function toUtf8(v)
-    v = tostring(v or "")
-    if ctx and ctx.u8 and type(ctx.u8.encode) == "function" then
-        local ok, out = pcall(function() return ctx.u8:encode(v) end)
-        if ok and type(out) == "string" then return out end
+    v=tostring(v or "")
+    if ctx and ctx.u8 and type(ctx.u8.encode)=="function" then
+        local ok,out=pcall(function() return ctx.u8:encode(v) end)
+        if ok and type(out)=="string" then return out end
     end
     return v
 end
 local function fromUtf8(v)
-    v = tostring(v or "")
-    if ctx and ctx.u8 and type(ctx.u8.decode) == "function" then
-        local ok, out = pcall(function() return ctx.u8:decode(v) end)
-        if ok and type(out) == "string" then return out end
+    v=tostring(v or "")
+    if ctx and ctx.u8 and type(ctx.u8.decode)=="function" then
+        local ok,out=pcall(function() return ctx.u8:decode(v) end)
+        if ok and type(out)=="string" then return out end
     end
     return v
 end
-local function number(v, fallback)
-    local n = tonumber(v)
-    if not n or n ~= n or n == math.huge or n == -math.huge then return fallback end
+local function saneNumber(v,fallback)
+    local n=tonumber(v)
+    if not n or n~=n or n==math.huge or n==-math.huge then return fallback end
     return n
 end
 local function makeToken()
-    local t = {}
-    for i = 1, 8 do t[i] = string.format("%08x", math.random(0, 0x7fffffff)) end
-    return table.concat(t)
-end
-
-local function findUpvalue(fn, wanted)
-    if type(fn) ~= "function" or type(debug) ~= "table" or type(debug.getupvalue) ~= "function" then return nil, nil end
-    for i = 1, 128 do
-        local name, value = debug.getupvalue(fn, i)
-        if not name then break end
-        if name == wanted then return i, value end
-    end
-    return nil, nil
-end
-local function setUpvalue(fn, wanted, value)
-    local i = findUpvalue(fn, wanted)
-    if not i or type(debug.setupvalue) ~= "function" then return false end
-    return debug.setupvalue(fn, i, value) ~= nil
-end
-local function navigationProbe()
-    if type(modificationState) == "table" and type(modificationState.updateMenuMouseNavigation) == "function" then
-        return modificationState.updateMenuMouseNavigation
-    end
-    if type(handleListDeleteUndoHotkey) == "function" then return handleListDeleteUndoHotkey end
-end
-local function setLuaPage(side)
-    local fn = navigationProbe()
-    return fn and setUpvalue(fn, "selectedMenuPage", side == "sell" and 1 or 2) or false
-end
-local function setMenuVisible(value)
-    local fn = navigationProbe()
-    if not fn then return false end
-    local _, flag = findUpvalue(fn, "menuVisible")
-    if type(flag) ~= "table" and type(flag) ~= "cdata" then return false end
-    return pcall(function() flag[0] = value == true end)
-end
-local function tradeState()
-    if type(off_sell_buy) ~= "function" then return nil end
-    local _, value = findUpvalue(off_sell_buy, "tradeAutomation")
-    return type(value) == "table" and value or nil
-end
-local function automationState(side)
-    local s = tradeState()
-    if not s then return false, 0, 0 end
-    return s[side] == true, number(s.score, 0) or 0, number(s.score_from, 0) or 0
+    local out={}
+    for i=1,8 do out[i]=string.format("%08x",math.random(0,0x7fffffff)) end
+    return table.concat(out)
 end
 
 local function lists()
-    local buy = ctx and type(ctx.getBuyList) == "function" and ctx.getBuyList() or {}
-    local sell = ctx and type(ctx.getSellList) == "function" and ctx.getSellList() or {}
-    return type(buy) == "table" and buy or {}, type(sell) == "table" and sell or {}
+    local buy=ctx and type(ctx.getBuyList)=="function" and ctx.getBuyList() or {}
+    local sell=ctx and type(ctx.getSellList)=="function" and ctx.getSellList() or {}
+    if type(buy)~="table" then buy={} end
+    if type(sell)~="table" then sell={} end
+    return buy,sell
 end
 local function normalizeConfig(name)
-    name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if name == "" or name:find("[/\\]") or name:find("..", 1, true) then return "" end
-    return name:match("%.json$") and name or name .. ".json"
+    name=tostring(name or ""):gsub("^%s+",""):gsub("%s+$","")
+    if name=="" or name:find("[/\\]") or name:find("..",1,true) then return "" end
+    return name:match("%.json$") and name or name..".json"
 end
 local function configName(side)
-    if not ctx or type(ctx.getLoadedConfigs) ~= "function" then return "" end
-    local sell, buy = ctx.getLoadedConfigs()
-    return normalizeConfig(side == "buy" and buy or sell)
+    if not ctx or type(ctx.getLoadedConfigs)~="function" then return "" end
+    local sell,buy=ctx.getLoadedConfigs()
+    return normalizeConfig(side=="buy" and buy or sell)
 end
 local function persist(side)
-    local buy, sell = lists()
-    local list, name = side == "buy" and buy or sell, configName(side)
-    if name == "" then return false, "config_not_loaded" end
-    if type(createConfig) ~= "function" then return false, "save_unavailable" end
-    local ok, result = pcall(createConfig, side .. "-cfg/" .. name, list, side .. "-cfg", name)
-    return ok and result ~= false, ok and result ~= false and nil or "save_failed"
+    local buy,sell=lists()
+    local list=side=="buy" and buy or sell
+    local name=configName(side)
+    if name=="" then return false,"config_not_loaded" end
+    if type(createConfig)~="function" then return false,"save_unavailable" end
+    local ok,result=pcall(createConfig,side.."-cfg/"..name,list,side.."-cfg",name)
+    return ok and result~=false, ok and result~=false and nil or "save_failed"
 end
-local function itemDto(item, index, side)
-    local id = item.item_id or item.foreign_item_id or item.id
+local function resolvedItemId(item)
+    local id=item.item_id or item.foreign_item_id or item.id
+    if id~=nil and tostring(id)~="" then return tostring(id) end
+    if itemIcons and type(itemIcons.resolveItemId)=="function" then
+        local ok,value=pcall(itemIcons.resolveItemId,item.name or item.item or "")
+        if ok and value~=nil and tostring(value)~="" then return tostring(value) end
+    end
+end
+local function itemDto(item,index,side)
+    local id=resolvedItemId(item)
     return {
-        identity = { index = index, name = toUtf8(item.name or item.item or ""), item_id = id, slot_id = item.slot_id },
-        name = toUtf8(item.name or item.item or ("Item #" .. tostring(index))),
-        item_id = id, price = number(item.price, 0), price_vc = number(item.price_vc, 0),
-        count = number(item.count, 0), continue = number(item.continue, 0), enabled = item.enabled ~= false,
-        maximum = item.maximum == true, count_maximum = number(item.count_maximum, 0),
-        all_count = number(item.all_count, 0), slot_count = number(item.slot_count, 0), slot_id = item.slot_id, side = side
+        identity={index=index,name=toUtf8(item.name or item.item or ""),item_id=id,slot_id=item.slot_id},
+        name=toUtf8(item.name or item.item or ("Item #"..tostring(index))),
+        item_id=id,
+        price=saneNumber(item.price,0), price_vc=saneNumber(item.price_vc,0),
+        count=saneNumber(item.count,0), continue=saneNumber(item.continue,0),
+        enabled=item.enabled~=false, maximum=item.maximum==true,
+        count_maximum=saneNumber(item.count_maximum,0), all_count=saneNumber(item.all_count,0),
+        slot_count=saneNumber(item.slot_count,0), slot_id=item.slot_id, side=side
     }
 end
-local function fingerprint(side, list)
-    local out = { side, tostring(#list) }
-    for i = 1, #list do
-        local x = list[i]
-        out[#out + 1] = table.concat({ tostring(x.name or x.item or ""), tostring(x.price or ""), tostring(x.price_vc or ""),
-            tostring(x.count or ""), tostring(x.continue or ""), tostring(x.enabled ~= false), tostring(x.maximum == true),
-            tostring(x.all_count or ""), tostring(x.slot_id or "") }, "\30")
+local function fingerprint(side,list)
+    local out={side,tostring(#list)}
+    for i=1,#list do
+        local x=list[i]
+        out[#out+1]=table.concat({
+            tostring(x.name or x.item or ""),tostring(x.price or ""),tostring(x.price_vc or ""),
+            tostring(x.count or ""),tostring(x.continue or ""),tostring(x.enabled~=false),
+            tostring(x.maximum==true),tostring(x.all_count or ""),tostring(x.slot_id or "")
+        },"\30")
     end
-    return table.concat(out, "\31")
+    return table.concat(out,"\31")
 end
-local function touchRevision(side, list)
-    local f = fingerprint(side, list)
-    if f ~= fingerprints[side] then fingerprints[side], revision[side] = f, revision[side] + 1 end
+local function touchRevision(side,list)
+    local value=fingerprint(side,list)
+    if value~=fingerprints[side] then
+        fingerprints[side]=value
+        revision[side]=revision[side]+1
+    end
 end
 local function sources(side)
-    if not ctx or type(ctx.readJsonFile) ~= "function" then return {} end
-    local path = side == "buy" and "moonloader/ArzMarket/buy.json" or "moonloader/ArzMarket/sell.json"
-    local ok, raw = pcall(ctx.readJsonFile, path)
-    if not ok or type(raw) ~= "table" then return {} end
-    local out = {}
-    for i = 1, #raw do
-        local x = raw[i]
-        if side == "buy" and type(x) == "string" then
-            out[#out + 1] = { index = i, name = toUtf8(x) }
-        elseif side == "sell" and type(x) == "table" then
-            out[#out + 1] = { index = i, name = toUtf8(x.item or x.name or ("Item #" .. i)),
-                all_count = number(x.all_count, number(x.count, 0)), slot_count = number(x.count, 0), slot_id = x.slot_id,
-                item_id = x.item_id or x.foreign_item_id or x.id }
+    local cached=sourceCache[side]
+    local now=nowMs()
+    if cached and now-cached.at<1000 then return cached.data end
+    if not ctx or type(ctx.readJsonFile)~="function" then return {} end
+    local path=side=="buy" and "moonloader/ArzMarket/buy.json" or "moonloader/ArzMarket/sell.json"
+    local ok,raw=pcall(ctx.readJsonFile,path)
+    local out={}
+    if ok and type(raw)=="table" then
+        for i=1,#raw do
+            local x=raw[i]
+            if side=="buy" and type(x)=="string" then
+                local id=itemIcons and itemIcons.resolveItemId and itemIcons.resolveItemId(x) or nil
+                out[#out+1]={index=i,name=toUtf8(x),item_id=id}
+            elseif side=="sell" and type(x)=="table" then
+                local name=x.item or x.name or ("Item #"..tostring(i))
+                local id=x.item_id or x.foreign_item_id or x.id
+                if id==nil and itemIcons and itemIcons.resolveItemId then id=itemIcons.resolveItemId(name) end
+                out[#out+1]={index=i,name=toUtf8(name),all_count=saneNumber(x.all_count,saneNumber(x.count,0)),
+                    slot_count=saneNumber(x.count,0),slot_id=x.slot_id,item_id=id}
+            end
         end
     end
+    sourceCache[side]={at=now,data=out}
     return out
 end
-local function stateFor(page)
-    page = page == "sell" and "sell" or "buy"
-    currentPage = page
-    local buy, sell = lists()
-    local list = page == "buy" and buy or sell
-    touchRevision(page, list)
-    local items = {}
-    for i = 1, #list do items[i] = itemDto(list[i], i, page) end
-    local address, serverPort = "", 0
-    if type(sampGetCurrentServerAddress) == "function" then
-        local ok, a, p = pcall(sampGetCurrentServerAddress)
-        if ok then address, serverPort = tostring(a or ""), tonumber(p) or 0 end
+
+local function findUpvalue(fn,wanted)
+    if type(fn)~="function" or type(debug)~="table" or type(debug.getupvalue)~="function" then return nil,nil end
+    for i=1,128 do
+        local name,value=debug.getupvalue(fn,i)
+        if not name then break end
+        if name==wanted then return i,value end
     end
-    local active, score, total = automationState(page)
-    local cfg = configName(page)
-    return { revision = revision[page], page = page, common = {
-        uiMode = "html", activeConfig = cfg ~= "" and cfg:gsub("%.json$", "") or "", automation = active,
-        automationScore = score, automationTotal = total, serverAddress = address, serverPort = serverPort
-    }, data = { items = items, source = sources(page) } }
 end
-local function findItem(side, identity)
-    if type(identity) ~= "table" then return nil, nil, "identity_missing" end
-    local buy, sell = lists()
-    local list = side == "buy" and buy or sell
-    local i = math.floor(number(identity.index, 0) or 0)
-    if i < 1 or i > #list then return nil, nil, "stale_state" end
-    local item = list[i]
-    if tostring(identity.name or "") ~= "" and toUtf8(item.name or item.item or "") ~= tostring(identity.name) then return nil, nil, "stale_state" end
-    if identity.slot_id ~= nil and item.slot_id ~= nil and tostring(identity.slot_id) ~= tostring(item.slot_id) then return nil, nil, "stale_state" end
-    return item, i
+local function tradeState()
+    if type(off_sell_buy)~="function" then return nil end
+    local _,value=findUpvalue(off_sell_buy,"tradeAutomation")
+    return type(value)=="table" and value or nil
 end
-local numeric = { price=true, price_vc=true, count=true, continue=true, count_maximum=true }
-local boolean = { enabled=true, maximum=true }
-local function updateItem(side, payload)
-    local item, _, err = findItem(side, payload.identity)
-    if not item then return false, err end
-    for key, value in pairs(type(payload.patch) == "table" and payload.patch or {}) do
+local function automationState(side)
+    local state=tradeState()
+    if not state then return false,0,0 end
+    return state[side]==true,saneNumber(state.score,0) or 0,saneNumber(state.score_from,0) or 0
+end
+local function setMenuVisible(value)
+    local probe=type(modificationState)=="table" and modificationState.updateMenuMouseNavigation or nil
+    if type(probe)~="function" then return false end
+    local _,flag=findUpvalue(probe,"menuVisible")
+    if type(flag)~="table" and type(flag)~="cdata" then return false end
+    return pcall(function() flag[0]=value==true end)
+end
+local function selectLuaPage(side)
+    if ctx and type(ctx.selectCorePage)=="function" then
+        local ok,result=pcall(ctx.selectCorePage,side=="sell" and 1 or 2)
+        if ok and result~=false then return true end
+    end
+    return false
+end
+
+local function stateFor(page)
+    page=page=="sell" and "sell" or "buy"
+    currentPage=page
+    local buy,sell=lists()
+    local list=page=="buy" and buy or sell
+    touchRevision(page,list)
+    local items={}
+    for i=1,#list do items[i]=itemDto(list[i],i,page) end
+    local address,serverPort="",0
+    if type(sampGetCurrentServerAddress)=="function" then
+        local ok,a,p=pcall(sampGetCurrentServerAddress)
+        if ok then address,serverPort=tostring(a or ""),tonumber(p) or 0 end
+    end
+    local active,score,total=automationState(page)
+    local cfg=configName(page)
+    local iconStatus=itemIcons and itemIcons.getStatus and itemIcons.getStatus() or {}
+    return {
+        revision=revision[page], page=page,
+        common={uiMode="html",activeConfig=cfg~="" and cfg:gsub("%.json$","") or "",
+            automation=active,automationScore=score,automationTotal=total,
+            serverAddress=address,serverPort=serverPort,icons=iconStatus},
+        data={items=items,source=sources(page)}
+    }
+end
+local function findItem(side,identity)
+    if type(identity)~="table" then return nil,nil,"identity_missing" end
+    local buy,sell=lists()
+    local list=side=="buy" and buy or sell
+    local index=math.floor(saneNumber(identity.index,0) or 0)
+    if index<1 or index>#list then return nil,nil,"stale_state" end
+    local item=list[index]
+    if tostring(identity.name or "")~="" and toUtf8(item.name or item.item or "")~=tostring(identity.name) then return nil,nil,"stale_state" end
+    if identity.slot_id~=nil and item.slot_id~=nil and tostring(identity.slot_id)~=tostring(item.slot_id) then return nil,nil,"stale_state" end
+    return item,index
+end
+local numeric={price=true,price_vc=true,count=true,continue=true,count_maximum=true}
+local boolean={enabled=true,maximum=true}
+local function updateItem(side,payload)
+    local item,_,err=findItem(side,payload.identity)
+    if not item then return false,err end
+    for key,value in pairs(type(payload.patch)=="table" and payload.patch or {}) do
         if numeric[key] then
-            local n = number(value)
-            if not n or n < 0 or n > 2147483647 then return false, "invalid_" .. key end
-            if key == "count" or key == "continue" or key == "count_maximum" then n = math.floor(n) end
-            item[key] = n
+            local n=saneNumber(value)
+            if not n or n<0 or n>2147483647 then return false,"invalid_"..key end
+            if key=="count" or key=="continue" or key=="count_maximum" then n=math.floor(n) end
+            item[key]=n
         elseif boolean[key] then
-            if type(value) ~= "boolean" then return false, "invalid_" .. key end
-            item[key] = value
+            if type(value)~="boolean" then return false,"invalid_"..key end
+            item[key]=value
         else
-            return false, "field_not_allowed"
+            return false,"field_not_allowed"
         end
     end
-    local ok, saveErr = persist(side)
-    fingerprints[side] = ""
-    return ok, saveErr
+    local ok,saveErr=persist(side)
+    fingerprints[side]=""
+    return ok,saveErr
 end
-local function removeItem(side, payload)
-    local _, i, err = findItem(side, payload.identity)
-    if not i then return false, err end
-    local buy, sell = lists()
-    table.remove(side == "buy" and buy or sell, i)
-    if type(tradeFilterInvalidate) == "function" then pcall(tradeFilterInvalidate, side) end
-    local ok, saveErr = persist(side)
-    fingerprints[side] = ""
-    return ok, saveErr
+local function removeItem(side,payload)
+    local _,index,err=findItem(side,payload.identity)
+    if not index then return false,err end
+    local buy,sell=lists()
+    table.remove(side=="buy" and buy or sell,index)
+    if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
+    local ok,saveErr=persist(side)
+    fingerprints[side]=""
+    return ok,saveErr
 end
-local function addItem(side, payload)
+local function addItem(side,payload)
+    local wanted=math.floor(saneNumber(payload.source_index,0) or 0)
     local src
-    local wanted = math.floor(number(payload.source_index, 0) or 0)
-    for _, x in ipairs(sources(side)) do if tonumber(x.index) == wanted then src = x break end end
-    if not src then return false, "source_not_found" end
-    local buy, sell = lists()
-    local list, luaName = side == "buy" and buy or sell, fromUtf8(src.name)
-    for i = 1, #list do if tostring(list[i].name or list[i].item or "") == luaName then return false, "already_exists" end end
+    for _,x in ipairs(sources(side)) do if tonumber(x.index)==wanted then src=x break end end
+    if not src then return false,"source_not_found" end
+    local buy,sell=lists()
+    local list=side=="buy" and buy or sell
+    local luaName=fromUtf8(src.name)
+    for i=1,#list do if tostring(list[i].name or list[i].item or "")==luaName then return false,"already_exists" end end
     local item
-    if side == "buy" then
-        item = { continue=1, enabled=true, maximum=false, count_maximum=0, price_vc=10, name=luaName, price=10, count=1 }
+    if side=="buy" then
+        item={continue=1,enabled=true,maximum=false,count_maximum=0,price_vc=10,name=luaName,price=10,count=1,item_id=src.item_id}
     else
-        item = { enabled=true, price_vc=9, maximum=true, name=luaName, price=9, count=1,
-            slot_count=src.slot_count, slot_id=src.slot_id, all_count=src.all_count, item_id=src.item_id }
+        item={enabled=true,price_vc=9,maximum=true,name=luaName,price=9,count=1,
+            slot_count=src.slot_count,slot_id=src.slot_id,all_count=src.all_count,item_id=src.item_id}
     end
-    if type(addToData) == "function" then pcall(addToData, item, list, nil) else table.insert(list, item) end
-    if type(tradeFilterMarkNewItem) == "function" then pcall(tradeFilterMarkNewItem, side, item) end
-    if type(tradeFilterInvalidate) == "function" then pcall(tradeFilterInvalidate, side) end
-    local ok, saveErr = persist(side)
-    fingerprints[side] = ""
-    return ok, saveErr
+    if type(addToData)=="function" then pcall(addToData,item,list,nil) else table.insert(list,item) end
+    if type(tradeFilterMarkNewItem)=="function" then pcall(tradeFilterMarkNewItem,side,item) end
+    if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
+    sourceCache[side].at=0
+    local ok,saveErr=persist(side)
+    fingerprints[side]=""
+    return ok,saveErr
 end
 
 local function setCefCursor(value)
     pcall(function()
-        local bs = raknetNewBitStream()
-        raknetBitStreamWriteInt8(bs, 25); raknetBitStreamWriteInt32(bs, 0)
-        raknetBitStreamWriteInt8(bs, value and 128 or 0); raknetBitStreamWriteInt16(bs, 0)
-        raknetEmulPacketReceiveBitStream(220, bs); raknetDeleteBitStream(bs)
+        local bs=raknetNewBitStream()
+        raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
+        raknetBitStreamWriteInt8(bs,value and 128 or 0); raknetBitStreamWriteInt16(bs,0)
+        raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
     end)
     pcall(function() if sampSetCursorMode then if value then sampSetCursorMode(2); sampSetCursorMode(1) else sampSetCursorMode(0) end end end)
     pcall(function() if sampToggleCursor then sampToggleCursor(value) end end)
     pcall(function() if sampShowCursor then sampShowCursor(value) end end)
     pcall(function() if showCursor then showCursor(value) end end)
 end
-local function quoteJs(v) return string.format("%q", tostring(v or "")):gsub("\r", "\\r"):gsub("\n", "\\n") end
-local function removeIframe(keepMenu)
-    if acef and type(acef.eval) == "function" then pcall(acef.eval, "var f=document.getElementById('arzmarket-html-frame');if(f)f.remove();") end
-    htmlOpen = false
+local function quoteJs(v) return string.format("%q",tostring(v or "")):gsub("\r","\\r"):gsub("\n","\\n") end
+local function removeIframe()
+    if acef and type(acef.eval)=="function" then pcall(acef.eval,"var f=document.getElementById('arzmarket-html-frame');if(f)f.remove();") end
+    htmlOpen=false
     setCefCursor(false)
-    if keepMenu ~= true then return setMenuVisible(false) end
-    return true
 end
 local function injectIframe()
-    if not acef or type(acef.eval) ~= "function" or not port then return false end
-    local url = "http://127.0.0.1:" .. port .. "/ui"
-    local code = "var o=document.getElementById('arzmarket-html-frame');if(o)o.remove();" ..
-        "var f=document.createElement('iframe');f.id='arzmarket-html-frame';f.src=" .. quoteJs(url) .. ";" ..
-        "f.style.position='fixed';f.style.left='0';f.style.top='0';f.style.width='100vw';f.style.height='100vh';" ..
+    if not acef or type(acef.eval)~="function" or not port then return false end
+    local url="http://127.0.0.1:"..tostring(port).."/ui"
+    local code="var o=document.getElementById('arzmarket-html-frame');if(o)o.remove();"..
+        "var f=document.createElement('iframe');f.id='arzmarket-html-frame';f.src="..quoteJs(url)..";"..
+        "f.style.position='fixed';f.style.left='0';f.style.top='0';f.style.width='100vw';f.style.height='100vh';"..
         "f.style.border='0';f.style.background='transparent';f.style.zIndex='2147483000';document.body.appendChild(f);"
-    local ok = pcall(acef.eval, code)
-    if ok then htmlOpen, lastInjectCheck = true, gameTime(); setCefCursor(true) end
+    local ok=pcall(acef.eval,code)
+    if ok then htmlOpen=true; lastInjectCheck=nowMs(); setCefCursor(true) end
     return ok
 end
 local function ensureIframe()
-    if not htmlOpen or not acef or gameTime() - lastInjectCheck < 1500 then return end
-    lastInjectCheck = gameTime()
-    local url = "http://127.0.0.1:" .. port .. "/ui"
-    pcall(acef.eval, "if(!document.getElementById('arzmarket-html-frame')){var f=document.createElement('iframe');f.id='arzmarket-html-frame';f.src=" .. quoteJs(url) .. ";f.style.position='fixed';f.style.left='0';f.style.top='0';f.style.width='100vw';f.style.height='100vh';f.style.border='0';f.style.zIndex='2147483000';document.body.appendChild(f);}")
+    if not htmlOpen or not acef or nowMs()-lastInjectCheck<1500 then return end
+    lastInjectCheck=nowMs()
+    local url="http://127.0.0.1:"..tostring(port).."/ui"
+    pcall(acef.eval,"if(!document.getElementById('arzmarket-html-frame')){var f=document.createElement('iframe');f.id='arzmarket-html-frame';f.src="..quoteJs(url)..";f.style.position='fixed';f.style.left='0';f.style.top='0';f.style.width='100vw';f.style.height='100vh';f.style.border='0';f.style.zIndex='2147483000';document.body.appendChild(f);}")
 end
 
-local function readFile(path, binary)
-    local f = io.open(path, binary and "rb" or "r")
+local function readFile(path,binary)
+    local f=io.open(path,binary and "rb" or "r")
     if not f then return nil end
-    local data = f:read("*a"); f:close(); return data
+    local data=f:read("*a"); f:close(); return data
 end
-local mime = { html="text/html; charset=utf-8", css="text/css; charset=utf-8", js="application/javascript; charset=utf-8", svg="image/svg+xml", webp="image/webp" }
-local function response(status, body, contentType)
-    local reasons = {[200]="OK",[204]="No Content",[400]="Bad Request",[403]="Forbidden",[404]="Not Found",[405]="Method Not Allowed",[409]="Conflict",[413]="Payload Too Large",[500]="Internal Server Error"}
-    body = body or ""
-    local headers = {
-        "HTTP/1.1 " .. status .. " " .. (reasons[status] or "Error"),
-        "Content-Type: " .. (contentType or "text/plain; charset=utf-8"),
-        "Content-Length: " .. #body, "Connection: close", "Cache-Control: no-store", "X-Content-Type-Options: nosniff",
+local mime={html="text/html; charset=utf-8",css="text/css; charset=utf-8",js="application/javascript; charset=utf-8",svg="image/svg+xml",webp="image/webp"}
+local reasons={[200]="OK",[204]="No Content",[400]="Bad Request",[403]="Forbidden",[404]="Not Found",[405]="Method Not Allowed",[409]="Conflict",[413]="Payload Too Large",[500]="Internal Server Error"}
+local function response(status,body,contentType,cacheControl)
+    body=body or ""
+    local headers={
+        "HTTP/1.1 "..tostring(status).." "..(reasons[status] or "Error"),
+        "Content-Type: "..(contentType or "text/plain; charset=utf-8"),
+        "Content-Length: "..tostring(#body),
+        "Connection: close",
+        "Cache-Control: "..(cacheControl or "no-store"),
+        "X-Content-Type-Options: nosniff",
         "Referrer-Policy: no-referrer",
-        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; connect-src 'self' https://arzhub.top; object-src 'none'; frame-ancestors *"
+        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; connect-src 'self'; object-src 'none'; frame-ancestors *"
     }
-    return table.concat(headers, "\r\n") .. "\r\n\r\n" .. body
+    return table.concat(headers,"\r\n").."\r\n\r\n"..body
 end
-local function jsonResponse(status, value) return response(status, encode(value), "application/json; charset=utf-8") end
+local function jsonResponse(status,value) return response(status,encode(value),"application/json; charset=utf-8") end
 local function queryString(v)
-    local out = {}
-    for pair in tostring(v or ""):gmatch("[^&]+") do local k, x = pair:match("^([^=]+)=?(.*)$"); if k then out[k] = x end end
+    local out={}
+    for pair in tostring(v or ""):gmatch("[^&]+") do local k,x=pair:match("^([^=]+)=?(.*)$"); if k then out[k]=x end end
     return out
 end
 local function parseRequest(buffer)
-    local split = buffer:find("\r\n\r\n", 1, true)
-    if not split then return nil, #buffer > 16384 and "headers_too_large" or "incomplete" end
-    local lines = {}
-    for line in (buffer:sub(1, split - 1) .. "\r\n"):gmatch("(.-)\r\n") do lines[#lines + 1] = line end
-    local method, target = tostring(lines[1] or ""):match("^(%u+)%s+([^%s]+)%s+HTTP/%d%.%d$")
-    if not method then return nil, "bad_request_line" end
-    local headers = {}
-    for i = 2, #lines do local k, v = lines[i]:match("^([^:]+):%s*(.*)$"); if not k then return nil, "bad_header" end; headers[k:lower()] = v end
-    if headers["transfer-encoding"] then return nil, "transfer_encoding_not_allowed" end
-    local size = tonumber(headers["content-length"] or "0") or 0
-    if size < 0 or size > 65536 then return nil, "body_too_large" end
-    local start = split + 4
-    if #buffer - start + 1 < size then return nil, "incomplete" end
-    local path, query = target:match("^([^?]*)%??(.*)$")
-    return { method=method, path=path or "/", query=queryString(query), headers=headers, body=buffer:sub(start, start + size - 1) }
+    local split=buffer:find("\r\n\r\n",1,true)
+    if not split then return nil,#buffer>16384 and "headers_too_large" or "incomplete" end
+    local lines={}
+    for line in (buffer:sub(1,split-1).."\r\n"):gmatch("(.-)\r\n") do lines[#lines+1]=line end
+    if #lines>80 then return nil,"too_many_headers" end
+    local method,target=tostring(lines[1] or ""):match("^(%u+)%s+([^%s]+)%s+HTTP/%d%.%d$")
+    if not method then return nil,"bad_request_line" end
+    local headers={}
+    for i=2,#lines do local k,v=lines[i]:match("^([^:]+):%s*(.*)$"); if not k then return nil,"bad_header" end; headers[k:lower()]=v end
+    if headers["transfer-encoding"] then return nil,"transfer_encoding_not_allowed" end
+    local size=tonumber(headers["content-length"] or "0") or 0
+    if size<0 or size>65536 then return nil,"body_too_large" end
+    local start=split+4
+    if #buffer-start+1<size then return nil,"incomplete" end
+    local path,query=target:match("^([^?]*)%??(.*)$")
+    return {method=method,path=path or "/",query=queryString(query),headers=headers,body=buffer:sub(start,start+size-1)}
 end
 local function validHost(req)
-    local h = tostring(req.headers.host or "")
-    return h == "127.0.0.1:" .. port or h == "localhost:" .. port
+    local h=tostring(req.headers.host or "")
+    return h=="127.0.0.1:"..tostring(port) or h=="localhost:"..tostring(port)
 end
-local function validToken(req) return tostring(req.headers["x-arzmarket-token"] or "") == token end
+local function validToken(req) return tostring(req.headers["x-arzmarket-token"] or "")==token end
 local function validOrigin(req)
-    local o = tostring(req.headers.origin or "")
-    return o == "http://127.0.0.1:" .. port or o == "http://localhost:" .. port
+    local o=tostring(req.headers.origin or "")
+    return o=="http://127.0.0.1:"..tostring(port) or o=="http://localhost:"..tostring(port)
 end
 local function safeStatic(path)
-    if path:find("..",1,true) or path:find("\\",1,true) or path:find("%%00") or path:sub(1,1) == "/" then return nil end
+    if path:find("..",1,true) or path:find("\\",1,true) or path:find("%%00") or path:sub(1,1)=="/" then return nil end
     return path:match("^[%w%._%-%/]+$") and path or nil
 end
 
 local function doAction(req)
-    if req.method ~= "POST" then return response(405, "method_not_allowed") end
-    if not validToken(req) or not validOrigin(req) then return response(403, "forbidden") end
-    local request = decode(req.body)
-    if type(request) ~= "table" or type(request.action) ~= "string" then return jsonResponse(400, {ok=false,error="invalid_json"}) end
-    local action, data = request.action, type(request.payload) == "table" and request.payload or {}
-    local side = data.side == "sell" and "sell" or "buy"
-    if action == "ui.close" then
-        currentPage = side
-        local closed = removeIframe(false)
-        suppressAutoOpen = not closed
-        return jsonResponse(200, {ok=true,closed=closed})
-    elseif action == "ui.switch_mode" then
-        currentPage = side
-        local switched = setLuaPage(side)
-        suppressAutoOpen = not switched
-        removeIframe(true)
-        return jsonResponse(200, {ok=true,mode="lua",page=side,switched=switched})
-    elseif action == "ui.navigate" then
-        currentPage = side
-        return jsonResponse(200, {ok=true,page=side})
-    elseif action == "trade.item.update" then
-        local ok, err = updateItem(side, data); return jsonResponse(ok and 200 or (err == "stale_state" and 409 or 400), {ok=ok,error=err})
-    elseif action == "trade.item.remove" then
-        local ok, err = removeItem(side, data); return jsonResponse(ok and 200 or (err == "stale_state" and 409 or 400), {ok=ok,error=err})
-    elseif action == "trade.item.add" then
-        local ok, err = addItem(side, data); return jsonResponse(ok and 200 or 400, {ok=ok,error=err})
-    elseif action == "buy.average.apply" then
-        if type(applyAveragePricesToBuyList) ~= "function" then return jsonResponse(400, {ok=false,error="average_unavailable"}) end
-        local ok, result = pcall(applyAveragePricesToBuyList); fingerprints.buy = ""
-        return jsonResponse(ok and result ~= false and 200 or 400, {ok=ok and result ~= false,error=not ok and tostring(result) or (result == false and "average_failed" or nil)})
-    elseif action == "trade.start" then
-        local active = select(1, automationState(side))
-        if active and type(off_sell_buy) == "function" then
-            local ok, err = pcall(off_sell_buy); fingerprints[side] = ""
-            return jsonResponse(ok and 200 or 400, {ok=ok,cancelled=ok,error=ok and nil or tostring(err)})
+    if req.method~="POST" then return response(405,"method_not_allowed") end
+    if not validToken(req) or not validOrigin(req) then return response(403,"forbidden") end
+    local request=decode(req.body)
+    if type(request)~="table" or type(request.action)~="string" then return jsonResponse(400,{ok=false,error="invalid_json"}) end
+    local action=request.action
+    local data=type(request.payload)=="table" and request.payload or {}
+    local side=data.side=="sell" and "sell" or "buy"
+    if action=="ui.close" then
+        currentPage=side; suppressAutoOpen=true; removeIframe(); setMenuVisible(false)
+        return jsonResponse(200,{ok=true})
+    elseif action=="ui.switch_mode" then
+        currentPage=side
+        local switched=selectLuaPage(side)
+        suppressAutoOpen=true
+        removeIframe()
+        return jsonResponse(switched and 200 or 500,{ok=switched,mode="lua",page=side,error=switched and nil or "lua_page_unavailable"})
+    elseif action=="ui.navigate" then
+        currentPage=side
+        return jsonResponse(200,{ok=true,page=side})
+    elseif action=="trade.item.update" then
+        local active=select(1,automationState(side))
+        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        local ok,err=updateItem(side,data)
+        return jsonResponse(ok and 200 or (err=="stale_state" and 409 or 400),{ok=ok,error=err})
+    elseif action=="trade.item.remove" then
+        local active=select(1,automationState(side))
+        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        local ok,err=removeItem(side,data)
+        return jsonResponse(ok and 200 or (err=="stale_state" and 409 or 400),{ok=ok,error=err})
+    elseif action=="trade.item.add" then
+        local active=select(1,automationState(side))
+        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        local ok,err=addItem(side,data)
+        return jsonResponse(ok and 200 or 400,{ok=ok,error=err})
+    elseif action=="buy.average.apply" then
+        local active=select(1,automationState("buy"))
+        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if type(applyAveragePricesToBuyList)~="function" then return jsonResponse(400,{ok=false,error="average_unavailable"}) end
+        local ok,result=pcall(applyAveragePricesToBuyList)
+        fingerprints.buy=""
+        return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,error=not ok and tostring(result) or (result==false and "average_failed" or nil)})
+    elseif action=="trade.start" then
+        local active=select(1,automationState(side))
+        if active and type(off_sell_buy)=="function" then
+            local ok,err=pcall(off_sell_buy); fingerprints[side]=""
+            return jsonResponse(ok and 200 or 400,{ok=ok,cancelled=ok,error=ok and nil or tostring(err)})
         end
-        if type(sampProcessChatInput) ~= "function" then return jsonResponse(400, {ok=false,error="chat_input_unavailable"}) end
-        local ok, err = pcall(sampProcessChatInput, side == "sell" and "/crsell" or "/crbuy")
-        return jsonResponse(ok and 200 or 400, {ok=ok,error=ok and nil or tostring(err)})
+        if type(sampProcessChatInput)~="function" then return jsonResponse(400,{ok=false,error="chat_input_unavailable"}) end
+        local ok,err=pcall(sampProcessChatInput,side=="sell" and "/crsell" or "/crbuy")
+        return jsonResponse(ok and 200 or 400,{ok=ok,error=ok and nil or tostring(err)})
     end
-    return jsonResponse(400, {ok=false,error="unknown_action"})
+    return jsonResponse(400,{ok=false,error="unknown_action"})
 end
 local function handle(req)
-    if not validHost(req) then return response(403, "forbidden") end
-    if req.path == "/health" then return jsonResponse(200, {ok=true,port=port,htmlOpen=htmlOpen,page=currentPage}) end
-    if req.path == "/ui" then
-        if req.method ~= "GET" then return response(405, "method_not_allowed") end
-        local html = readFile(htmlRoot .. "\\index.html")
-        return html and response(200, html:gsub("__ARZMARKET_TOKEN__", token), mime.html) or response(404, "ui_missing")
+    if not validHost(req) then return response(403,"forbidden") end
+    if req.path=="/health" then return jsonResponse(200,{ok=true,port=port,htmlOpen=htmlOpen,page=currentPage}) end
+    if req.path=="/ui" then
+        if req.method~="GET" then return response(405,"method_not_allowed") end
+        local html=readFile(htmlRoot.."\\index.html")
+        return html and response(200,html:gsub("__ARZMARKET_TOKEN__",token),mime.html) or response(404,"ui_missing")
     end
-    if req.path:sub(1,8) == "/static/" then
-        if req.method ~= "GET" then return response(405, "method_not_allowed") end
-        local rel = safeStatic(req.path:sub(9)); if not rel then return response(403, "forbidden") end
-        local body = readFile(htmlRoot .. "\\" .. rel:gsub("/", "\\"), true); if not body then return response(404, "not_found") end
-        return response(200, body, mime[rel:match("%.([%w]+)$") or ""] or "application/octet-stream")
+    if req.path:sub(1,8)=="/static/" then
+        if req.method~="GET" then return response(405,"method_not_allowed") end
+        local rel=safeStatic(req.path:sub(9)); if not rel then return response(403,"forbidden") end
+        local body=readFile(htmlRoot.."\\"..rel:gsub("/","\\"),true); if not body then return response(404,"not_found") end
+        return response(200,body,mime[rel:match("%.([%w]+)$") or ""] or "application/octet-stream","public, max-age=3600")
     end
-    if req.path == "/api/state" then
-        if req.method ~= "GET" then return response(405, "method_not_allowed") end
-        if not validToken(req) then return response(403, "forbidden") end
-        local value = stateFor(req.query.page == "sell" and "sell" or "buy")
-        if tonumber(req.query.since) == tonumber(value.revision) then return response(204, "", "application/json; charset=utf-8") end
-        return jsonResponse(200, value)
+    if req.path=="/api/state" then
+        if req.method~="GET" then return response(405,"method_not_allowed") end
+        if not validToken(req) then return response(403,"forbidden") end
+        local value=stateFor(req.query.page=="sell" and "sell" or "buy")
+        if tonumber(req.query.since)==tonumber(value.revision) then return response(204,"","application/json; charset=utf-8") end
+        return jsonResponse(200,value)
     end
-    if req.path == "/api/action" then return doAction(req) end
-    if req.path:sub(1,10) == "/api/icon/" then return response(404, "icon_fallback_not_ready") end
-    return response(404, "not_found")
+    if req.path=="/api/action" then return doAction(req) end
+    local size,id=req.path:match("^/api/icon/(24|48|256)/(%d+)%.webp$")
+    if size and id then
+        if req.method~="GET" then return response(405,"method_not_allowed") end
+        if not validToken(req) and tostring(req.query.token or "")~=token then return response(403,"forbidden") end
+        if not itemIcons or type(itemIcons.getIcon)~="function" then return response(404,"icon_unavailable") end
+        local ok,dataOrErr,extra=pcall(itemIcons.getIcon,size,id)
+        if not ok or not dataOrErr then return response(404,tostring(ok and extra or dataOrErr)) end
+        return response(200,dataOrErr,"image/webp","public, max-age=86400")
+    end
+    return response(404,"not_found")
 end
 
-local function closeClient(entry) pcall(function() entry.socket:close() end); clients[entry] = nil end
-local function queueResponse(entry, out)
-    entry.out, entry.outPos, entry.deadline = out, 1, gameTime() + 2500
-end
+local function closeClient(entry) pcall(function() entry.socket:close() end); clients[entry]=nil end
+local function queueResponse(entry,out) entry.out,entry.outPos,entry.deadline=out,1,nowMs()+4000 end
 local function flushClient(entry)
     if not entry.out then return false end
-    local sent, err, last = entry.socket:send(entry.out, entry.outPos)
-    local endPos = sent or last
-    if endPos and endPos >= entry.outPos then entry.outPos = endPos + 1 end
-    if entry.outPos > #entry.out then closeClient(entry); return true end
-    if err and err ~= "timeout" then closeClient(entry); return true end
+    local sent,err,last=entry.socket:send(entry.out,entry.outPos)
+    local endPos=sent or last
+    if endPos and endPos>=entry.outPos then entry.outPos=endPos+1 end
+    if entry.outPos>#entry.out then closeClient(entry); return true end
+    if err and err~="timeout" then closeClient(entry); return true end
     return false
 end
 local function service()
     if not server then return end
-    local count = 0; for _ in pairs(clients) do count = count + 1 end
-    while count < 6 do
-        local client = server:accept(); if not client then break end
-        client:settimeout(0); local entry = {socket=client,buffer="",deadline=gameTime()+2000}; clients[entry] = true; count = count + 1
+    local count=0; for _ in pairs(clients) do count=count+1 end
+    while count<6 do
+        local client=server:accept(); if not client then break end
+        client:settimeout(0)
+        local entry={socket=client,buffer="",deadline=nowMs()+2500}
+        clients[entry]=true; count=count+1
     end
-    local entries = {}; for entry in pairs(clients) do entries[#entries + 1] = entry end
-    for _, entry in ipairs(entries) do
+    local entries={}; for entry in pairs(clients) do entries[#entries+1]=entry end
+    for _,entry in ipairs(entries) do
         if clients[entry] then
             if entry.out then
                 flushClient(entry)
             else
-                local chunk, err, partial = entry.socket:receive(4096); local data = chunk or partial
-                if data and #data > 0 then entry.buffer = entry.buffer .. data end
-                if #entry.buffer > 81920 then
-                    queueResponse(entry, response(413, "too_large"))
+                local chunk,err,partial=entry.socket:receive(4096)
+                local data=chunk or partial
+                if data and #data>0 then entry.buffer=entry.buffer..data end
+                if #entry.buffer>81920 then
+                    queueResponse(entry,response(413,"too_large"))
                 else
-                    local req, parseErr = parseRequest(entry.buffer)
+                    local req,parseErr=parseRequest(entry.buffer)
                     if req then
-                        local ok, out = pcall(handle, req)
-                        if not ok then log("request failed: " .. tostring(out)); out = response(500, "internal_error") end
-                        queueResponse(entry, out)
-                    elseif parseErr ~= "incomplete" then
-                        queueResponse(entry, response(parseErr == "body_too_large" and 413 or 400, parseErr))
-                    elseif gameTime() > entry.deadline or err == "closed" then closeClient(entry) end
+                        local ok,out=pcall(handle,req)
+                        if not ok then log("request failed: "..tostring(out)); out=response(500,"internal_error") end
+                        queueResponse(entry,out)
+                    elseif parseErr~="incomplete" then
+                        queueResponse(entry,response(parseErr=="body_too_large" and 413 or 400,parseErr))
+                    elseif nowMs()>entry.deadline or err=="closed" then closeClient(entry) end
                 end
             end
-            if clients[entry] and gameTime() > entry.deadline then closeClient(entry) end
+            if clients[entry] and nowMs()>entry.deadline then closeClient(entry) end
         end
     end
 end
 local function startServer()
     if running then return true end
-    local ok, socket = pcall(require, "socket"); if not ok or type(socket) ~= "table" then return false, "luasocket_missing" end
-    local ports = {0}; for p = 38460, 38489 do ports[#ports + 1] = p end
-    for _, p in ipairs(ports) do
-        local srv = socket.bind("127.0.0.1", p)
-        if srv then srv:settimeout(0); local _, actual = srv:getsockname(); server, port = srv, tonumber(actual) or p; break end
+    local ok,socket=pcall(require,"socket")
+    if not ok or type(socket)~="table" then return false,"luasocket_missing" end
+    local ports={0}; for p=38460,38489 do ports[#ports+1]=p end
+    for _,p in ipairs(ports) do
+        local srv=socket.bind("127.0.0.1",p)
+        if srv then
+            srv:settimeout(0)
+            local _,actual=srv:getsockname()
+            server,port=srv,tonumber(actual) or p
+            break
+        end
     end
-    if not server then return false, "port_unavailable" end
-    if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create) ~= "function" then server:close(); server=nil; return false, "thread_unavailable" end
-    running = true
-    ctx.lua_thread.create(function() while running do service(); ensureIframe(); ctx.wait(0) end end)
-    log("bridge listening on 127.0.0.1:" .. tostring(port)); return true
+    if not server then return false,"port_unavailable" end
+    if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create)~="function" then server:close(); server=nil; return false,"thread_unavailable" end
+    running=true
+    ctx.lua_thread.create(function()
+        while running do service(); ensureIframe(); ctx.wait(0) end
+    end)
+    log("bridge listening on 127.0.0.1:"..tostring(port))
+    return true
 end
 local function stopServer()
-    running = false
-    local entries = {}; for entry in pairs(clients) do entries[#entries + 1] = entry end
-    for _, entry in ipairs(entries) do closeClient(entry) end
+    running=false
+    local entries={}; for entry in pairs(clients) do entries[#entries+1]=entry end
+    for _,entry in ipairs(entries) do closeClient(entry) end
     if server then pcall(function() server:close() end) end
-    server, port = nil, nil
+    server,port=nil,nil
+end
+local function loadItemIcons()
+    local path=ctx.getWorkingDirectory().."\\ArzMarket\\lua\\arz_item_icons.lua"
+    local loader,err=loadfile(path)
+    if not loader then log("item icon module missing: "..tostring(err)); return end
+    local ok,module=pcall(loader)
+    if not ok or type(module)~="table" then log("item icon module failed: "..tostring(module)); return end
+    itemIcons=module
+    if type(itemIcons.init)=="function" then
+        local initOk,initErr=pcall(itemIcons.init,ctx)
+        if not initOk then log("item icon init failed: "..tostring(initErr)); itemIcons=nil end
+    end
 end
 
 function M.open_html(page)
-    if page == "buy" or page == "sell" then currentPage = page end
-    suppressAutoOpen = false
+    if page=="buy" or page=="sell" then currentPage=page end
+    suppressAutoOpen=false
     if not running then
-        local ok, err = startServer()
-        if not ok then if ctx and ctx.notify then pcall(ctx.notify, "HTML интерфейс недоступен: " .. tostring(err)) end; return false end
+        local ok,err=startServer()
+        if not ok then if ctx and ctx.notify then pcall(ctx.notify,"HTML интерфейс недоступен: "..tostring(err)) end; return false end
     end
-    if not acef or type(acef.eval) ~= "function" then
-        if ctx and ctx.notify then pcall(ctx.notify, "Не найдена библиотека arizona-events. Lua интерфейс продолжает работать.") end
+    if not acef or type(acef.eval)~="function" then
+        if ctx and ctx.notify then pcall(ctx.notify,"Не найдена библиотека arizona-events. Lua интерфейс продолжает работать.") end
         return false
     end
-    local ok = injectIframe()
-    if not ok and ctx and ctx.notify then pcall(ctx.notify, "Не удалось открыть CEF интерфейс. Используйте Lua режим.") end
+    local ok=injectIframe()
+    if not ok and ctx and ctx.notify then pcall(ctx.notify,"Не удалось открыть CEF интерфейс. Используйте Lua режим.") end
     return ok
 end
 function M.init(context)
-    ctx, token = context, makeToken()
-    htmlRoot = ctx.getWorkingDirectory() .. "\\ArzMarket\\html"
-    local ok, module = pcall(require, "arizona-events")
-    if ok and type(module) == "table" and type(module.eval) == "function" then acef = module end
-    local started, err = startServer(); if not started then log("bridge disabled: " .. tostring(err)) end
+    ctx=context
+    token=makeToken()
+    htmlRoot=ctx.getWorkingDirectory().."\\ArzMarket\\html"
+    loadItemIcons()
+    local ok,module=pcall(require,"arizona-events")
+    if ok and type(module)=="table" and type(module.eval)=="function" then acef=module end
+    local started,err=startServer()
+    if not started then log("bridge disabled: "..tostring(err)) end
     return true
 end
 function M.render(context)
-    ctx = context or ctx
-    local imgui = ctx.imgui
-    if not acef then imgui.Text("HTML интерфейс ArzMarket"); imgui.Spacing(); imgui.TextWrapped("Не найдена библиотека arizona-events. Lua интерфейс продолжает работать."); return end
-    if not running then imgui.Text("Local bridge не запущен."); if imgui.Button("Повторить запуск", imgui.ImVec2(220,34)) then startServer() end; return end
+    ctx=context or ctx
+    local imgui=ctx.imgui
+    if not acef then
+        imgui.Text("HTML интерфейс ArzMarket")
+        imgui.Spacing()
+        imgui.TextWrapped("Не найдена библиотека arizona-events. Lua интерфейс продолжает работать.")
+        return
+    end
+    if not running then
+        imgui.Text("Local bridge не запущен.")
+        if imgui.Button("Повторить запуск",imgui.ImVec2(220,34)) then startServer() end
+        return
+    end
     if not htmlOpen and not suppressAutoOpen then M.open_html(currentPage) end
     if not htmlOpen then
         imgui.Text("HTML интерфейс закрыт.")
-        if imgui.Button("Открыть HTML", imgui.ImVec2(220,34)) then suppressAutoOpen=false; M.open_html(currentPage) end
+        if imgui.Button("Открыть HTML",imgui.ImVec2(220,34)) then suppressAutoOpen=false; M.open_html(currentPage) end
     end
 end
-function M.shutdown() removeIframe(true); stopServer(); return true end
+function M.shutdown()
+    removeIframe()
+    stopServer()
+    if itemIcons and type(itemIcons.shutdown)=="function" then pcall(itemIcons.shutdown) end
+    return true
+end
+
 return M
