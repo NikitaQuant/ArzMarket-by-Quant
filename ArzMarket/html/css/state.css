@@ -1,0 +1,37 @@
+button:disabled,
+.btn:disabled,
+.toggle:disabled,
+.trash:disabled {
+  cursor: default;
+  opacity: .42;
+  filter: none;
+  box-shadow: none;
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  pointer-events: none;
+}
+
+.toggle:disabled:after {
+  box-shadow: none;
+}
+
+.trash:disabled:hover,
+.btn-secondary:disabled:hover,
+.btn-primary:disabled:hover {
+  background: inherit;
+  color: inherit;
+  border-color: inherit;
+  filter: none;
+}
+
+.save-state:before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 9px rgba(41,213,143,.58);
+}
