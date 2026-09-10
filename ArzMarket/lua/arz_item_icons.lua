@@ -1,4 +1,4 @@
-local M = { api_version = 1, module_version = 2 }
+local M = { api_version = 1, module_version = 3 }
 
 local ctx
 local catalog = {}
@@ -77,39 +77,62 @@ local function toUtf8(value)
     return value
 end
 
-local function normalizeName(value)
-    local raw = tostring(value or "")
-    if type(string.nlower) == "function" then
-        local ok, lowered = pcall(string.nlower, raw)
-        if ok and type(lowered) == "string" then raw = lowered else raw = raw:lower() end
-    else
-        raw = raw:lower()
+local function fromUtf8(value)
+    value = tostring(value or "")
+    if ctx and ctx.u8 and type(ctx.u8.decode) == "function" then
+        local ok, result = pcall(function() return ctx.u8:decode(value) end)
+        if ok and type(result) == "string" then return result end
     end
-    raw = toUtf8(raw)
-    raw = raw:gsub("{[%x][%x][%x][%x][%x][%x]}","")
-    raw = raw:gsub("%s+"," "):gsub("^%s+",""):gsub("%s+$","")
-    return raw
+    return value
+end
+
+local function lowerLocal(value)
+    value=tostring(value or "")
+    if type(string.nlower)=="function" then
+        local ok,result=pcall(string.nlower,value)
+        if ok and type(result)=="string" then return result end
+    end
+    return value:lower()
+end
+
+local function cleanUtf8(value)
+    value=tostring(value or "")
+    value=value:gsub("{[%x][%x][%x][%x][%x][%x]}","")
+    return value:gsub("%s+"," "):gsub("^%s+",""):gsub("%s+$","")
+end
+
+local function normalizeLuaName(value)
+    return cleanUtf8(toUtf8(lowerLocal(value)))
+end
+
+local function normalizeUtf8Name(value)
+    return cleanUtf8(toUtf8(lowerLocal(fromUtf8(value))))
 end
 
 local function locateFiles()
     local root = gameDir()
-    local itemCandidates = {
-        root .. "\\arizona\\items.zip",
-        root .. "\\items.zip"
-    }
-    local frontCandidates = {
-        root .. "\\frontend.zip",
-        root .. "\\arizona\\frontend.zip"
-    }
+    local itemCandidates = { root .. "\\arizona\\items.zip", root .. "\\items.zip" }
+    local frontCandidates = { root .. "\\frontend.zip", root .. "\\arizona\\frontend.zip" }
     for _,p in ipairs(itemCandidates) do if fileExists(p) then itemsZipPath = p break end end
     for _,p in ipairs(frontCandidates) do if fileExists(p) then frontendZipPath = p break end end
 end
 
+local function fileStamp(path)
+    if not path then return nil end
+    if ctx and ctx.lfs and type(ctx.lfs.attributes)=="function" then
+        local ok,attr=pcall(ctx.lfs.attributes,path)
+        if ok and type(attr)=="table" then return tostring(attr.size or "")..":"..tostring(attr.modification or "") end
+    end
+    local f=io.open(path,"rb")
+    if not f then return nil end
+    local size=f:seek("end")
+    f:close()
+    return tostring(size or "")
+end
+
 local function findEocd(tail)
     for pos = #tail-21,1,-1 do
-        if tail:byte(pos)==0x50 and tail:byte(pos+1)==0x4B and tail:byte(pos+2)==0x05 and tail:byte(pos+3)==0x06 then
-            return pos
-        end
+        if tail:byte(pos)==0x50 and tail:byte(pos+1)==0x4B and tail:byte(pos+2)==0x05 and tail:byte(pos+3)==0x06 then return pos end
     end
 end
 
@@ -123,8 +146,7 @@ local function readCentralDirectory(path)
     local tail = f:read(tailSize)
     local eocd = tail and findEocd(tail)
     if not eocd then f:close(); return nil,nil,"eocd_missing" end
-    local size = u32(tail,eocd+12)
-    local offset = u32(tail,eocd+16)
+    local size,offset = u32(tail,eocd+12),u32(tail,eocd+16)
     if not size or not offset then f:close(); return nil,nil,"central_invalid" end
     f:seek("set",offset)
     local central = f:read(size)
@@ -132,132 +154,126 @@ local function readCentralDirectory(path)
     return f,central
 end
 
-local function parseEntries(central, wanted)
-    local result = {}
-    local pos = 1
-    while pos+45 <= #central do
-        if u32(central,pos) ~= 0x02014B50 then break end
-        local method = u16(central,pos+10)
-        local compSize = u32(central,pos+20)
-        local uncompSize = u32(central,pos+24)
-        local nameLen = u16(central,pos+28)
-        local extraLen = u16(central,pos+30)
-        local commentLen = u16(central,pos+32)
-        local localOffset = u32(central,pos+42)
+local function parseEntries(central,wanted)
+    local result={}
+    local pos=1
+    while pos+45<=#central do
+        if u32(central,pos)~=0x02014B50 then break end
+        local method=u16(central,pos+10)
+        local compSize=u32(central,pos+20)
+        local uncompSize=u32(central,pos+24)
+        local nameLen=u16(central,pos+28)
+        local extraLen=u16(central,pos+30)
+        local commentLen=u16(central,pos+32)
+        local localOffset=u32(central,pos+42)
         if not method or not compSize or not nameLen or not extraLen or not commentLen or not localOffset then break end
-        local nameStart = pos+46
-        local nameEnd = nameStart+nameLen-1
-        if nameEnd > #central then break end
-        local name = central:sub(nameStart,nameEnd)
+        local nameStart=pos+46
+        local nameEnd=nameStart+nameLen-1
+        if nameEnd>#central then break end
+        local name=central:sub(nameStart,nameEnd)
         if not wanted or wanted(name) then
-            result[name] = {
-                method=method, comp_size=compSize, uncomp_size=uncompSize,
-                local_offset=localOffset
-            }
+            result[name]={method=method,comp_size=compSize,uncomp_size=uncompSize,local_offset=localOffset}
         end
-        pos = nameEnd+1+extraLen+commentLen
+        pos=nameEnd+1+extraLen+commentLen
     end
     return result
 end
 
-local function readStoredEntry(file, entry)
-    if not file or type(entry) ~= "table" then return nil,"entry_missing" end
-    if tonumber(entry.method) ~= 0 then return nil,"compressed_unsupported" end
+local function readStoredEntry(file,entry)
+    if not file or type(entry)~="table" then return nil,"entry_missing" end
+    if tonumber(entry.method)~=0 then return nil,"compressed_unsupported" end
     file:seek("set",tonumber(entry.local_offset) or 0)
-    local h = file:read(30)
-    if not h or #h < 30 or u32(h,1) ~= 0x04034B50 then return nil,"bad_local_header" end
-    local nameLen,extraLen = u16(h,27),u16(h,29)
+    local h=file:read(30)
+    if not h or #h<30 or u32(h,1)~=0x04034B50 then return nil,"bad_local_header" end
+    local nameLen,extraLen=u16(h,27),u16(h,29)
     if not nameLen or not extraLen then return nil,"bad_local_lengths" end
     file:seek("set",(tonumber(entry.local_offset) or 0)+30+nameLen+extraLen)
-    local size = tonumber(entry.comp_size) or 0
-    if size < 0 or size > 32*1024*1024 then return nil,"entry_too_large" end
-    local data = file:read(size)
-    if not data or #data ~= size then return nil,"short_read" end
+    local size=tonumber(entry.comp_size) or 0
+    if size<0 or size>32*1024*1024 then return nil,"entry_too_large" end
+    local data=file:read(size)
+    if not data or #data~=size then return nil,"short_read" end
     return data
 end
 
-local function loadCatalogFile()
-    local wd = ctx and ctx.getWorkingDirectory and ctx.getWorkingDirectory() or "."
-    local raw = readAll(wd .. "\\ArzMarket\\cache\\item_catalog.json")
-    if not raw or type(decodeJson) ~= "function" then return false end
-    local ok,parsed = pcall(decodeJson,raw)
-    if not ok or type(parsed) ~= "table" or type(parsed.by_name) ~= "table" then return false end
-    catalog = parsed.by_name
-    catalogMeta = parsed.meta or {}
-    return next(catalog) ~= nil
+local function cachePath()
+    local wd=ctx and ctx.getWorkingDirectory and ctx.getWorkingDirectory() or "."
+    return wd.."\\ArzMarket\\cache\\item_catalog.json"
 end
 
-local function extractJsonArray(text, startPos)
-    local depth,inString,escaped = 0,false,false
+local function loadCatalogFile()
+    local raw=readAll(cachePath())
+    if not raw or type(decodeJson)~="function" then return false end
+    local ok,parsed=pcall(decodeJson,raw)
+    if not ok or type(parsed)~="table" or type(parsed.by_name)~="table" then return false end
+    local meta=type(parsed.meta)=="table" and parsed.meta or {}
+    if frontendZipPath and meta.frontend_stamp and meta.frontend_stamp~=fileStamp(frontendZipPath) then return false end
+    catalog=parsed.by_name
+    catalogMeta=meta
+    return next(catalog)~=nil
+end
+
+local function extractJsonArray(text,startPos)
+    local depth,inString,escaped=0,false,false
     local beginPos
     for i=startPos,#text do
-        local ch = text:sub(i,i)
+        local ch=text:sub(i,i)
         if inString then
-            if escaped then escaped=false
-            elseif ch == "\\" then escaped=true
-            elseif ch == '"' then inString=false end
+            if escaped then escaped=false elseif ch=="\\" then escaped=true elseif ch=='"' then inString=false end
         else
-            if ch == '"' then inString=true
-            elseif ch == "[" then depth=depth+1; if not beginPos then beginPos=i end
-            elseif ch == "]" then
-                depth=depth-1
-                if beginPos and depth==0 then return text:sub(beginPos,i) end
-            end
+            if ch=='"' then inString=true
+            elseif ch=="[" then depth=depth+1; if not beginPos then beginPos=i end
+            elseif ch=="]" then depth=depth-1; if beginPos and depth==0 then return text:sub(beginPos,i) end end
         end
     end
 end
 
 local function buildCatalogFromFrontend()
-    if not frontendZipPath or type(decodeJson) ~= "function" or type(encodeJson) ~= "function" then
-        return false,"frontend_missing"
-    end
-    local f,central,err = readCentralDirectory(frontendZipPath)
+    if not frontendZipPath or type(decodeJson)~="function" or type(encodeJson)~="function" then return false,"frontend_missing" end
+    local f,central,err=readCentralDirectory(frontendZipPath)
     if not f then return false,err end
-    local entries = parseEntries(central,function(name) return name=="frontend/svelte_js/main.bundle.js" end)
-    local bundle,readErr = readStoredEntry(f,entries["frontend/svelte_js/main.bundle.js"])
+    local entries=parseEntries(central,function(name) return name=="frontend/svelte_js/main.bundle.js" end)
+    local bundle,readErr=readStoredEntry(f,entries["frontend/svelte_js/main.bundle.js"])
     f:close()
     if not bundle then return false,readErr end
-
-    local marker = "var ITEMS_CONST="
-    local p = bundle:find(marker,1,true)
+    local marker="var ITEMS_CONST="
+    local p=bundle:find(marker,1,true)
     if not p then return false,"items_const_missing" end
-    local jsonText = extractJsonArray(bundle,p+#marker)
-    bundle = nil
+    local jsonText=extractJsonArray(bundle,p+#marker)
+    bundle=nil
     if not jsonText then return false,"items_const_parse_failed" end
-    local ok,items = pcall(decodeJson,jsonText)
-    jsonText = nil
-    if not ok or type(items) ~= "table" then return false,"items_const_decode_failed" end
+    local ok,items=pcall(decodeJson,jsonText)
+    jsonText=nil
+    if not ok or type(items)~="table" then return false,"items_const_decode_failed" end
 
-    local byName = {}
-    local count = 0
+    local byName={}
+    local count=0
     for _,item in ipairs(items) do
-        if type(item)=="table" and item.id ~= nil then
-            local key = normalizeName(item.name)
-            if key ~= "" then
-                if byName[key] == nil then byName[key] = tostring(item.id) end
-                count = count+1
+        if type(item)=="table" and item.id~=nil then
+            local key=normalizeUtf8Name(item.name)
+            if key~="" then
+                if byName[key]==nil then byName[key]=tostring(item.id) end
+                count=count+1
             end
         end
     end
-    items = nil
-    if next(byName) == nil then return false,"catalog_empty" end
-    catalog = byName
-    catalogMeta = { version=1, items_count=count, source="frontend.zip" }
+    items=nil
+    if next(byName)==nil then return false,"catalog_empty" end
+    catalog=byName
+    catalogMeta={version=1,items_count=count,source="frontend.zip",frontend_stamp=fileStamp(frontendZipPath)}
 
-    local wd = ctx and ctx.getWorkingDirectory and ctx.getWorkingDirectory() or "."
-    local arzDir = wd .. "\\ArzMarket"
-    local cacheDir = arzDir .. "\\cache"
-    ensureDir(arzDir)
-    ensureDir(cacheDir)
-    local okEncode,serialized = pcall(encodeJson,{version=1,meta=catalogMeta,by_name=byName})
-    if okEncode and type(serialized)=="string" then writeAll(cacheDir.."\\item_catalog.json",serialized) end
+    local wd=ctx and ctx.getWorkingDirectory and ctx.getWorkingDirectory() or "."
+    local arzDir=wd.."\\ArzMarket"
+    local cacheDir=arzDir.."\\cache"
+    ensureDir(arzDir); ensureDir(cacheDir)
+    local encOk,serialized=pcall(encodeJson,{version=1,meta=catalogMeta,by_name=byName})
+    if encOk and type(serialized)=="string" then writeAll(cachePath(),serialized) end
     return true
 end
 
 local function ensureCatalog()
-    if next(catalog) ~= nil then return true end
+    if next(catalog)~=nil then return true end
     if loadCatalogFile() then return true end
-    local ok,err = buildCatalogFromFrontend()
+    local ok,err=buildCatalogFromFrontend()
     if not ok then log("catalog unavailable: "..tostring(err)) end
     return ok,err
 end
@@ -266,21 +282,22 @@ local function buildZipIndex()
     if zipIndex then return true end
     if not itemsZipPath then locateFiles() end
     if not itemsZipPath then return false,"items_zip_missing" end
-    local f,central,err = readCentralDirectory(itemsZipPath)
+    local f,central,err=readCentralDirectory(itemsZipPath)
     if not f then return false,err end
-    local entries = parseEntries(central,function(name)
-        return name=="icons/aliases.json" or name:match("^icons/(24|48|256)/%d+%.webp$") ~= nil
+    local entries=parseEntries(central,function(name)
+        if name=="icons/aliases.json" then return true end
+        return name:match("^icons/24/%d+%.webp$") or name:match("^icons/48/%d+%.webp$") or name:match("^icons/256/%d+%.webp$")
     end)
-    local index = {["24"]={},["48"]={},["256"]={}}
+    local index={["24"]={},["48"]={},["256"]={}}
     for name,entry in pairs(entries) do
-        local size,id = name:match("^icons/(24)/(%d+)%.webp$")
-        if not size then size,id = name:match("^icons/(48)/(%d+)%.webp$") end
-        if not size then size,id = name:match("^icons/(256)/(%d+)%.webp$") end
+        local size,id=name:match("^icons/(24)/(%d+)%.webp$")
+        if not size then size,id=name:match("^icons/(48)/(%d+)%.webp$") end
+        if not size then size,id=name:match("^icons/(256)/(%d+)%.webp$") end
         if size and id then index[size][id]=entry end
     end
-    local aentry = entries["icons/aliases.json"]
-    if aentry then
-        local raw = readStoredEntry(f,aentry)
+    local aliasEntry=entries["icons/aliases.json"]
+    if aliasEntry then
+        local raw=readStoredEntry(f,aliasEntry)
         if raw then
             aliases={}
             for sourceId,targetId in raw:gmatch('"(%d+)"%s*:%s*(%d+)') do aliases[sourceId]=targetId end
@@ -307,19 +324,15 @@ local function resolveAlias(id)
 end
 
 local function cachePut(key,value)
-    if iconCache[key] == nil then iconCacheOrder[#iconCacheOrder+1]=key end
+    if iconCache[key]==nil then iconCacheOrder[#iconCacheOrder+1]=key end
     iconCache[key]=value
-    while #iconCacheOrder>ICON_CACHE_LIMIT do
-        local old=table.remove(iconCacheOrder,1)
-        iconCache[old]=nil
-    end
+    while #iconCacheOrder>ICON_CACHE_LIMIT do local old=table.remove(iconCacheOrder,1); iconCache[old]=nil end
 end
 
 function M.resolveItemId(name)
     ensureCatalog()
-    local id = catalog[normalizeName(name)]
-    if id == nil then return nil end
-    return tostring(id)
+    local id=catalog[normalizeLuaName(name)]
+    return id~=nil and tostring(id) or nil
 end
 
 function M.getIcon(size,id)
@@ -361,12 +374,7 @@ function M.init(context)
 end
 
 function M.shutdown()
-    catalog={}
-    catalogMeta={}
-    zipIndex=nil
-    aliases=nil
-    iconCache={}
-    iconCacheOrder={}
+    catalog={}; catalogMeta={}; zipIndex=nil; aliases=nil; iconCache={}; iconCacheOrder={}
 end
 
 return M
