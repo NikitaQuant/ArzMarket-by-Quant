@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="stylesheet" href="/static/css/state.css">
   <link rel="stylesheet" href="/static/css/buy.css?v=1">
+  <link rel="stylesheet" href="/static/css/buy-polish.css?v=1">
 </head>
 <body data-token="__ARZMARKET_TOKEN__">
   <div id="app" class="app-shell" data-page="buy">
@@ -51,11 +52,12 @@
               <div id="automationBadge" class="badge badge-muted">Готов</div>
               <div id="saveBadge" class="save-state">Автосохранение</div>
             </div>
+            <div class="page-header-hint" aria-hidden="true"><span>Выгодные закупки</span><span>Стабильная прибыль</span><span>Arizona RP</span></div>
             <div class="hero-watermark">A</div>
           </div>
           <div class="toolbar">
             <label class="search-wrap"><span class="search-icon">⌕</span><input id="searchInput" type="text" autocomplete="off" placeholder="Поиск товара..."><kbd>Ctrl + F</kbd></label>
-            <button id="addButton" class="btn btn-secondary" type="button">+ Добавить</button>
+            <button id="addButton" class="btn btn-secondary" type="button">Добавить</button>
             <button id="averageButton" class="btn btn-secondary" type="button">Средние цены</button>
             <details class="more-actions">
               <summary>Ещё</summary>
@@ -113,5 +115,6 @@
     <div id="toast" class="toast hidden"></div>
   </div>
   <script src="/static/js/app.js"></script>
+  <script src="/static/js/buy-polish.js?v=1"></script>
 </body>
 </html>
