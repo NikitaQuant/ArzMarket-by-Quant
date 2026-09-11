@@ -1,0 +1,47 @@
+name: ArzMarket HTML config selector patch
+
+on:
+  push:
+    branches:
+      - feature/html-cef-block1
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/html-cef-block1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply patch
+        run: python .github/patch_html_config_selector.py
+      - name: Static checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          main = Path('by_Quant_ArzMarket[3_56].lua').read_text(encoding='utf-8')
+          lua = Path('modules/arz_html_ui.lua').read_text(encoding='utf-8')
+          html = Path('ArzMarket/html/index.html').read_text(encoding='utf-8')
+          js = Path('ArzMarket/html/js/app.js').read_text(encoding='utf-8')
+          assert 'ctx.listTradeConfigs = function(side)' in main
+          assert 'ctx.loadTradeConfig = function(side, fileName)' in main
+          assert 'module_version = 9' in lua
+          assert 'action=="trade.config.load"' in lua
+          assert 'configs=configs' in lua
+          assert 'id="configSelect" class="select"' in html and 'class="select" disabled' not in html
+          assert "refs.configSelect.addEventListener('change'" in js
+          PY
+      - name: Commit patched files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'by_Quant_ArzMarket[3_56].lua' modules/arz_html_ui.lua ArzMarket/html/index.html ArzMarket/html/js/app.js
+          git diff --cached --quiet && exit 0
+          git commit -m "Enable HTML trade config selection"
+          git push origin HEAD:feature/html-cef-block1
