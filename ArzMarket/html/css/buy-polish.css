@@ -1,6 +1,11 @@
 /* Final visual pass for the Buy page reference. Renderer only, no trade logic here. */
 
+.page-header-hint {
+  display: none;
+}
+
 #app[data-page="buy"] .page-header-hint {
+  display: block;
   position: relative;
   z-index: 1;
   flex: none;
