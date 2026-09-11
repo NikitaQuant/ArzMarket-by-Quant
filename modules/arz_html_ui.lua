@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 6,
+    module_version = 7,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -157,6 +157,18 @@ local function sources(side)
     return out
 end
 
+local function sourceFingerprint(source)
+    local out={tostring(type(source)=="table" and #source or 0)}
+    for i=1,#source do
+        local x=source[i]
+        out[#out+1]=table.concat({
+            tostring(x.name or ""),tostring(x.item_id or ""),tostring(x.all_count or ""),
+            tostring(x.slot_count or ""),tostring(x.slot_id or "")
+        },"\30")
+    end
+    return table.concat(out,"\31")
+end
+
 local function automationSnapshot()
     if not ctx or type(ctx.getTradeAutomationState)~="function" then return {sell=false,buy=false,score=0,score_from=0} end
     local ok,state=pcall(ctx.getTradeAutomationState)
@@ -195,9 +207,10 @@ local function stateFor(page)
     local total=saneNumber(snapshot.score_from,0) or 0
     local busy=snapshot.sell==true or snapshot.buy==true
     local cfg=configName(page)
+    local source=sources(page)
     local runtimeKey=table.concat({
         tostring(active),tostring(busy),tostring(snapshot.buy==true),tostring(snapshot.sell==true),
-        tostring(score),tostring(total),tostring(cfg)
+        tostring(score),tostring(total),tostring(cfg),sourceFingerprint(source)
     },"\30")
     touchRevision(page,list,runtimeKey)
     local items={}
@@ -214,7 +227,7 @@ local function stateFor(page)
             automation=active,tradeBusy=busy,automationBuy=snapshot.buy==true,automationSell=snapshot.sell==true,
             automationScore=score,automationTotal=total,
             serverAddress=address,serverPort=serverPort,icons=iconStatus},
-        data={items=items,source=sources(page)}
+        data={items=items,source=source}
     }
 end
 local function findItem(side,identity)
@@ -233,20 +246,27 @@ local boolean={enabled=true,maximum=true}
 local function updateItem(side,payload)
     local item,_,err=findItem(side,payload.identity)
     if not item then return false,err end
-    for key,value in pairs(type(payload.patch)=="table" and payload.patch or {}) do
+    local patch=type(payload.patch)=="table" and payload.patch or {}
+    local updates={}
+    for key,value in pairs(patch) do
         if numeric[key] then
             local n=saneNumber(value)
             if not n or n<0 or n>2147483647 then return false,"invalid_"..key end
             if key=="count" or key=="continue" or key=="count_maximum" then n=math.floor(n) end
-            item[key]=n
+            updates[key]=n
         elseif boolean[key] then
             if type(value)~="boolean" then return false,"invalid_"..key end
-            item[key]=value
+            updates[key]=value
         else
             return false,"field_not_allowed"
         end
     end
+    local backup={}
+    for key,value in pairs(updates) do backup[key]=item[key]; item[key]=value end
     local ok,saveErr=persist(side)
+    if not ok then
+        for key,value in pairs(backup) do item[key]=value end
+    end
     fingerprints[side]=""
     return ok,saveErr
 end
@@ -254,9 +274,13 @@ local function removeItem(side,payload)
     local _,index,err=findItem(side,payload.identity)
     if not index then return false,err end
     local buy,sell=lists()
-    table.remove(side=="buy" and buy or sell,index)
-    if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
+    local list=side=="buy" and buy or sell
+    local removed=table.remove(list,index)
     local ok,saveErr=persist(side)
+    if not ok then
+        table.insert(list,index,removed)
+    end
+    if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
     fingerprints[side]=""
     return ok,saveErr
 end
@@ -276,13 +300,30 @@ local function addItem(side,payload)
         item={enabled=true,price_vc=9,maximum=true,name=luaName,price=9,count=1,
             slot_count=src.slot_count,slot_id=src.slot_id,all_count=src.all_count,item_id=src.item_id}
     end
-    if type(addToData)=="function" then pcall(addToData,item,list,nil) else table.insert(list,item) end
-    if type(tradeFilterMarkNewItem)=="function" then pcall(tradeFilterMarkNewItem,side,item) end
+    if type(addToData)=="function" then
+        local addOk=pcall(addToData,item,list,nil)
+        if not addOk then return false,"add_failed" end
+    else
+        table.insert(list,item)
+    end
+    local insertedIndex
+    for i=#list,1,-1 do
+        local candidate=list[i]
+        if candidate==item or tostring(candidate.name or candidate.item or "")==luaName then insertedIndex=i; break end
+    end
+    if not insertedIndex then return false,"add_failed" end
+    local ok,saveErr=persist(side)
+    if not ok then
+        table.remove(list,insertedIndex)
+        if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
+        fingerprints[side]=""
+        return false,saveErr
+    end
+    if type(tradeFilterMarkNewItem)=="function" then pcall(tradeFilterMarkNewItem,side,list[insertedIndex] or item) end
     if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
     sourceCache[side].at=0
-    local ok,saveErr=persist(side)
     fingerprints[side]=""
-    return ok,saveErr
+    return true
 end
 
 local function setCefCursor(value)
