@@ -1,0 +1,40 @@
+name: ArzMarket one-click HTML switch patch
+
+on:
+  push:
+    branches:
+      - tmp-html-one-click-switch
+    paths:
+      - .github/workflows/arz_html_one_click_switch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-html-one-click-switch
+          fetch-depth: 0
+      - name: Apply one-click switch patch
+        run: python3 .github/patch_html_one_click_switch.py
+      - name: Verify patch
+        run: |
+          grep -q 'function arzUiExtensionsOpenHtml(page)' 'by_Quant_ArzMarket[3_56].lua'
+          grep -q 'HTML##arz_html_buy' 'by_Quant_ArzMarket[3_56].lua'
+          grep -q 'HTML##arz_html_sell' 'by_Quant_ArzMarket[3_56].lua'
+          grep -q 'imgui.GetWindowWidth() - 285, 5' 'by_Quant_ArzMarket[3_56].lua'
+          grep -q 'imgui.GetWindowWidth() - 285, 4' 'by_Quant_ArzMarket[3_56].lua'
+      - name: Commit patch
+        run: |
+          if git diff --quiet -- 'by_Quant_ArzMarket[3_56].lua'; then
+            echo 'No one-click switch changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- 'by_Quant_ArzMarket[3_56].lua'
+          git commit -m 'Add one-click Lua to HTML interface switch'
+          git push origin HEAD:tmp-html-one-click-switch
