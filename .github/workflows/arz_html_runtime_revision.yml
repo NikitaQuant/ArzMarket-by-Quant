@@ -1,0 +1,38 @@
+name: ArzMarket HTML runtime revision patch
+
+on:
+  push:
+    branches:
+      - tmp-html-runtime-revision
+    paths:
+      - .github/workflows/arz_html_runtime_revision.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-html-runtime-revision
+          fetch-depth: 0
+      - name: Apply runtime revision patch
+        run: python3 .github/patch_html_runtime_revision.py
+      - name: Verify patch
+        run: |
+          grep -q 'module_version = 6' modules/arz_html_ui.lua
+          grep -q 'touchRevision(page,list,runtimeKey)' modules/arz_html_ui.lua
+          grep -q 'tostring(score),tostring(total),tostring(cfg)' modules/arz_html_ui.lua
+      - name: Commit patch
+        run: |
+          if git diff --quiet -- modules/arz_html_ui.lua; then
+            echo 'No revision changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- modules/arz_html_ui.lua
+          git commit -m 'Track HTML trade runtime state in revisions'
+          git push origin HEAD:tmp-html-runtime-revision
