@@ -59,6 +59,7 @@
             <button id="clearButton" class="btn btn-secondary btn-compact btn-destructive" type="button" title="Очистить активный список">Очистить</button>
             <button id="scanButton" class="btn btn-secondary btn-compact" type="button" title="Сканировать источник товаров">Скан</button>
             <button id="continueButton" class="btn btn-secondary btn-compact" type="button" title="Продолжить скупку с оставшегося количества">Продолжить</button>
+            <button id="budgetButton" class="btn btn-secondary btn-compact" type="button" title="Распределить бюджет между товарами">Бюджет</button>
             <button id="currencyButton" class="btn btn-secondary btn-compact" type="button" title="Переключить валюту">SA$</button>
             <button id="refreshButton" class="btn btn-secondary btn-compact" type="button" title="Обновить список скупки">Список</button>
             <button id="pricesButton" class="btn btn-secondary btn-compact" type="button" title="Загрузить средние цены">Цены</button>
@@ -89,6 +90,18 @@
         <div class="modal-head"><div><h2 id="pickerTitle">Добавить товар</h2><p>Выберите товар из данных ArzMarket</p></div><button class="window-btn" type="button" data-action="picker-close">×</button></div>
         <input id="pickerSearch" class="modal-search" type="text" autocomplete="off" placeholder="Поиск товара...">
         <div id="pickerRows" class="picker-list"></div>
+      </div>
+    </div>
+    <div id="budgetBackdrop" class="modal-backdrop hidden">
+      <div class="modal budget-modal">
+        <div class="modal-head"><div><h2>Распределить бюджет</h2><p>Бюджет делится поровну между активными товарами без режима максимума</p></div><button class="window-btn" type="button" data-action="budget-close">×</button></div>
+        <label class="field budget-field"><span class="field-label">Количество вирт на скупку</span><input id="budgetInput" class="field-input" type="number" min="0" step="1" autocomplete="off" placeholder="0"></label>
+        <div class="budget-summary">
+          <div><span>Подходящих товаров</span><strong id="budgetEligible">0</strong></div>
+          <div><span>Будет потрачено</span><strong id="budgetSpent">0</strong></div>
+          <div><span>Примерный остаток</span><strong id="budgetRemaining">0</strong></div>
+        </div>
+        <div class="modal-actions"><button id="budgetCancel" class="btn btn-secondary" type="button">Отмена</button><button id="budgetApply" class="btn btn-primary" type="button">Распределить</button></div>
       </div>
     </div>
     <div id="toast" class="toast hidden"></div>

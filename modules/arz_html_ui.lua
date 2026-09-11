@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 12,
+    module_version = 13,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -523,6 +523,20 @@ local function doAction(req)
         local success=ok and result~=false
         fingerprints[side]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
+    elseif action=="buy.budget.preview" then
+        if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
+        if not ctx or type(ctx.previewBuyBudget)~="function" then return jsonResponse(400,{ok=false,error="budget_unavailable"}) end
+        local ok,result,dataOrErr=pcall(ctx.previewBuyBudget,data.budget)
+        local success=ok and result~=false
+        return jsonResponse(success and 200 or 400,{ok=success,data=success and dataOrErr or nil,error=success and nil or (ok and dataOrErr or tostring(result))})
+    elseif action=="buy.budget.apply" then
+        if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.distributeBuyBudget)~="function" then return jsonResponse(400,{ok=false,error="budget_unavailable"}) end
+        local ok,result,dataOrErr=pcall(ctx.distributeBuyBudget,data.budget)
+        local success=ok and result~=false
+        fingerprints.buy=""
+        return jsonResponse(success and 200 or 400,{ok=success,data=success and dataOrErr or nil,error=success and nil or (ok and dataOrErr or tostring(result))})
     elseif action=="buy.continue.toggle" then
         if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end

@@ -1039,6 +1039,61 @@ function arzUiExtensionsCreateContext(extension)
 		get_prices()
 		return true
 	end
+	ctx.previewBuyBudget = function(totalBudget)
+		totalBudget = tonumber(totalBudget)
+		if not totalBudget or totalBudget < 0 then return false, "invalid_budget" end
+		local eligible = {}
+		for _, itemData in pairs(buyList or {}) do
+			if type(itemData) == "table" and itemData.enabled and not itemData.maximum then
+				eligible[#eligible + 1] = itemData
+			end
+		end
+		if #eligible == 0 then return false, "no_eligible_items" end
+		local budgetPerItem = math.floor(totalBudget) / #eligible
+		local spent = 0
+		for _, itemData in ipairs(eligible) do
+			local itemPrice = tonumber(viceCityMode and itemData.price or itemData.price_vc) or 0
+			if itemPrice > 0 then
+				local itemCount = math.floor(budgetPerItem / itemPrice)
+				spent = spent + itemCount * itemPrice
+			end
+		end
+		local moneyNow = tonumber(ini.cfg.realMoneyNow) or 0
+		return true, { eligible = #eligible, spent = spent, remaining = moneyNow - spent, budget = math.floor(totalBudget) }
+	end
+	ctx.distributeBuyBudget = function(totalBudget)
+		totalBudget = tonumber(totalBudget)
+		if not totalBudget or totalBudget < 0 then return false, "invalid_budget" end
+		if loadedBuyConfig == "" then return false, "config_not_loaded" end
+		local eligible = {}
+		for _, itemData in pairs(buyList or {}) do
+			if type(itemData) == "table" and itemData.enabled and not itemData.maximum then
+				eligible[#eligible + 1] = itemData
+			end
+		end
+		if #eligible == 0 then return false, "no_eligible_items" end
+		local budgetPerItem = math.floor(totalBudget) / #eligible
+		local backups = {}
+		local spent = 0
+		for _, itemData in ipairs(eligible) do
+			backups[#backups + 1] = { item = itemData, count = itemData.count }
+			local itemPrice = tonumber(viceCityMode and itemData.price or itemData.price_vc) or 0
+			if itemPrice > 0 then
+				local itemCount = math.floor(budgetPerItem / itemPrice)
+				itemData.count = math.floor(itemCount)
+				spent = spent + itemData.count * itemPrice
+			end
+		end
+		local fileName = loadedBuyConfig:match("%.json$") and loadedBuyConfig or loadedBuyConfig .. ".json"
+		local saveOk = type(createConfig) == "function" and createConfig("buy-cfg/" .. fileName, buyList, "buy-cfg", fileName) ~= false
+		if not saveOk then
+			for _, backup in ipairs(backups) do backup.item.count = backup.count end
+			return false, "save_failed"
+		end
+		if type(tradeFilterInvalidate) == "function" then pcall(tradeFilterInvalidate, "buy") end
+		local moneyNow = tonumber(ini.cfg.realMoneyNow) or 0
+		return true, { eligible = #eligible, spent = spent, remaining = moneyNow - spent, budget = math.floor(totalBudget) }
+	end
 	ctx.getTradeAddDefaults = function(side)
 		side = side == "sell" and "sell" or "buy"
 		local defaults = side == "sell" and sellDefaults or buyDefaults

@@ -12,7 +12,8 @@
     pickerSearch: '',
     requestBusy: false,
     toastTimer: 0,
-    clearArmedUntil: 0
+    clearArmedUntil: 0,
+    budgetPreviewTimer: 0
   };
 
   const el = id => document.getElementById(id);
@@ -21,13 +22,15 @@
     pageTitle: el('pageTitle'), pageSubtitle: el('pageSubtitle'), configSelect: el('configSelect'),
     automationBadge: el('automationBadge'), saveBadge: el('saveBadge'), searchInput: el('searchInput'),
     addButton: el('addButton'), undoButton: el('undoButton'), clearButton: el('clearButton'), scanButton: el('scanButton'),
-    continueButton: el('continueButton'), currencyButton: el('currencyButton'), refreshButton: el('refreshButton'),
+    continueButton: el('continueButton'), budgetButton: el('budgetButton'), currencyButton: el('currencyButton'), refreshButton: el('refreshButton'),
     pricesButton: el('pricesButton'), averageButton: el('averageButton'), startButton: el('startButton'),
     tableHead: el('tableHead'), tableRows: el('tableRows'), emptyState: el('emptyState'),
     detailEmpty: el('detailEmpty'), detailContent: el('detailContent'), detailIcon: el('detailIcon'),
     detailName: el('detailName'), detailStatus: el('detailStatus'), detailFields: el('detailFields'),
     pickerBackdrop: el('pickerBackdrop'), pickerTitle: el('pickerTitle'), pickerSearch: el('pickerSearch'),
-    pickerRows: el('pickerRows'), toast: el('toast')
+    pickerRows: el('pickerRows'), budgetBackdrop: el('budgetBackdrop'), budgetInput: el('budgetInput'),
+    budgetEligible: el('budgetEligible'), budgetSpent: el('budgetSpent'), budgetRemaining: el('budgetRemaining'),
+    budgetCancel: el('budgetCancel'), budgetApply: el('budgetApply'), toast: el('toast')
   };
 
   const text = value => String(value == null ? '' : value);
@@ -187,6 +190,8 @@
     refs.continueButton.classList.toggle('active-action', buyContinue);
     refs.continueButton.textContent = buyContinue ? 'Продолжение: Вкл' : 'Продолжить';
     refs.continueButton.disabled = busy;
+    refs.budgetButton.classList.toggle('hidden', !buy);
+    refs.budgetButton.disabled = busy || !(state.data?.data?.items || []).length;
     refs.refreshButton.classList.toggle('hidden', !buy);
     refs.refreshButton.disabled = busy;
     refs.pricesButton.disabled = busy;
@@ -395,6 +400,46 @@
     refs.pickerBackdrop.classList.add('hidden');
   }
 
+  function closeBudget() {
+    refs.budgetBackdrop.classList.add('hidden');
+    clearTimeout(state.budgetPreviewTimer);
+  }
+
+  async function refreshBudgetPreview() {
+    const budget = Number(refs.budgetInput.value);
+    if (!Number.isFinite(budget) || budget < 0) {
+      refs.budgetEligible.textContent = '0';
+      refs.budgetSpent.textContent = '0';
+      refs.budgetRemaining.textContent = '0';
+      refs.budgetApply.disabled = true;
+      return;
+    }
+    try {
+      const result = await action('buy.budget.preview', {side: 'buy', budget});
+      const data = result.data || {};
+      refs.budgetEligible.textContent = money(data.eligible || 0);
+      refs.budgetSpent.textContent = `${money(data.spent || 0)} ${state.data?.common?.currencyMode === 'VC' ? 'VC$' : 'SA$'}`;
+      refs.budgetRemaining.textContent = money(data.remaining || 0);
+      refs.budgetApply.disabled = false;
+    } catch (err) {
+      refs.budgetEligible.textContent = '0';
+      refs.budgetSpent.textContent = '0';
+      refs.budgetRemaining.textContent = '0';
+      refs.budgetApply.disabled = true;
+    }
+  }
+
+  function openBudget() {
+    if (tradeBusy() || state.page !== 'buy') return;
+    refs.budgetInput.value = '';
+    refs.budgetEligible.textContent = '0';
+    refs.budgetSpent.textContent = '0';
+    refs.budgetRemaining.textContent = '0';
+    refs.budgetApply.disabled = true;
+    refs.budgetBackdrop.classList.remove('hidden');
+    setTimeout(() => refs.budgetInput.focus(), 30);
+  }
+
   function renderPicker() {
     const source = state.data?.data?.source || [];
     const existing = new Set((state.data?.data?.items || []).map(item => normalizeName(item.name)));
@@ -456,6 +501,7 @@
       return;
     }
     if (name === 'picker-close') closePicker();
+    if (name === 'budget-close') closeBudget();
   });
 
   refs.searchInput.addEventListener('input', () => {
@@ -502,6 +548,30 @@
       showToast('Список очищен', 'success');
       await refresh(true);
     } catch (err) { showToast(`Очистка: ${err.message}`, 'error'); }
+  });
+  refs.budgetButton.addEventListener('click', openBudget);
+  refs.budgetCancel.addEventListener('click', closeBudget);
+  refs.budgetBackdrop.addEventListener('click', event => { if (event.target === refs.budgetBackdrop) closeBudget(); });
+  refs.budgetInput.addEventListener('input', () => {
+    clearTimeout(state.budgetPreviewTimer);
+    state.budgetPreviewTimer = setTimeout(refreshBudgetPreview, 180);
+  });
+  refs.budgetApply.addEventListener('click', async () => {
+    if (tradeBusy()) return;
+    const budget = Number(refs.budgetInput.value);
+    if (!Number.isFinite(budget) || budget < 0) return;
+    refs.budgetApply.disabled = true;
+    try {
+      const result = await action('buy.budget.apply', {side: 'buy', budget});
+      const data = result.data || {};
+      closeBudget();
+      showToast(`Распределение завершено. Остаток: ${money(data.remaining || 0)}`, 'success');
+      await refresh(true);
+    } catch (err) {
+      const labels = {invalid_budget:'Введите корректный бюджет',no_eligible_items:'Нет активных товаров для распределения',config_not_loaded:'Сначала загрузите конфиг'};
+      showToast(labels[err.message] || `Бюджет: ${err.message}`, 'error');
+      refs.budgetApply.disabled = false;
+    }
   });
   refs.continueButton.addEventListener('click', async () => {
     if (tradeBusy() || state.page !== 'buy') return;
@@ -572,7 +642,9 @@
       return;
     }
     if (event.key === 'Escape') {
-      if (!refs.pickerBackdrop.classList.contains('hidden')) {
+      if (!refs.budgetBackdrop.classList.contains('hidden')) {
+        closeBudget();
+      } else if (!refs.pickerBackdrop.classList.contains('hidden')) {
         closePicker();
       } else if (!event.repeat) {
         action('ui.close', {side: state.page}).catch(() => {});
