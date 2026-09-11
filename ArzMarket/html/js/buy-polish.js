@@ -53,7 +53,10 @@
       return sum + numberFromCell(cells[3]?.textContent || '0');
     }, 0);
 
-    footer.innerHTML = '';
+    const signature = `${rows.length}|${enabled}|${disabled}|${totalContinue}`;
+    if (footer.dataset.signature === signature) return;
+    footer.dataset.signature = signature;
+    footer.replaceChildren();
 
     const left = document.createElement('div');
     left.className = 'buy-table-footer-left';
@@ -63,7 +66,11 @@
     right.className = 'buy-table-footer-right';
 
     const enabledNode = document.createElement('span');
-    enabledNode.innerHTML = `Включено: <span class="value-green">${enabled}</span>`;
+    enabledNode.append('Включено: ');
+    const enabledValue = document.createElement('span');
+    enabledValue.className = 'value-green';
+    enabledValue.textContent = String(enabled);
+    enabledNode.append(enabledValue);
 
     const divider1 = document.createElement('span');
     divider1.className = 'divider';
@@ -95,7 +102,8 @@
         label.className = 'row-status-label';
         status.appendChild(label);
       }
-      label.textContent = row.classList.contains('disabled-row') ? 'Выключен' : 'Включен';
+      const value = row.classList.contains('disabled-row') ? 'Выключен' : 'Включен';
+      if (label.textContent !== value) label.textContent = value;
     }
   }
 
@@ -165,7 +173,7 @@
     if (!isBuy()) return;
     if (detailFields.querySelector('.buy-main-fields')) {
       const nameInput = detailFields.querySelector('.buy-readonly-name');
-      if (nameInput) nameInput.value = detailName.textContent || '';
+      if (nameInput && nameInput.value !== detailName.textContent) nameInput.value = detailName.textContent || '';
       applyDetailTab();
       return;
     }
@@ -244,11 +252,28 @@
     if (startButton.textContent.trim() === 'Старт скупки') startButton.textContent = 'Старт';
   }
 
+  function deactivateBuyPolish() {
+    const footer = document.getElementById('buyTableFooter');
+    if (footer) footer.classList.add('hidden');
+
+    const kind = detailName.parentElement?.querySelector('.detail-kind');
+    if (kind) kind.classList.add('hidden');
+
+    const extra = detailTabs.querySelector('[data-buy-tab="extra"]');
+    if (extra) extra.classList.add('hidden');
+
+    const main = detailTabs.querySelector('[data-buy-tab="main"]');
+    if (main) main.classList.add('active');
+  }
+
   function sync() {
     syncQueued = false;
     ensureTableFooter();
 
-    if (!isBuy()) return;
+    if (!isBuy()) {
+      deactivateBuyPolish();
+      return;
+    }
 
     updateRowStatusLabels();
     updateTableFooter();
@@ -273,13 +298,26 @@
     applyDetailTab();
   });
 
-  const observer = new MutationObserver(scheduleSync);
-  observer.observe(app, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    attributeFilter: ['class', 'data-page']
-  });
+  const tableObserver = new MutationObserver(scheduleSync);
+  tableObserver.observe(tableRows, {subtree: true, childList: true, attributes: true, attributeFilter: ['class']});
+
+  const detailFieldsObserver = new MutationObserver(scheduleSync);
+  detailFieldsObserver.observe(detailFields, {subtree: true, childList: true});
+
+  const detailContentObserver = new MutationObserver(scheduleSync);
+  detailContentObserver.observe(detailContent, {attributes: true, attributeFilter: ['class']});
+
+  const detailHeaderObserver = new MutationObserver(scheduleSync);
+  detailHeaderObserver.observe(detailName, {childList: true, characterData: true, subtree: true});
+  detailHeaderObserver.observe(detailStatus, {childList: true, characterData: true, subtree: true});
+
+  if (startButton) {
+    const startObserver = new MutationObserver(scheduleSync);
+    startObserver.observe(startButton, {childList: true, characterData: true, subtree: true});
+  }
+
+  const pageObserver = new MutationObserver(scheduleSync);
+  pageObserver.observe(app, {attributes: true, attributeFilter: ['data-page']});
 
   scheduleSync();
 })();
