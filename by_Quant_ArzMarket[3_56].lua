@@ -1012,6 +1012,7 @@ function arzUiExtensionsCreateContext(extension)
 	ctx.loadTradeConfig = function(side, fileName)
 		side = side == "sell" and "sell" or "buy"
 		fileName = tostring(fileName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if fileName ~= "" and not fileName:match("%.json$") then fileName = fileName .. ".json" end
 		if fileName == "" or fileName:find("[/\\]") or fileName:find("..", 1, true) or not fileName:match("^[^%c]+%.json$") then
 			return false, "invalid_config_name"
 		end
