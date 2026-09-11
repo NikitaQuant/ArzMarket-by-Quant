@@ -1,0 +1,39 @@
+name: ArzMarket HTML state safety patch
+
+on:
+  push:
+    branches:
+      - tmp-html-state-safety
+    paths:
+      - .github/workflows/arz_html_state_safety.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-html-state-safety
+          fetch-depth: 0
+      - name: Apply state safety patch
+        run: python3 .github/patch_html_state_safety.py
+      - name: Verify patch
+        run: |
+          grep -q 'module_version = 7' modules/arz_html_ui.lua
+          grep -q 'local function sourceFingerprint(source)' modules/arz_html_ui.lua
+          grep -q 'local updates={}' modules/arz_html_ui.lua
+          grep -q 'table.insert(list,index,removed)' modules/arz_html_ui.lua
+      - name: Commit patch
+        run: |
+          if git diff --quiet -- modules/arz_html_ui.lua; then
+            echo 'No state safety changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- modules/arz_html_ui.lua
+          git commit -m 'Make HTML state updates transactional and reactive'
+          git push origin HEAD:tmp-html-state-safety
