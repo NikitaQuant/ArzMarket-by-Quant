@@ -46,19 +46,11 @@
       img.src = placeholder();
       return;
     }
-    img.dataset.stage = '0';
     img.onerror = () => {
-      const stage = Number(img.dataset.stage || 0);
-      if (stage === 0) {
-        img.dataset.stage = '1';
-        img.src = `/api/icon/${size}/${encodeURIComponent(id)}.webp?token=${encodeURIComponent(token)}`;
-      } else {
-        img.dataset.stage = '2';
-        img.onerror = null;
-        img.src = placeholder();
-      }
+      img.onerror = null;
+      img.src = placeholder();
     };
-    img.src = `file:///arizona/items.zip/${encodeURIComponent(id)}.webp`;
+    img.src = `/api/icon/${size}/${encodeURIComponent(id)}.webp?token=${encodeURIComponent(token)}`;
   }
 
   function showToast(message, type = '') {
@@ -95,6 +87,7 @@
     : '';
 
   const tradeActive = () => state.data?.common?.automation === true;
+  const tradeBusy = () => state.data?.common?.tradeBusy === true;
 
   function syncSelected() {
     const items = state.data?.data?.items || [];
@@ -134,6 +127,7 @@
   function renderHeader() {
     const buy = state.page === 'buy';
     const active = tradeActive();
+    const busy = tradeBusy();
     refs.app.dataset.page = state.page;
     refs.pageTitle.textContent = buy ? 'Скупка' : 'Продажа';
     refs.pageSubtitle.textContent = buy ? 'Автоматический выкуп товаров с Arizona RP' : 'Автоматическая продажа товаров с Arizona RP';
@@ -147,17 +141,18 @@
 
     const score = Number(state.data?.common?.automationScore || 0);
     const total = Number(state.data?.common?.automationTotal || 0);
-    refs.automationBadge.textContent = active && total > 0 ? `Активен ${Math.min(score, total)}/${total}` : (active ? 'Активен' : 'Готов');
+    refs.automationBadge.textContent = active && total > 0 ? `Активен ${Math.min(score, total)}/${total}` : (active ? 'Активен' : (busy ? 'Занято' : 'Готов'));
     refs.automationBadge.className = active ? 'badge badge-success' : 'badge badge-muted';
     refs.startButton.textContent = active ? 'Отмена' : (buy ? 'Старт скупки' : 'Начать продажу');
+    refs.startButton.disabled = busy && !active;
     refs.averageButton.classList.toggle('hidden', !buy);
-    refs.averageButton.disabled = active;
-    refs.addButton.disabled = active;
+    refs.averageButton.disabled = busy;
+    refs.addButton.disabled = busy;
   }
 
   function renderTable() {
     const buy = state.page === 'buy';
-    const locked = tradeActive();
+    const locked = tradeBusy();
     refs.tableHead.className = `table-head ${state.page}`;
     refs.tableHead.innerHTML = '';
     (buy ? ['Товар','Цена','Кол-во','Остаток','Статус',''] : ['Товар','Цена','Кол-во','Доступно','Статус',''])
@@ -237,7 +232,7 @@
     input.min = '0';
     input.step = '1';
     input.value = String(value ?? 0);
-    input.disabled = readOnly || tradeActive();
+    input.disabled = readOnly || tradeBusy();
     if (!input.disabled) {
       let timer = 0;
       const commit = async () => {
@@ -263,8 +258,8 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `toggle ${enabled ? 'on' : ''}`;
-    button.disabled = tradeActive();
-    button.addEventListener('click', () => { if (!tradeActive()) patchItem(state.selectedItem, {[key]: !enabled}); });
+    button.disabled = tradeBusy();
+    button.addEventListener('click', () => { if (!tradeBusy()) patchItem(state.selectedItem, {[key]: !enabled}); });
     wrap.append(button);
     return wrap;
   }
@@ -302,7 +297,7 @@
   }
 
   async function patchItem(item, patch) {
-    if (!item || tradeActive()) return;
+    if (!item || tradeBusy()) return;
     try {
       refs.saveBadge.textContent = 'Сохранение...';
       await action('trade.item.update', {side: state.page, identity: item.identity, patch});
@@ -317,7 +312,7 @@
   }
 
   async function removeItem(item) {
-    if (!item || tradeActive()) return;
+    if (!item || tradeBusy()) return;
     try {
       await action('trade.item.remove', {side: state.page, identity: item.identity});
       state.selectedItem = null;
@@ -331,7 +326,7 @@
   }
 
   function openPicker() {
-    if (tradeActive()) return;
+    if (tradeBusy()) return;
     refs.pickerTitle.textContent = state.page === 'buy' ? 'Добавить в скупку' : 'Добавить в продажу';
     state.pickerSearch = '';
     refs.pickerSearch.value = '';
@@ -366,7 +361,7 @@
       left.append(box, div(item.name));
       row.append(left, div(state.page === 'sell' && item.all_count ? `${money(item.all_count)} шт.` : '+', 'picker-count'));
       row.addEventListener('click', async () => {
-        if (tradeActive()) return;
+        if (tradeBusy()) return;
         try {
           await action('trade.item.add', {side: state.page, source_index: item.index});
           showToast('Товар добавлен', 'success');
@@ -417,7 +412,7 @@
   });
   refs.pickerBackdrop.addEventListener('click', event => { if (event.target === refs.pickerBackdrop) closePicker(); });
   refs.averageButton.addEventListener('click', async () => {
-    if (tradeActive()) return;
+    if (tradeBusy()) return;
     try {
       await action('buy.average.apply', {side: 'buy'});
       showToast('Средние цены применены', 'success');
@@ -451,5 +446,5 @@
   window.addEventListener('unhandledrejection', event => console.error('[ArzMarket HTML]', event.reason));
 
   refresh(true);
-  window.setInterval(() => refresh(false), 450);
+  window.setInterval(() => refresh(false), 650);
 })();

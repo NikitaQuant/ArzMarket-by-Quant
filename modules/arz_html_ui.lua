@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 4,
+    module_version = 5,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -157,11 +157,19 @@ local function sources(side)
     return out
 end
 
-local function automationState(side)
-    if not ctx or type(ctx.getTradeAutomationState)~="function" then return false,0,0 end
+local function automationSnapshot()
+    if not ctx or type(ctx.getTradeAutomationState)~="function" then return {sell=false,buy=false,score=0,score_from=0} end
     local ok,state=pcall(ctx.getTradeAutomationState)
-    if not ok or type(state)~="table" then return false,0,0 end
+    if not ok or type(state)~="table" then return {sell=false,buy=false,score=0,score_from=0} end
+    return state
+end
+local function automationState(side)
+    local state=automationSnapshot()
     return state[side]==true,saneNumber(state.score,0) or 0,saneNumber(state.score_from,0) or 0
+end
+local function tradeBusy()
+    local state=automationSnapshot()
+    return state.sell==true or state.buy==true
 end
 local function setMenuVisible(value)
     if not ctx or type(ctx.setCoreMenuVisible)~="function" then return false end
@@ -189,13 +197,18 @@ local function stateFor(page)
         local ok,a,p=pcall(sampGetCurrentServerAddress)
         if ok then address,serverPort=tostring(a or ""),tonumber(p) or 0 end
     end
-    local active,score,total=automationState(page)
+    local snapshot=automationSnapshot()
+    local active=snapshot[page]==true
+    local score=saneNumber(snapshot.score,0) or 0
+    local total=saneNumber(snapshot.score_from,0) or 0
+    local busy=snapshot.sell==true or snapshot.buy==true
     local cfg=configName(page)
     local iconStatus=itemIcons and itemIcons.getStatus and itemIcons.getStatus() or {}
     return {
         revision=revision[page], page=page,
         common={uiMode="html",activeConfig=cfg~="" and cfg:gsub("%.json$","") or "",
-            automation=active,automationScore=score,automationTotal=total,
+            automation=active,tradeBusy=busy,automationBuy=snapshot.buy==true,automationSell=snapshot.sell==true,
+            automationScore=score,automationTotal=total,
             serverAddress=address,serverPort=serverPort,icons=iconStatus},
         data={items=items,source=sources(page)}
     }
@@ -321,7 +334,7 @@ local function response(status,body,contentType,cacheControl)
         "Cache-Control: "..(cacheControl or "no-store"),
         "X-Content-Type-Options: nosniff",
         "Referrer-Policy: no-referrer",
-        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; connect-src 'self'; object-src 'none'; frame-ancestors *"
+        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'"
     }
     return table.concat(headers,"\r\n").."\r\n\r\n"..body
 end
@@ -384,23 +397,19 @@ local function doAction(req)
         currentPage=side
         return jsonResponse(200,{ok=true,page=side})
     elseif action=="trade.item.update" then
-        local active=select(1,automationState(side))
-        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         local ok,err=updateItem(side,data)
         return jsonResponse(ok and 200 or (err=="stale_state" and 409 or 400),{ok=ok,error=err})
     elseif action=="trade.item.remove" then
-        local active=select(1,automationState(side))
-        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         local ok,err=removeItem(side,data)
         return jsonResponse(ok and 200 or (err=="stale_state" and 409 or 400),{ok=ok,error=err})
     elseif action=="trade.item.add" then
-        local active=select(1,automationState(side))
-        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         local ok,err=addItem(side,data)
         return jsonResponse(ok and 200 or 400,{ok=ok,error=err})
     elseif action=="buy.average.apply" then
-        local active=select(1,automationState("buy"))
-        if active then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if type(applyAveragePricesToBuyList)~="function" then return jsonResponse(400,{ok=false,error="average_unavailable"}) end
         local ok,result=pcall(applyAveragePricesToBuyList)
         fingerprints.buy=""
@@ -413,6 +422,7 @@ local function doAction(req)
             local success=ok and result~=false
             return jsonResponse(success and 200 or 400,{ok=success,cancelled=success,error=success and nil or tostring(result)})
         end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="other_trade_active"}) end
         if not ctx or type(ctx.startTrade)~="function" then return jsonResponse(400,{ok=false,error="start_unavailable"}) end
         local ok,result=pcall(ctx.startTrade,side)
         local success=ok and result~=false
