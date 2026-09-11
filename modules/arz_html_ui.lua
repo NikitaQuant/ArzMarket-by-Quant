@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 9,
+    module_version = 10,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -220,9 +220,17 @@ local function stateFor(page)
     local cfg=configName(page)
     local configs=configList(page)
     local source=sources(page)
+    local uiState={currency="SA",buy_scan=false,sell_scan=false}
+    if ctx and type(ctx.getTradeUiState)=="function" then
+        local ok,value=pcall(ctx.getTradeUiState)
+        if ok and type(value)=="table" then uiState=value end
+    end
+    local currency=uiState.currency=="VC" and "VC" or "SA"
+    local buyScan=uiState.buy_scan==true
+    local sellScan=uiState.sell_scan==true
     local runtimeKey=table.concat({
         tostring(active),tostring(busy),tostring(snapshot.buy==true),tostring(snapshot.sell==true),
-        tostring(score),tostring(total),tostring(cfg),table.concat(configs,"\29"),sourceFingerprint(source)
+        tostring(score),tostring(total),tostring(cfg),table.concat(configs,"\29"),currency,tostring(buyScan),tostring(sellScan),sourceFingerprint(source)
     },"\30")
     touchRevision(page,list,runtimeKey)
     local items={}
@@ -236,6 +244,7 @@ local function stateFor(page)
     return {
         revision=revision[page], page=page,
         common={uiMode="html",activeConfig=cfg~="" and cfg:gsub("%.json$","") or "",configs=configs,
+            currencyMode=currency,buyScan=buyScan,sellScan=sellScan,
             automation=active,tradeBusy=busy,automationBuy=snapshot.buy==true,automationSell=snapshot.sell==true,
             automationScore=score,automationTotal=total,
             serverAddress=address,serverPort=serverPort,icons=iconStatus},
@@ -453,6 +462,30 @@ local function doAction(req)
     elseif action=="ui.navigate" then
         currentPage=side
         return jsonResponse(200,{ok=true,page=side})
+    elseif action=="trade.currency.toggle" then
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.toggleTradeCurrency)~="function" then return jsonResponse(400,{ok=false,error="currency_unavailable"}) end
+        local ok,result=pcall(ctx.toggleTradeCurrency)
+        fingerprints.buy=""; fingerprints.sell=""
+        return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,currency=ok and result or nil,error=ok and result~=false and nil or tostring(result)})
+    elseif action=="trade.scan.toggle" then
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.toggleTradeScan)~="function" then return jsonResponse(400,{ok=false,error="scan_unavailable"}) end
+        local ok,result=pcall(ctx.toggleTradeScan,side)
+        sourceCache[side].at=0; fingerprints[side]=""
+        return jsonResponse(ok and 200 or 400,{ok=ok,active=ok and result==true or false,error=ok and nil or tostring(result)})
+    elseif action=="buy.source.refresh" then
+        if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.refreshBuySource)~="function" then return jsonResponse(400,{ok=false,error="refresh_unavailable"}) end
+        local ok,result=pcall(ctx.refreshBuySource)
+        sourceCache.buy.at=0; fingerprints.buy=""
+        return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,error=ok and result~=false and nil or tostring(result)})
+    elseif action=="prices.download" then
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.downloadAveragePrices)~="function" then return jsonResponse(400,{ok=false,error="prices_unavailable"}) end
+        local ok,result=pcall(ctx.downloadAveragePrices)
+        return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,error=ok and result~=false and nil or tostring(result)})
     elseif action=="trade.config.load" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.loadTradeConfig)~="function" then return jsonResponse(400,{ok=false,error="config_loader_unavailable"}) end

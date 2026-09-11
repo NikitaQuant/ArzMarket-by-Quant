@@ -991,6 +991,54 @@ function arzUiExtensionsCreateContext(extension)
 		off_sell_buy()
 		return true
 	end
+	ctx.getTradeUiState = function()
+		return {
+			currency = viceCityMode and "SA" or "VC",
+			buy_scan = buyScanMode == true,
+			sell_scan = sellScanMode == true
+		}
+	end
+	ctx.toggleTradeCurrency = function()
+		viceCityMode = not viceCityMode
+		ini.cfg.vice_city_mode = viceCityMode
+		if type(save_all) == "function" then save_all() end
+		if type(vc_converter) == "function" then vc_converter() end
+		return viceCityMode and "SA" or "VC"
+	end
+	ctx.toggleTradeScan = function(side)
+		side = side == "sell" and "sell" or "buy"
+		if side == "buy" then
+			buyScanMode = not buyScanMode
+			if buyScanMode then
+				if type(setGameKeyState) == "function" then pcall(setGameKeyState, 21, 255) end
+				if type(sampForceOnfootSync) == "function" then pcall(sampForceOnfootSync) end
+				if type(AFKMessage) == "function" then AFKMessage(u8:decode("Откройте меню лавки [ALT], если скрипт автоматически не открыл и скрипт автоматически начнет сканирование")) end
+			else
+				if type(AFKMessage) == "function" then AFKMessage(u8:decode("Сканирование было отменено.")) end
+			end
+			return buyScanMode
+		end
+		sellScanMode = not sellScanMode
+		if sellScanMode then
+			sellScanResults = {}
+			if type(SendToServer) == "function" then SendToServer("/stats") end
+			if type(AFKMessage) == "function" then AFKMessage(u8:decode("Проходит сканирование инвентаря. Подождите...")) end
+		else
+			if type(AFKMessage) == "function" then AFKMessage(u8:decode("Сканирование было отменено.")) end
+		end
+		return sellScanMode
+	end
+	ctx.refreshBuySource = function()
+		if type(get_buyList) ~= "function" then return false end
+		if type(sendNotify) == "function" then sendNotify(u8:decode("Обновление списков скупки...")) end
+		get_buyList()
+		return true
+	end
+	ctx.downloadAveragePrices = function()
+		if type(get_prices) ~= "function" then return false end
+		get_prices()
+		return true
+	end
 	ctx.listTradeConfigs = function(side)
 		side = side == "sell" and "sell" or "buy"
 		local directory = "moonloader/ArzMarket/" .. side .. "-cfg"

@@ -108,6 +108,8 @@ kbd { padding:2px 6px; border:1px solid #253543; border-radius:5px; background:#
 .btn { height:38px; padding:0 15px; border-radius:8px; border:1px solid var(--border); cursor:pointer; font-size:11px; font-weight:600; white-space:nowrap; }
 .btn-secondary { background:#0e1821; color:#a9b7c0; }
 .btn-secondary:hover { background:#14222d; border-color:#385064; }
+.btn-compact { min-width:58px; padding:0 10px; }
+.btn-secondary.active-action { color:#92f5c9; border-color:rgba(41,213,143,.34); background:var(--green-dim); box-shadow:0 0 14px rgba(41,213,143,.07); }
 .btn-primary { min-width:126px; margin-left:auto; border-color:rgba(41,213,143,.48); background:linear-gradient(180deg,#28cf8b,#20b979); color:#04110c; box-shadow:0 0 18px rgba(41,213,143,.12); }
 .btn-primary:hover { filter:brightness(1.06); }
 .btn-danger { border-color:rgba(239,80,104,.28); color:#ff7c91; background:rgba(239,80,104,.06); }

@@ -19,7 +19,8 @@
     app: el('app'), runtimeText: el('runtimeText'), pageHeaderIcon: el('pageHeaderIcon'),
     pageTitle: el('pageTitle'), pageSubtitle: el('pageSubtitle'), configSelect: el('configSelect'),
     automationBadge: el('automationBadge'), saveBadge: el('saveBadge'), searchInput: el('searchInput'),
-    addButton: el('addButton'), averageButton: el('averageButton'), startButton: el('startButton'),
+    addButton: el('addButton'), scanButton: el('scanButton'), currencyButton: el('currencyButton'),
+    refreshButton: el('refreshButton'), pricesButton: el('pricesButton'), averageButton: el('averageButton'), startButton: el('startButton'),
     tableHead: el('tableHead'), tableRows: el('tableRows'), emptyState: el('emptyState'),
     detailEmpty: el('detailEmpty'), detailContent: el('detailContent'), detailIcon: el('detailIcon'),
     detailName: el('detailName'), detailStatus: el('detailStatus'), detailFields: el('detailFields'),
@@ -163,8 +164,18 @@
     const total = Number(state.data?.common?.automationTotal || 0);
     refs.automationBadge.textContent = active && total > 0 ? `Активен ${Math.min(score, total)}/${total}` : (active ? 'Активен' : (busy ? 'Занято' : 'Готов'));
     refs.automationBadge.className = active ? 'badge badge-success' : 'badge badge-muted';
+    const currency = state.data?.common?.currencyMode === 'VC' ? 'VC' : 'SA';
+    const scanActive = buy ? state.data?.common?.buyScan === true : state.data?.common?.sellScan === true;
     refs.startButton.textContent = active ? 'Отмена' : (buy ? 'Старт скупки' : 'Начать продажу');
     refs.startButton.disabled = busy && !active;
+    refs.currencyButton.textContent = `${currency}$`;
+    refs.currencyButton.disabled = busy;
+    refs.scanButton.textContent = scanActive ? 'Стоп скан' : 'Скан';
+    refs.scanButton.classList.toggle('active-action', scanActive);
+    refs.scanButton.disabled = busy;
+    refs.refreshButton.classList.toggle('hidden', !buy);
+    refs.refreshButton.disabled = busy;
+    refs.pricesButton.disabled = busy;
     refs.averageButton.classList.toggle('hidden', !buy);
     refs.averageButton.disabled = busy;
     refs.addButton.disabled = busy;
@@ -175,7 +186,8 @@
     const locked = tradeBusy();
     refs.tableHead.className = `table-head ${state.page}`;
     refs.tableHead.innerHTML = '';
-    (buy ? ['Товар','Цена','Кол-во','Остаток','Статус',''] : ['Товар','Цена','Кол-во','Доступно','Статус',''])
+    const currency = state.data?.common?.currencyMode === 'VC' ? 'VC' : 'SA';
+    (buy ? ['Товар',`Цена ${currency}$`,'Кол-во','Остаток','Статус',''] : ['Товар',`Цена ${currency}$`,'Кол-во','Доступно','Статус',''])
       .forEach(value => refs.tableHead.append(div(value)));
 
     const all = state.data?.data?.items || [];
@@ -210,7 +222,8 @@
       wrap.append(div(item.name, 'item-name'), div(itemId ? `ID ${itemId}` : (buy ? 'Скупка' : 'Инвентарь'), 'item-meta'));
       itemCell.append(box, wrap);
       row.append(itemCell);
-      row.append(div(`${money(item.price)} SA$`, 'money'));
+      const currentPrice = currency === 'VC' ? item.price_vc : item.price;
+      row.append(div(`${money(currentPrice)} ${currency}$`, 'money'));
       row.append(div(item.maximum && !buy ? 'Макс.' : money(item.count), 'count'));
       row.append(div(buy ? money(item.continue) : money(item.all_count), 'count'));
 
@@ -441,6 +454,35 @@
     }
   });
   refs.addButton.addEventListener('click', openPicker);
+  refs.scanButton.addEventListener('click', async () => {
+    if (tradeBusy()) return;
+    try {
+      await action('trade.scan.toggle', {side: state.page});
+      await refresh(true);
+    } catch (err) { showToast(`Сканирование: ${err.message}`, 'error'); }
+  });
+  refs.currencyButton.addEventListener('click', async () => {
+    if (tradeBusy()) return;
+    try {
+      await action('trade.currency.toggle', {side: state.page});
+      await refresh(true);
+    } catch (err) { showToast(`Валюта: ${err.message}`, 'error'); }
+  });
+  refs.refreshButton.addEventListener('click', async () => {
+    if (tradeBusy() || state.page !== 'buy') return;
+    try {
+      await action('buy.source.refresh', {side: 'buy'});
+      showToast('Обновление списка запущено', 'success');
+      await refresh(true);
+    } catch (err) { showToast(`Список: ${err.message}`, 'error'); }
+  });
+  refs.pricesButton.addEventListener('click', async () => {
+    if (tradeBusy()) return;
+    try {
+      await action('prices.download', {side: state.page});
+      showToast('Загрузка средних цен запущена', 'success');
+    } catch (err) { showToast(`Цены: ${err.message}`, 'error'); }
+  });
   refs.pickerSearch.addEventListener('input', () => {
     state.pickerSearch = refs.pickerSearch.value;
     renderPicker();
