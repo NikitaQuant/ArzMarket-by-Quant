@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 5,
+    module_version = 6,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -111,8 +111,8 @@ local function itemDto(item,index,side)
         slot_count=saneNumber(item.slot_count,0), slot_id=item.slot_id, side=side
     }
 end
-local function fingerprint(side,list)
-    local out={side,tostring(#list)}
+local function fingerprint(side,list,runtimeKey)
+    local out={side,tostring(#list),tostring(runtimeKey or "")}
     for i=1,#list do
         local x=list[i]
         out[#out+1]=table.concat({
@@ -123,8 +123,8 @@ local function fingerprint(side,list)
     end
     return table.concat(out,"\31")
 end
-local function touchRevision(side,list)
-    local value=fingerprint(side,list)
+local function touchRevision(side,list,runtimeKey)
+    local value=fingerprint(side,list,runtimeKey)
     if value~=fingerprints[side] then
         fingerprints[side]=value
         revision[side]=revision[side]+1
@@ -189,7 +189,17 @@ local function stateFor(page)
     currentPage=page
     local buy,sell=lists()
     local list=page=="buy" and buy or sell
-    touchRevision(page,list)
+    local snapshot=automationSnapshot()
+    local active=snapshot[page]==true
+    local score=saneNumber(snapshot.score,0) or 0
+    local total=saneNumber(snapshot.score_from,0) or 0
+    local busy=snapshot.sell==true or snapshot.buy==true
+    local cfg=configName(page)
+    local runtimeKey=table.concat({
+        tostring(active),tostring(busy),tostring(snapshot.buy==true),tostring(snapshot.sell==true),
+        tostring(score),tostring(total),tostring(cfg)
+    },"\30")
+    touchRevision(page,list,runtimeKey)
     local items={}
     for i=1,#list do items[i]=itemDto(list[i],i,page) end
     local address,serverPort="",0
@@ -197,12 +207,6 @@ local function stateFor(page)
         local ok,a,p=pcall(sampGetCurrentServerAddress)
         if ok then address,serverPort=tostring(a or ""),tonumber(p) or 0 end
     end
-    local snapshot=automationSnapshot()
-    local active=snapshot[page]==true
-    local score=saneNumber(snapshot.score,0) or 0
-    local total=saneNumber(snapshot.score_from,0) or 0
-    local busy=snapshot.sell==true or snapshot.buy==true
-    local cfg=configName(page)
     local iconStatus=itemIcons and itemIcons.getStatus and itemIcons.getStatus() or {}
     return {
         revision=revision[page], page=page,
