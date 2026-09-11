@@ -1,0 +1,51 @@
+name: ArzMarket HTML trade tools patch
+
+on:
+  push:
+    branches:
+      - feature/html-cef-block1
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/html-cef-block1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply patch
+        run: python .github/patch_html_trade_tools.py
+      - name: Static checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          main=Path('by_Quant_ArzMarket[3_56].lua').read_text(encoding='utf-8')
+          lua=Path('modules/arz_html_ui.lua').read_text(encoding='utf-8')
+          html=Path('ArzMarket/html/index.html').read_text(encoding='utf-8')
+          js=Path('ArzMarket/html/js/app.js').read_text(encoding='utf-8')
+          css=Path('ArzMarket/html/css/style.css').read_text(encoding='utf-8')
+          for needle in ['ctx.getTradeUiState = function()', 'ctx.toggleTradeCurrency = function()', 'ctx.toggleTradeScan = function(side)', 'ctx.refreshBuySource = function()', 'ctx.downloadAveragePrices = function()']:
+              assert needle in main, needle
+          assert 'module_version = 10' in lua
+          for needle in ['action=="trade.currency.toggle"', 'action=="trade.scan.toggle"', 'action=="buy.source.refresh"', 'action=="prices.download"', 'currencyMode=currency']:
+              assert needle in lua, needle
+          for ident in ['scanButton','currencyButton','refreshButton','pricesButton']:
+              assert f'id="{ident}"' in html
+              assert f"refs.{ident}" in js
+          assert 'active-action' in css
+          assert 'const currentPrice = currency === \'VC\' ? item.price_vc : item.price;' in js
+          PY
+      - name: Commit patched files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'by_Quant_ArzMarket[3_56].lua' modules/arz_html_ui.lua ArzMarket/html/index.html ArzMarket/html/js/app.js ArzMarket/html/css/style.css
+          git diff --cached --quiet && exit 0
+          git commit -m "Add HTML trade utility controls"
+          git push origin HEAD:feature/html-cef-block1
