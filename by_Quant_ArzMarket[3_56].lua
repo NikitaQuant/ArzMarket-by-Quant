@@ -954,6 +954,43 @@ function arzUiExtensionsCreateContext(extension)
 		end
 		return false
 	end
+	ctx.getTradeAutomationState = function()
+		return {
+			sell = tradeAutomation.sell == true,
+			buy = tradeAutomation.buy == true,
+			score = tonumber(tradeAutomation.score) or 0,
+			score_from = tonumber(tradeAutomation.score_from) or 0
+		}
+	end
+	ctx.getCoreMenuVisible = function()
+		return menuVisible and menuVisible[0] == true or false
+	end
+	ctx.setCoreMenuVisible = function(value)
+		local nextValue = value == true
+		menuOpen = nextValue
+		if menuVisible then
+			menuVisible[0] = nextValue
+		end
+		if nextValue then
+			kifir = 1
+			onOpenMenu = true
+			zzztime = os.clock()
+		elseif type(resetIO) == "function" then
+			pcall(resetIO)
+		end
+		return true
+	end
+	ctx.startTrade = function(side)
+		if type(sampProcessChatInput) ~= "function" then return false end
+		side = side == "sell" and "sell" or "buy"
+		sampProcessChatInput(side == "sell" and "/crsell" or "/crbuy")
+		return true
+	end
+	ctx.cancelTrade = function()
+		if type(off_sell_buy) ~= "function" then return false end
+		off_sell_buy()
+		return true
+	end
 	return ctx
 end
 

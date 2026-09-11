@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 3,
+    module_version = 4,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -157,30 +157,16 @@ local function sources(side)
     return out
 end
 
-local function findUpvalue(fn,wanted)
-    if type(fn)~="function" or type(debug)~="table" or type(debug.getupvalue)~="function" then return nil,nil end
-    for i=1,128 do
-        local name,value=debug.getupvalue(fn,i)
-        if not name then break end
-        if name==wanted then return i,value end
-    end
-end
-local function tradeState()
-    if type(off_sell_buy)~="function" then return nil end
-    local _,value=findUpvalue(off_sell_buy,"tradeAutomation")
-    return type(value)=="table" and value or nil
-end
 local function automationState(side)
-    local state=tradeState()
-    if not state then return false,0,0 end
+    if not ctx or type(ctx.getTradeAutomationState)~="function" then return false,0,0 end
+    local ok,state=pcall(ctx.getTradeAutomationState)
+    if not ok or type(state)~="table" then return false,0,0 end
     return state[side]==true,saneNumber(state.score,0) or 0,saneNumber(state.score_from,0) or 0
 end
 local function setMenuVisible(value)
-    local probe=type(modificationState)=="table" and modificationState.updateMenuMouseNavigation or nil
-    if type(probe)~="function" then return false end
-    local _,flag=findUpvalue(probe,"menuVisible")
-    if type(flag)~="table" and type(flag)~="cdata" then return false end
-    return pcall(function() flag[0]=value==true end)
+    if not ctx or type(ctx.setCoreMenuVisible)~="function" then return false end
+    local ok,result=pcall(ctx.setCoreMenuVisible,value==true)
+    return ok and result~=false
 end
 local function selectLuaPage(side)
     if ctx and type(ctx.selectCorePage)=="function" then
@@ -421,13 +407,16 @@ local function doAction(req)
         return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,error=not ok and tostring(result) or (result==false and "average_failed" or nil)})
     elseif action=="trade.start" then
         local active=select(1,automationState(side))
-        if active and type(off_sell_buy)=="function" then
-            local ok,err=pcall(off_sell_buy); fingerprints[side]=""
-            return jsonResponse(ok and 200 or 400,{ok=ok,cancelled=ok,error=ok and nil or tostring(err)})
+        if active then
+            if not ctx or type(ctx.cancelTrade)~="function" then return jsonResponse(400,{ok=false,error="cancel_unavailable"}) end
+            local ok,result=pcall(ctx.cancelTrade); fingerprints[side]=""
+            local success=ok and result~=false
+            return jsonResponse(success and 200 or 400,{ok=success,cancelled=success,error=success and nil or tostring(result)})
         end
-        if type(sampProcessChatInput)~="function" then return jsonResponse(400,{ok=false,error="chat_input_unavailable"}) end
-        local ok,err=pcall(sampProcessChatInput,side=="sell" and "/crsell" or "/crbuy")
-        return jsonResponse(ok and 200 or 400,{ok=ok,error=ok and nil or tostring(err)})
+        if not ctx or type(ctx.startTrade)~="function" then return jsonResponse(400,{ok=false,error="start_unavailable"}) end
+        local ok,result=pcall(ctx.startTrade,side)
+        local success=ok and result~=false
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or tostring(result)})
     end
     return jsonResponse(400,{ok=false,error="unknown_action"})
 end
