@@ -431,7 +431,14 @@
   });
 
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !refs.pickerBackdrop.classList.contains('hidden')) closePicker();
+    if (event.key === 'Escape') {
+      if (!refs.pickerBackdrop.classList.contains('hidden')) {
+        closePicker();
+      } else if (!event.repeat) {
+        action('ui.close', {side: state.page}).catch(() => {});
+      }
+      return;
+    }
     if (event.ctrlKey && String(event.key).toLowerCase() === 'f') {
       event.preventDefault();
       refs.searchInput.focus();

@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 7,
+    module_version = 8,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -477,7 +477,10 @@ local function doAction(req)
 end
 local function handle(req)
     if not validHost(req) then return response(403,"forbidden") end
-    if req.path=="/health" then return jsonResponse(200,{ok=true,port=port,htmlOpen=htmlOpen,page=currentPage}) end
+    if req.path=="/health" then
+        local iconStatus=itemIcons and itemIcons.getStatus and itemIcons.getStatus() or {}
+        return jsonResponse(200,{ok=true,port=port,htmlOpen=htmlOpen,page=currentPage,tradeBusy=tradeBusy(),icons=iconStatus})
+    end
     if req.path=="/ui" then
         if req.method~="GET" then return response(405,"method_not_allowed") end
         local html=readFile(htmlRoot.."\\index.html")
@@ -497,14 +500,15 @@ local function handle(req)
         return jsonResponse(200,value)
     end
     if req.path=="/api/action" then return doAction(req) end
-    local size,id=req.path:match("^/api/icon/(24|48|256)/(%d+)%.webp$")
+    local size,id=req.path:match("^/api/icon/(%d+)/(%d+)%.webp$")
     if size and id then
+        if size~="24" and size~="48" and size~="256" then return response(404,"not_found") end
         if req.method~="GET" then return response(405,"method_not_allowed") end
         if not validToken(req) and tostring(req.query.token or "")~=token then return response(403,"forbidden") end
         if not itemIcons or type(itemIcons.getIcon)~="function" then return response(404,"icon_unavailable") end
         local ok,dataOrErr,extra=pcall(itemIcons.getIcon,size,id)
         if not ok or not dataOrErr then return response(404,tostring(ok and extra or dataOrErr)) end
-        return response(200,dataOrErr,"image/webp","public, max-age=86400")
+        return response(200,dataOrErr,"image/webp","private, max-age=86400")
     end
     return response(404,"not_found")
 end
