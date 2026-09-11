@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 8,
+    module_version = 9,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -80,6 +80,17 @@ local function configName(side)
     if not ctx or type(ctx.getLoadedConfigs)~="function" then return "" end
     local sell,buy=ctx.getLoadedConfigs()
     return normalizeConfig(side=="buy" and buy or sell)
+end
+local function configList(side)
+    if not ctx or type(ctx.listTradeConfigs)~="function" then return {} end
+    local ok,value=pcall(ctx.listTradeConfigs,side)
+    if not ok or type(value)~="table" then return {} end
+    local out={}
+    for i=1,#value do
+        local name=normalizeConfig(value[i])
+        if name~="" then out[#out+1]=name:gsub("%.json$","") end
+    end
+    return out
 end
 local function persist(side)
     local buy,sell=lists()
@@ -207,10 +218,11 @@ local function stateFor(page)
     local total=saneNumber(snapshot.score_from,0) or 0
     local busy=snapshot.sell==true or snapshot.buy==true
     local cfg=configName(page)
+    local configs=configList(page)
     local source=sources(page)
     local runtimeKey=table.concat({
         tostring(active),tostring(busy),tostring(snapshot.buy==true),tostring(snapshot.sell==true),
-        tostring(score),tostring(total),tostring(cfg),sourceFingerprint(source)
+        tostring(score),tostring(total),tostring(cfg),table.concat(configs,"\29"),sourceFingerprint(source)
     },"\30")
     touchRevision(page,list,runtimeKey)
     local items={}
@@ -223,7 +235,7 @@ local function stateFor(page)
     local iconStatus=itemIcons and itemIcons.getStatus and itemIcons.getStatus() or {}
     return {
         revision=revision[page], page=page,
-        common={uiMode="html",activeConfig=cfg~="" and cfg:gsub("%.json$","") or "",
+        common={uiMode="html",activeConfig=cfg~="" and cfg:gsub("%.json$","") or "",configs=configs,
             automation=active,tradeBusy=busy,automationBuy=snapshot.buy==true,automationSell=snapshot.sell==true,
             automationScore=score,automationTotal=total,
             serverAddress=address,serverPort=serverPort,icons=iconStatus},
@@ -441,6 +453,14 @@ local function doAction(req)
     elseif action=="ui.navigate" then
         currentPage=side
         return jsonResponse(200,{ok=true,page=side})
+    elseif action=="trade.config.load" then
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.loadTradeConfig)~="function" then return jsonResponse(400,{ok=false,error="config_loader_unavailable"}) end
+        local ok,result,err=pcall(ctx.loadTradeConfig,side,data.name)
+        local success=ok and result~=false
+        sourceCache[side].at=0
+        fingerprints[side]=""
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and err or tostring(result))})
     elseif action=="trade.item.update" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         local ok,err=updateItem(side,data)

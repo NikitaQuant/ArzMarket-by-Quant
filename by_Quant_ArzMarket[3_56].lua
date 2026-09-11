@@ -991,6 +991,49 @@ function arzUiExtensionsCreateContext(extension)
 		off_sell_buy()
 		return true
 	end
+	ctx.listTradeConfigs = function(side)
+		side = side == "sell" and "sell" or "buy"
+		local directory = "moonloader/ArzMarket/" .. side .. "-cfg"
+		local out = {}
+		if type(lfs) ~= "table" or type(lfs.dir) ~= "function" or not doesDirectoryExist(directory) then
+			return out
+		end
+		local ok = pcall(function()
+			for fileName in lfs.dir(directory) do
+				if type(fileName) == "string" and fileName:match("%.json$") then
+					out[#out + 1] = fileName
+				end
+			end
+		end)
+		if not ok then return {} end
+		table.sort(out, function(a, b) return string.lower(a) < string.lower(b) end)
+		return out
+	end
+	ctx.loadTradeConfig = function(side, fileName)
+		side = side == "sell" and "sell" or "buy"
+		fileName = tostring(fileName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if fileName == "" or fileName:find("[/\\]") or fileName:find("..", 1, true) or not fileName:match("^[^%c]+%.json$") then
+			return false, "invalid_config_name"
+		end
+		local path = "moonloader/ArzMarket/" .. side .. "-cfg/" .. fileName
+		if not doesFileExist(path) or type(loadConfig) ~= "function" then return false, "config_missing" end
+		local ok, loaded = pcall(loadConfig, path)
+		if not ok or type(loaded) ~= "table" then return false, "config_invalid" end
+		if side == "buy" then
+			buyList = loaded
+			loadedBuyConfig = fileName
+			ini.cfg.load_config_buy = fileName
+			configFileNames.buy = fileName
+		else
+			sellList = loaded
+			loadedSellConfig = fileName
+			ini.cfg.load_config_sell = fileName
+			configFileNames.sell = fileName
+		end
+		if type(tradeFilterInvalidate) == "function" then pcall(tradeFilterInvalidate, side) end
+		if type(save_all) == "function" then save_all() end
+		return true
+	end
 	return ctx
 end
 

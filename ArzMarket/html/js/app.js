@@ -134,10 +134,30 @@
     refs.pageHeaderIcon.textContent = buy ? '⌑' : '↥';
     document.querySelectorAll('.nav-item[data-page]').forEach(node => node.classList.toggle('active', node.dataset.page === state.page));
 
+    const activeConfig = state.data?.common?.activeConfig || '';
+    const configs = Array.isArray(state.data?.common?.configs) ? state.data.common.configs : [];
     refs.configSelect.innerHTML = '';
-    const option = document.createElement('option');
-    option.textContent = state.data?.common?.activeConfig || 'Не выбран';
-    refs.configSelect.append(option);
+    if (!configs.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = activeConfig || 'Не выбран';
+      refs.configSelect.append(option);
+    } else {
+      if (!activeConfig) {
+        const none = document.createElement('option');
+        none.value = '';
+        none.textContent = 'Не выбран';
+        refs.configSelect.append(none);
+      }
+      for (const name of configs) {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        option.selected = name === activeConfig;
+        refs.configSelect.append(option);
+      }
+    }
+    refs.configSelect.disabled = busy || configs.length === 0;
 
     const score = Number(state.data?.common?.automationScore || 0);
     const total = Number(state.data?.common?.automationTotal || 0);
@@ -404,6 +424,21 @@
   refs.searchInput.addEventListener('input', () => {
     state.search = refs.searchInput.value;
     renderTable();
+  });
+  refs.configSelect.addEventListener('change', async () => {
+    const name = refs.configSelect.value;
+    if (!name || tradeBusy()) return;
+    refs.configSelect.disabled = true;
+    try {
+      await action('trade.config.load', {side: state.page, name});
+      state.selectedItem = null;
+      state.selectedKey = null;
+      showToast(`Конфиг «${name}» загружен`, 'success');
+      await refresh(true);
+    } catch (err) {
+      showToast(`Конфиг: ${err.message}`, 'error');
+      await refresh(true);
+    }
   });
   refs.addButton.addEventListener('click', openPicker);
   refs.pickerSearch.addEventListener('input', () => {
