@@ -1039,6 +1039,15 @@ function arzUiExtensionsCreateContext(extension)
 		get_prices()
 		return true
 	end
+	ctx.getTradeAddDefaults = function(side)
+		side = side == "sell" and "sell" or "buy"
+		local defaults = side == "sell" and sellDefaults or buyDefaults
+		return {
+			price = tonumber(defaults and defaults.price) or (side == "sell" and 9 or 10),
+			count = math.max(1, math.floor(tonumber(defaults and defaults.count) or 1)),
+			sort_mode = sortMode and true or false
+		}
+	end
 	ctx.getTradeUndoCount = function(side)
 		side = side == "sell" and "sell" or "buy"
 		local stack = modificationState and modificationState.itemDeleteUndo and modificationState.itemDeleteUndo[side]

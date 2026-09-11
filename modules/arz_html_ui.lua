@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 11,
+    module_version = 12,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -320,15 +320,24 @@ local function addItem(side,payload)
     local list=side=="buy" and buy or sell
     local luaName=fromUtf8(src.name)
     for i=1,#list do if tostring(list[i].name or list[i].item or "")==luaName then return false,"already_exists" end end
+    local defaults={price=side=="sell" and 9 or 10,count=1,sort_mode=false}
+    if ctx and type(ctx.getTradeAddDefaults)=="function" then
+        local ok,value=pcall(ctx.getTradeAddDefaults,side)
+        if ok and type(value)=="table" then defaults=value end
+    end
+    local defaultPrice=saneNumber(defaults.price,side=="sell" and 9 or 10) or (side=="sell" and 9 or 10)
+    local defaultCount=math.max(1,math.floor(saneNumber(defaults.count,1) or 1))
     local item
     if side=="buy" then
-        item={continue=1,enabled=true,maximum=false,count_maximum=0,price_vc=10,name=luaName,price=10,count=1,item_id=src.item_id}
+        item={continue=1,enabled=true,maximum=false,count_maximum=0,price_vc=10,name=luaName,price=defaultPrice,count=defaultCount,item_id=src.item_id}
     else
-        item={enabled=true,price_vc=9,maximum=true,name=luaName,price=9,count=1,
+        local available=math.max(0,math.floor(saneNumber(src.all_count,0) or 0))
+        if available<defaultCount then return false,"not_enough_items" end
+        item={enabled=true,price_vc=9,maximum=true,name=luaName,price=defaultPrice,count=defaultCount,
             slot_count=src.slot_count,slot_id=src.slot_id,all_count=src.all_count,item_id=src.item_id}
     end
     if type(addToData)=="function" then
-        local addOk=pcall(addToData,item,list,nil)
+        local addOk=pcall(addToData,item,list,defaults.sort_mode and 1 or nil)
         if not addOk then return false,"add_failed" end
     else
         table.insert(list,item)

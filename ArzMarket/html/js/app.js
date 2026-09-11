@@ -424,7 +424,8 @@
           await refresh(true);
           renderPicker();
         } catch (err) {
-          showToast(`Не удалось добавить: ${err.message}`, 'error');
+          const message = err.message === 'not_enough_items' ? 'Недостаточно предметов для значения по умолчанию' : err.message;
+          showToast(`Не удалось добавить: ${message}`, 'error');
         }
       });
       fragment.append(row);
