@@ -1039,6 +1039,42 @@ function arzUiExtensionsCreateContext(extension)
 		get_prices()
 		return true
 	end
+	ctx.getTradeUndoCount = function(side)
+		side = side == "sell" and "sell" or "buy"
+		local stack = modificationState and modificationState.itemDeleteUndo and modificationState.itemDeleteUndo[side]
+		return type(stack) == "table" and #stack or 0
+	end
+	ctx.deleteTradeItem = function(side, index)
+		side = side == "sell" and "sell" or "buy"
+		local list = side == "buy" and buyList or sellList
+		index = math.floor(tonumber(index) or 0)
+		if type(list) ~= "table" or index < 1 or index > #list then return false, "invalid_index" end
+		if type(deleteListItemWithUndo) ~= "function" then return false, "delete_unavailable" end
+		local ok, result = pcall(deleteListItemWithUndo, side, list, index)
+		if not ok then return false, tostring(result) end
+		return result ~= false, result == false and "delete_failed" or nil
+	end
+	ctx.clearTradeList = function(side)
+		side = side == "sell" and "sell" or "buy"
+		if type(clearTradeListAndPersist) ~= "function" then return false, "clear_unavailable" end
+		local ok, result = pcall(clearTradeListAndPersist, side)
+		if not ok then return false, tostring(result) end
+		return result ~= false, result == false and "clear_failed" or nil
+	end
+	ctx.undoTradeDelete = function(side)
+		side = side == "sell" and "sell" or "buy"
+		if type(undoLastDeletedListItem) ~= "function" then return false, "undo_unavailable" end
+		local ok, result = pcall(undoLastDeletedListItem, side)
+		if not ok then return false, tostring(result) end
+		return result ~= false, result == false and "nothing_to_undo" or nil
+	end
+	ctx.getBuyContinueMode = function()
+		return buyContinueMode == true
+	end
+	ctx.setBuyContinueMode = function(value)
+		buyContinueMode = value == true
+		return buyContinueMode
+	end
 	ctx.listTradeConfigs = function(side)
 		side = side == "sell" and "sell" or "buy"
 		local directory = "moonloader/ArzMarket/" .. side .. "-cfg"

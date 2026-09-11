@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 10,
+    module_version = 11,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -129,7 +129,7 @@ local function fingerprint(side,list,runtimeKey)
         out[#out+1]=table.concat({
             tostring(x.name or x.item or ""),tostring(x.price or ""),tostring(x.price_vc or ""),
             tostring(x.count or ""),tostring(x.continue or ""),tostring(x.enabled~=false),
-            tostring(x.maximum==true),tostring(x.all_count or ""),tostring(x.slot_id or "")
+            tostring(x.maximum==true),tostring(x.count_maximum or ""),tostring(x.all_count or ""),tostring(x.slot_id or "")
         },"\30")
     end
     return table.concat(out,"\31")
@@ -228,9 +228,20 @@ local function stateFor(page)
     local currency=uiState.currency=="VC" and "VC" or "SA"
     local buyScan=uiState.buy_scan==true
     local sellScan=uiState.sell_scan==true
+    local undoCount=0
+    if ctx and type(ctx.getTradeUndoCount)=="function" then
+        local ok,value=pcall(ctx.getTradeUndoCount,page)
+        if ok then undoCount=math.max(0,math.floor(tonumber(value) or 0)) end
+    end
+    local buyContinue=false
+    if ctx and type(ctx.getBuyContinueMode)=="function" then
+        local ok,value=pcall(ctx.getBuyContinueMode)
+        if ok then buyContinue=value==true end
+    end
     local runtimeKey=table.concat({
         tostring(active),tostring(busy),tostring(snapshot.buy==true),tostring(snapshot.sell==true),
-        tostring(score),tostring(total),tostring(cfg),table.concat(configs,"\29"),currency,tostring(buyScan),tostring(sellScan),sourceFingerprint(source)
+        tostring(score),tostring(total),tostring(cfg),table.concat(configs,"\29"),currency,tostring(buyScan),tostring(sellScan),
+        tostring(undoCount),tostring(buyContinue),sourceFingerprint(source)
     },"\30")
     touchRevision(page,list,runtimeKey)
     local items={}
@@ -244,7 +255,7 @@ local function stateFor(page)
     return {
         revision=revision[page], page=page,
         common={uiMode="html",activeConfig=cfg~="" and cfg:gsub("%.json$","") or "",configs=configs,
-            currencyMode=currency,buyScan=buyScan,sellScan=sellScan,
+            currencyMode=currency,buyScan=buyScan,sellScan=sellScan,undoCount=undoCount,buyContinue=buyContinue,
             automation=active,tradeBusy=busy,automationBuy=snapshot.buy==true,automationSell=snapshot.sell==true,
             automationScore=score,automationTotal=total,
             serverAddress=address,serverPort=serverPort,icons=iconStatus},
@@ -294,16 +305,11 @@ end
 local function removeItem(side,payload)
     local _,index,err=findItem(side,payload.identity)
     if not index then return false,err end
-    local buy,sell=lists()
-    local list=side=="buy" and buy or sell
-    local removed=table.remove(list,index)
-    local ok,saveErr=persist(side)
-    if not ok then
-        table.insert(list,index,removed)
-    end
-    if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
+    if not ctx or type(ctx.deleteTradeItem)~="function" then return false,"delete_unavailable" end
+    local ok,result,coreErr=pcall(ctx.deleteTradeItem,side,index)
+    local success=ok and result~=false
     fingerprints[side]=""
-    return ok,saveErr
+    return success,success and nil or (ok and coreErr or tostring(result))
 end
 local function addItem(side,payload)
     local wanted=math.floor(saneNumber(payload.source_index,0) or 0)
@@ -494,6 +500,30 @@ local function doAction(req)
         sourceCache[side].at=0
         fingerprints[side]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and err or tostring(result))})
+    elseif action=="trade.list.clear" then
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.clearTradeList)~="function" then return jsonResponse(400,{ok=false,error="clear_unavailable"}) end
+        local ok,result,coreErr=pcall(ctx.clearTradeList,side)
+        local success=ok and result~=false
+        fingerprints[side]=""
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
+    elseif action=="trade.item.undo" then
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.undoTradeDelete)~="function" then return jsonResponse(400,{ok=false,error="undo_unavailable"}) end
+        local ok,result,coreErr=pcall(ctx.undoTradeDelete,side)
+        local success=ok and result~=false
+        fingerprints[side]=""
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
+    elseif action=="buy.continue.toggle" then
+        if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
+        if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
+        if not ctx or type(ctx.setBuyContinueMode)~="function" or type(ctx.getBuyContinueMode)~="function" then return jsonResponse(400,{ok=false,error="continue_unavailable"}) end
+        local current=false
+        local readOk,readValue=pcall(ctx.getBuyContinueMode)
+        if readOk then current=readValue==true end
+        local ok,result=pcall(ctx.setBuyContinueMode,not current)
+        fingerprints.buy=""
+        return jsonResponse(ok and 200 or 400,{ok=ok,active=ok and result==true or false,error=ok and nil or tostring(result)})
     elseif action=="trade.item.update" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         local ok,err=updateItem(side,data)

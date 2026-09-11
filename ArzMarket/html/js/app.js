@@ -11,7 +11,8 @@
     search: '',
     pickerSearch: '',
     requestBusy: false,
-    toastTimer: 0
+    toastTimer: 0,
+    clearArmedUntil: 0
   };
 
   const el = id => document.getElementById(id);
@@ -19,8 +20,9 @@
     app: el('app'), runtimeText: el('runtimeText'), pageHeaderIcon: el('pageHeaderIcon'),
     pageTitle: el('pageTitle'), pageSubtitle: el('pageSubtitle'), configSelect: el('configSelect'),
     automationBadge: el('automationBadge'), saveBadge: el('saveBadge'), searchInput: el('searchInput'),
-    addButton: el('addButton'), scanButton: el('scanButton'), currencyButton: el('currencyButton'),
-    refreshButton: el('refreshButton'), pricesButton: el('pricesButton'), averageButton: el('averageButton'), startButton: el('startButton'),
+    addButton: el('addButton'), undoButton: el('undoButton'), clearButton: el('clearButton'), scanButton: el('scanButton'),
+    continueButton: el('continueButton'), currencyButton: el('currencyButton'), refreshButton: el('refreshButton'),
+    pricesButton: el('pricesButton'), averageButton: el('averageButton'), startButton: el('startButton'),
     tableHead: el('tableHead'), tableRows: el('tableRows'), emptyState: el('emptyState'),
     detailEmpty: el('detailEmpty'), detailContent: el('detailContent'), detailIcon: el('detailIcon'),
     detailName: el('detailName'), detailStatus: el('detailStatus'), detailFields: el('detailFields'),
@@ -173,6 +175,18 @@
     refs.scanButton.textContent = scanActive ? 'Стоп скан' : 'Скан';
     refs.scanButton.classList.toggle('active-action', scanActive);
     refs.scanButton.disabled = busy;
+    const undoCount = Number(state.data?.common?.undoCount || 0);
+    const itemCount = Array.isArray(state.data?.data?.items) ? state.data.data.items.length : 0;
+    refs.undoButton.disabled = busy || undoCount < 1;
+    refs.clearButton.disabled = busy || itemCount < 1;
+    const clearArmed = Date.now() < state.clearArmedUntil;
+    refs.clearButton.textContent = clearArmed ? 'Точно?' : 'Очистить';
+    refs.clearButton.classList.toggle('confirming', clearArmed);
+    const buyContinue = state.data?.common?.buyContinue === true;
+    refs.continueButton.classList.toggle('hidden', !buy);
+    refs.continueButton.classList.toggle('active-action', buyContinue);
+    refs.continueButton.textContent = buyContinue ? 'Продолжение: Вкл' : 'Продолжить';
+    refs.continueButton.disabled = busy;
     refs.refreshButton.classList.toggle('hidden', !buy);
     refs.refreshButton.disabled = busy;
     refs.pricesButton.disabled = busy;
@@ -224,7 +238,7 @@
       row.append(itemCell);
       const currentPrice = currency === 'VC' ? item.price_vc : item.price;
       row.append(div(`${money(currentPrice)} ${currency}$`, 'money'));
-      row.append(div(item.maximum && !buy ? 'Макс.' : money(item.count), 'count'));
+      row.append(div(item.maximum ? (buy ? `Макс. ${money(item.count_maximum)}` : 'Макс.') : money(item.count), 'count'));
       row.append(div(buy ? money(item.continue) : money(item.all_count), 'count'));
 
       const status = div('', 'row-status');
@@ -316,10 +330,19 @@
     const count = div('', 'field-row');
     count.append(
       numberField('Количество', item.count, 'count'),
-      state.page === 'buy' ? numberField('Осталось', item.continue, 'continue') : numberField('Доступно', item.all_count, 'all_count', true)
+      state.page === 'buy' ? numberField('Осталось', item.continue, 'continue', true) : numberField('Доступно', item.all_count, 'all_count', true)
     );
     refs.detailFields.append(count);
-    if (state.page === 'sell') refs.detailFields.append(toggleField('Выставлять максимум', item.maximum === true, 'maximum'));
+    if (state.page === 'buy') {
+      refs.detailFields.append(toggleField('Режим максимального количества', item.maximum === true, 'maximum'));
+      if (item.maximum === true) {
+        const maximum = div('', 'field-row');
+        maximum.append(numberField('Рассчитано максимум', item.count_maximum, 'count_maximum', true));
+        refs.detailFields.append(maximum);
+      }
+    } else {
+      refs.detailFields.append(toggleField('Выставлять максимум', item.maximum === true, 'maximum'));
+    }
     refs.detailFields.append(toggleField('Статус товара', item.enabled !== false, 'enabled'));
   }
 
@@ -350,7 +373,7 @@
       await action('trade.item.remove', {side: state.page, identity: item.identity});
       state.selectedItem = null;
       state.selectedKey = null;
-      showToast('Товар удален', 'success');
+      showToast('Товар удален. Ctrl+Z вернет его', 'success');
       await refresh(true);
     } catch (err) {
       showToast(`Не удалось удалить: ${err.message}`, 'error');
@@ -454,6 +477,38 @@
     }
   });
   refs.addButton.addEventListener('click', openPicker);
+  refs.undoButton.addEventListener('click', async () => {
+    if (tradeBusy() || Number(state.data?.common?.undoCount || 0) < 1) return;
+    try {
+      await action('trade.item.undo', {side: state.page});
+      showToast('Удаленный товар возвращен', 'success');
+      await refresh(true);
+    } catch (err) { showToast(`Возврат: ${err.message}`, 'error'); }
+  });
+  refs.clearButton.addEventListener('click', async () => {
+    if (tradeBusy() || !(state.data?.data?.items || []).length) return;
+    if (Date.now() >= state.clearArmedUntil) {
+      state.clearArmedUntil = Date.now() + 2400;
+      renderHeader();
+      setTimeout(() => { if (Date.now() >= state.clearArmedUntil) renderHeader(); }, 2500);
+      return;
+    }
+    state.clearArmedUntil = 0;
+    try {
+      await action('trade.list.clear', {side: state.page});
+      state.selectedItem = null;
+      state.selectedKey = null;
+      showToast('Список очищен', 'success');
+      await refresh(true);
+    } catch (err) { showToast(`Очистка: ${err.message}`, 'error'); }
+  });
+  refs.continueButton.addEventListener('click', async () => {
+    if (tradeBusy() || state.page !== 'buy') return;
+    try {
+      await action('buy.continue.toggle', {side: 'buy'});
+      await refresh(true);
+    } catch (err) { showToast(`Продолжение скупки: ${err.message}`, 'error'); }
+  });
   refs.scanButton.addEventListener('click', async () => {
     if (tradeBusy()) return;
     try {
@@ -508,6 +563,13 @@
   });
 
   document.addEventListener('keydown', event => {
+    const tag = String(event.target?.tagName || '').toLowerCase();
+    const textInput = tag === 'input' || tag === 'textarea' || tag === 'select' || event.target?.isContentEditable === true;
+    if (event.ctrlKey && !event.shiftKey && String(event.key).toLowerCase() === 'z' && !textInput) {
+      event.preventDefault();
+      if (!tradeBusy() && Number(state.data?.common?.undoCount || 0) > 0) refs.undoButton.click();
+      return;
+    }
     if (event.key === 'Escape') {
       if (!refs.pickerBackdrop.classList.contains('hidden')) {
         closePicker();
