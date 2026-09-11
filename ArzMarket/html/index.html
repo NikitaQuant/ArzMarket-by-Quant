@@ -7,6 +7,7 @@
   <title>ArzMarket</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="stylesheet" href="/static/css/state.css">
+  <link rel="stylesheet" href="/static/css/buy.css?v=1">
 </head>
 <body data-token="__ARZMARKET_TOKEN__">
   <div id="app" class="app-shell" data-page="buy">
@@ -36,7 +37,7 @@
             <button class="nav-item disabled" type="button" disabled><span class="nav-icon">▣</span><span>Хранилище</span></button>
           </nav>
           <div class="sidebar-footer">
-            <div class="arizona-card"><div class="arizona-card-glow"></div><div class="arizona-card-title">ARIZONA RP</div><div class="arizona-card-subtitle">Players make legends</div></div>
+            <div class="arizona-card"><div class="arizona-card-glow"></div><div class="arizona-card-title">ARIZONA RP</div><div class="arizona-card-subtitle">Больше, чем игра</div></div>
             <div class="runtime-state"><span class="status-dot"></span><span id="runtimeText">Подключение...</span></div>
             <div class="version">HTML UI Block 1</div>
           </div>
@@ -55,15 +56,20 @@
           <div class="toolbar">
             <label class="search-wrap"><span class="search-icon">⌕</span><input id="searchInput" type="text" autocomplete="off" placeholder="Поиск товара..."><kbd>Ctrl + F</kbd></label>
             <button id="addButton" class="btn btn-secondary" type="button">+ Добавить</button>
-            <button id="undoButton" class="btn btn-secondary btn-icon" type="button" title="Вернуть последний удаленный товар, Ctrl+Z">↶</button>
-            <button id="clearButton" class="btn btn-secondary btn-compact btn-destructive" type="button" title="Очистить активный список">Очистить</button>
-            <button id="scanButton" class="btn btn-secondary btn-compact" type="button" title="Сканировать источник товаров">Скан</button>
-            <button id="continueButton" class="btn btn-secondary btn-compact" type="button" title="Продолжить скупку с оставшегося количества">Продолжить</button>
-            <button id="budgetButton" class="btn btn-secondary btn-compact" type="button" title="Распределить бюджет между товарами">Бюджет</button>
-            <button id="currencyButton" class="btn btn-secondary btn-compact" type="button" title="Переключить валюту">SA$</button>
-            <button id="refreshButton" class="btn btn-secondary btn-compact" type="button" title="Обновить список скупки">Список</button>
-            <button id="pricesButton" class="btn btn-secondary btn-compact" type="button" title="Загрузить средние цены">Цены</button>
             <button id="averageButton" class="btn btn-secondary" type="button">Средние цены</button>
+            <details class="more-actions">
+              <summary>Ещё</summary>
+              <div class="more-actions-panel">
+                <button id="undoButton" class="btn btn-secondary btn-icon" type="button" title="Вернуть последний удаленный товар, Ctrl+Z">↶</button>
+                <button id="clearButton" class="btn btn-secondary btn-compact btn-destructive" type="button" title="Очистить активный список">Очистить</button>
+                <button id="scanButton" class="btn btn-secondary btn-compact" type="button" title="Сканировать источник товаров">Скан</button>
+                <button id="continueButton" class="btn btn-secondary btn-compact" type="button" title="Продолжить скупку с оставшегося количества">Продолжить</button>
+                <button id="budgetButton" class="btn btn-secondary btn-compact" type="button" title="Распределить бюджет между товарами">Бюджет</button>
+                <button id="currencyButton" class="btn btn-secondary btn-compact" type="button" title="Переключить валюту">SA$</button>
+                <button id="refreshButton" class="btn btn-secondary btn-compact" type="button" title="Обновить список скупки">Список</button>
+                <button id="pricesButton" class="btn btn-secondary btn-compact" type="button" title="Загрузить средние цены">Цены</button>
+              </div>
+            </details>
             <button id="startButton" class="btn btn-primary" type="button">Старт</button>
           </div>
           <div class="workspace">
