@@ -1156,6 +1156,29 @@ function arzUiExtensionsGetByPage(pageId)
 	return ARZ_UI_EXTENSIONS.by_page[tonumber(pageId) or -1]
 end
 
+function arzUiExtensionsOpenHtml(page)
+	local extensions = ARZ_UI_EXTENSIONS
+	local extension = extensions and extensions.by_id and extensions.by_id["arz_html_ui"] or nil
+	if not extension or extension._disabled_runtime or type(extension.open_html) ~= "function" then
+		if type(sendNotify) == "function" then
+			pcall(sendNotify, u8:decode("HTML интерфейс недоступен. Используйте Lua режим."))
+		end
+		return false
+	end
+	local ok, result = xpcall(function()
+		return extension.open_html(page == "sell" and "sell" or "buy")
+	end, arzUiExtensionTraceback)
+	if not ok then
+		extension._last_error = tostring(result)
+		print("[ArzMarket][UIExtensions] HTML open failed: " .. tostring(result))
+		if type(sendNotify) == "function" then
+			pcall(sendNotify, u8:decode("Не удалось открыть HTML интерфейс. Lua режим продолжает работать."))
+		end
+		return false
+	end
+	return result ~= false
+end
+
 function arzUiExtensionsGetRightChildFlags(pageId)
 	local extension = arzUiExtensionsGetByPage(pageId)
 	if extension and extension.no_scroll == true then
@@ -22224,7 +22247,7 @@ function buy(frame)
 	imgui.PopItemWidth()
 	imgui.PushFont(fonts[18])
 	imgui.Hint("search_sell", "Данная функция ведет поиск в двух столбцах, в правом и левом.\nВы можете найти какой-то товар, добавить.\nТак же не забывайте что вы можете найти товар, затем выбрать для переноса, очистить поиск и перетащить куда вам нужно.", false)
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 230, 5))
+	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 285, 5))
 	imgui.SetCursorPos(imgui.ImVec2(imgui.GetCursorPos().x - 5, imgui.GetCursorPos().y - 1))
 
 	if imgui.CustomOnlyBorderButton(viceCityMode and "SA$" or "VC$", imgui.ImVec2(35, 27)) then
@@ -22268,6 +22291,11 @@ function buy(frame)
 	end
 
 	imgui.Hint("FOLDER", "Нажав кнопку Вы быстро переместитесь во вкладку \"Настройки\".\nТам вы сможете изменить настройки скрипта, а так же загрузить конфиг.\nП-сссс. Открою секрет, у нас работает конфиг от палатки! Только никому не говори!", false)
+	imgui.SameLine()
+	if imgui.CustomOnlyBorderButton("HTML##arz_html_buy", imgui.ImVec2(48, 27)) then
+		arzUiExtensionsOpenHtml("buy")
+	end
+	imgui.Hint("arz_html_buy", "Открыть HTML интерфейс без перезапуска скрипта.", false)
 	imgui.SameLine()
 	imgui.SetCursorPosX(imgui.GetWindowWidth() - 40)
 
@@ -24707,7 +24735,7 @@ function sell(frame)
 	imgui.PopItemWidth()
 	imgui.PushFont(fonts[18])
 	imgui.Hint("search_sell", "Данная функция ведет поиск в двух столбцах, в правом и левом.\nВы можете найти какой-то товар, добавить.\nТак же не забывайте что вы можете найти товар, затем выбрать для переноса, очистить поиск и перетащить куда вам нужно.", false)
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 230, 4))
+	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 285, 4))
 
 	if imgui.CustomOnlyBorderButton(viceCityMode and "SA$" or "VC$", imgui.ImVec2(35, 27)) then
 		viceCityMode = not viceCityMode
@@ -24750,6 +24778,11 @@ function sell(frame)
 	end
 
 	imgui.Hint("FOLDER", "Нажав кнопку Вы быстро переместитесь во вкладку \"Настройки\".\nТам вы сможете изменить настройки скрипта, а так же загрузить конфиг.\nП-сссс. Открою секрет, у нас работает конфиг от палатки! Только никому не говори!", false)
+	imgui.SameLine()
+	if imgui.CustomOnlyBorderButton("HTML##arz_html_sell", imgui.ImVec2(48, 27)) then
+		arzUiExtensionsOpenHtml("sell")
+	end
+	imgui.Hint("arz_html_sell", "Открыть HTML интерфейс без перезапуска скрипта.", false)
 	imgui.SameLine()
 	imgui.SetCursorPosX(imgui.GetWindowWidth() - 40)
 
