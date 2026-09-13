@@ -1,0 +1,69 @@
+name: Install ArzMarket v71 components
+
+on:
+  push:
+    branches:
+      - component-upload-v71
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  install-components:
+    if: ${{ !contains(github.event.head_commit.message, '[components unpacked]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct component archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .component_upload/part* > /tmp/arzmarket-components.b64
+          base64 -d /tmp/arzmarket-components.b64 > /tmp/arzmarket-components.gz
+          mkdir -p /tmp/arzmarket-unpack
+          if tar -tzf /tmp/arzmarket-components.gz >/dev/null 2>&1; then
+            tar -xzf /tmp/arzmarket-components.gz -C /tmp/arzmarket-unpack
+          else
+            gzip -dc /tmp/arzmarket-components.gz > /tmp/arzmarket-components.payload
+            if unzip -t /tmp/arzmarket-components.payload >/dev/null 2>&1; then
+              unzip -o /tmp/arzmarket-components.payload -d /tmp/arzmarket-unpack
+            elif tar -tf /tmp/arzmarket-components.payload >/dev/null 2>&1; then
+              tar -xf /tmp/arzmarket-components.payload -C /tmp/arzmarket-unpack
+            else
+              echo "Unknown component package format"
+              file /tmp/arzmarket-components.payload || true
+              exit 1
+            fi
+          fi
+          cp -a /tmp/arzmarket-unpack/. ./
+          rm -rf .component_upload
+
+      - name: Verify required text components
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ArzMarket/html/index.html
+          test -f ArzMarket/html/js/app.js
+          test -f ArzMarket/html/js/buy-polish.js
+          test -f ArzMarket/lua/arz_item_icons.lua
+          test -f modules/arz_html_ui.lua
+          test -f modules/ArzMarketQuant/storage_core.lua
+          test -f modules/ArzMarketQuant/buyroute_core.lua
+
+      - name: Commit unpacked components
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "Install ArzMarket v71 components [components unpacked]"
+          git push origin HEAD:component-upload-v71
