@@ -1,0 +1,549 @@
+/* ArzMarket HTML v29: dedicated three-column Sell layout. */
+
+#app[data-page="buy"] .sell-workspace { display:none !important; }
+
+#app[data-page="sell"] .toolbar,
+#app[data-page="sell"] .workspace { display:none !important; }
+
+#app[data-page="sell"] .topbar {
+  border-bottom-color:#354a5c !important;
+  background:radial-gradient(circle at 48% -145%,rgba(88,137,193,.24),transparent 53%),linear-gradient(180deg,#132230 0%,#0b1722 100%) !important;
+}
+#app[data-page="sell"] .sidebar {
+  background:radial-gradient(circle at 24% 26%,rgba(55,108,157,.12),transparent 43%),linear-gradient(180deg,#0c1823 0%,#09141e 72%,#0b1721 100%) !important;
+  border-right-color:#304657 !important;
+}
+#app[data-page="sell"] .content {
+  gap:calc(12px * var(--ui-scale)) !important;
+  background:radial-gradient(circle at 50% -22%,rgba(81,132,181,.09),transparent 42%),#0b1721 !important;
+}
+#app[data-page="sell"] .brand { gap:calc(15px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .brand-mark {
+  width:calc(59px * var(--ui-scale)) !important;
+  height:calc(59px * var(--ui-scale)) !important;
+  background:url('/static/assets/arizona-logo.webp') center/contain no-repeat !important;
+  transform:none !important;
+  filter:hue-rotate(8deg) saturate(.82) brightness(.94) drop-shadow(0 0 calc(9px * var(--ui-scale)) rgba(78,111,225,.22)) !important;
+}
+#app[data-page="sell"] .brand-mark::before,
+#app[data-page="sell"] .brand-mark::after,
+#app[data-page="sell"] .brand-mark span { display:none !important; }
+#app[data-page="sell"] .brand-title { font-size:calc(34px * var(--ui-scale)) !important; font-weight:760 !important; letter-spacing:.12px !important; }
+#app[data-page="sell"] .brand-subtitle { font-size:calc(11.5px * var(--ui-scale)) !important; color:#acbbca !important; }
+#app[data-page="sell"] .mode-switch { border-color:#40586b !important; box-shadow:inset 0 0 0 1px rgba(255,255,255,.025),0 0 calc(12px * var(--ui-scale)) rgba(20,67,117,.10) !important; }
+#app[data-page="sell"] .mode-btn { font-size:calc(13.5px * var(--ui-scale)) !important; color:#a9b8c8 !important; }
+#app[data-page="sell"] .mode-btn.active { background:linear-gradient(180deg,#397ce3,#2857bc) !important; box-shadow:inset 0 1px 0 rgba(255,255,255,.17),0 0 calc(18px * var(--ui-scale)) rgba(56,119,235,.27) !important; }
+#app[data-page="sell"] .window-controls { gap:calc(6px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window-btn { width:calc(38px * var(--ui-scale)) !important; height:calc(38px * var(--ui-scale)) !important; opacity:.95 !important; }
+
+#app[data-page="sell"] .nav-list { gap:calc(10px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .nav-item { font-size:calc(16.5px * var(--ui-scale)) !important; color:#cbd6e2 !important; font-weight:570 !important; }
+#app[data-page="sell"] .nav-item.disabled { opacity:.68 !important; }
+#app[data-page="sell"] .nav-item.disabled span:last-child { color:#c2ced9 !important; opacity:.92 !important; }
+#app[data-page="sell"] .nav-icon { width:calc(33px * var(--ui-scale)) !important; height:calc(33px * var(--ui-scale)) !important; filter:brightness(1.13) saturate(.96) !important; }
+#app[data-page="sell"] .nav-item.active {
+  background:radial-gradient(circle at 7% 50%,rgba(88,255,185,.30),transparent 41%),linear-gradient(90deg,rgba(29,205,128,.38),rgba(16,117,79,.13)) !important;
+  border-color:rgba(84,239,169,.72) !important;
+  box-shadow:inset calc(5px * var(--ui-scale)) 0 0 #6af3b6,inset 0 0 calc(32px * var(--ui-scale)) rgba(51,222,151,.075),0 0 calc(24px * var(--ui-scale)) rgba(44,218,143,.13) !important;
+  color:#effff8 !important;
+}
+#app[data-page="sell"] .nav-item.active .nav-icon { color:#58efaa !important; filter:brightness(1.12) saturate(1.08) drop-shadow(0 0 calc(7px * var(--ui-scale)) rgba(84,242,173,.38)) !important; }
+
+#app[data-page="sell"] .arizona-card {
+  border-color:#41596d !important;
+  background:radial-gradient(circle at 77% 69%,rgba(86,123,161,.25),transparent 43%),linear-gradient(135deg,#1b2c40 0%,#12202e 64%,#1a2b3e 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.035) !important;
+}
+#app[data-page="sell"] .arizona-card::before {
+  content:"";
+  position:absolute;
+  right:-3%;
+  bottom:-4%;
+  width:54%;
+  height:96%;
+  background:url('/static/assets/arizona-cactus.webp') right bottom/contain no-repeat;
+  opacity:.43;
+  filter:grayscale(.62) saturate(.38) brightness(1.40) contrast(.90);
+}
+#app[data-page="sell"] .arizona-card::after {
+  content:"Players make\A legends";
+  white-space:pre;
+  position:absolute;
+  top:51%;
+  left:calc(20px * var(--ui-scale));
+  max-width:58%;
+  font-family:"Segoe Script","Comic Sans MS",cursive;
+  font-size:calc(14.5px * var(--ui-scale));
+  font-style:italic;
+  line-height:1.16;
+  color:rgba(202,215,232,.73);
+  transform:rotate(-6deg);
+}
+#app[data-page="sell"] .arizona-card-title { font-size:calc(18.5px * var(--ui-scale)) !important; color:#f3f6fa !important; }
+#app[data-page="sell"] .arizona-card-subtitle { font-size:calc(11.5px * var(--ui-scale)) !important; color:#bac7d4 !important; }
+#app[data-page="sell"] .runtime-state { font-size:calc(11px * var(--ui-scale)) !important; color:#b3c2cf !important; }
+#app[data-page="sell"] .version { font-size:calc(10px * var(--ui-scale)) !important; color:#9eafbf !important; }
+
+#app[data-page="sell"] .page-header {
+  min-height:calc(104px * var(--ui-scale)) !important;
+  padding:calc(17px * var(--ui-scale)) calc(24px * var(--ui-scale)) !important;
+  gap:calc(18px * var(--ui-scale)) !important;
+  border-color:#4a6275 !important;
+  background:radial-gradient(circle at 44% -80%,rgba(124,166,209,.21),transparent 52%),linear-gradient(108deg,#1b2e40 0%,#142332 63%,#192b3e 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045) !important;
+}
+#app[data-page="sell"] .page-header-icon {
+  width:calc(58px * var(--ui-scale)) !important;
+  height:calc(58px * var(--ui-scale)) !important;
+  border-color:rgba(83,239,171,.76) !important;
+  background-color:rgba(32,188,117,.23) !important;
+  color:#53e9a7 !important;
+  box-shadow:inset 0 0 calc(26px * var(--ui-scale)) rgba(44,225,151,.10),0 0 calc(17px * var(--ui-scale)) rgba(42,215,144,.11) !important;
+}
+#app[data-page="sell"] .page-header-icon svg { width:calc(35px * var(--ui-scale)); height:calc(35px * var(--ui-scale)); }
+#app[data-page="sell"] .page-header h1 { font-size:calc(31px * var(--ui-scale)) !important; font-weight:760 !important; color:#f5f8fb !important; }
+#app[data-page="sell"] .page-header p { margin-top:calc(7px * var(--ui-scale)) !important; font-size:calc(13px * var(--ui-scale)) !important; color:#b9c7d5 !important; }
+#app[data-page="sell"] .page-header-meta { margin-left:auto !important; align-items:center !important; }
+#app[data-page="sell"] .config-label,
+#app[data-page="sell"] #automationBadge { display:none !important; }
+#app[data-page="sell"] .save-state {
+  display:flex !important;
+  align-items:flex-start !important;
+  min-width:calc(260px * var(--ui-scale));
+  height:auto !important;
+  padding-left:calc(17px * var(--ui-scale));
+  position:relative;
+  font-size:calc(12px * var(--ui-scale)) !important;
+  color:#c1ceda !important;
+}
+#app[data-page="sell"] .save-state::before {
+  content:"";
+  position:absolute;
+  left:0;
+  top:calc(4px * var(--ui-scale));
+  width:calc(8px * var(--ui-scale));
+  height:calc(8px * var(--ui-scale));
+  border-radius:50%;
+  background:#35e49a;
+  box-shadow:0 0 calc(12px * var(--ui-scale)) rgba(53,228,154,.75);
+}
+#app[data-page="sell"] .save-state::after {
+  content:"Изменения сохраняются автоматически";
+  position:absolute;
+  left:calc(17px * var(--ui-scale));
+  top:calc(18px * var(--ui-scale));
+  white-space:nowrap;
+  font-size:calc(10px * var(--ui-scale));
+  color:#94a7b8;
+}
+#app[data-page="sell"] .page-header-hint {
+  display:flex !important;
+  flex-direction:column;
+  min-width:calc(180px * var(--ui-scale));
+  margin-left:calc(16px * var(--ui-scale));
+  position:relative;
+  z-index:2;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  line-height:1.42 !important;
+  color:#b5c3d1 !important;
+}
+#app[data-page="sell"] .page-header-hint span:nth-child(1)::before { content:"Выгодные сделки"; font-size:0; }
+#app[data-page="sell"] .page-header-hint span:nth-child(2)::before { content:"Стабильный доход"; font-size:0; }
+#app[data-page="sell"] .page-header-hint span:nth-child(1),
+#app[data-page="sell"] .page-header-hint span:nth-child(2) { font-size:0 !important; }
+#app[data-page="sell"] .page-header-hint span:nth-child(1)::before,
+#app[data-page="sell"] .page-header-hint span:nth-child(2)::before { font-size:calc(11px * var(--ui-scale)); }
+#app[data-page="sell"] .hero-watermark {
+  display:block !important;
+  right:calc(28px * var(--ui-scale)) !important;
+  top:calc(-12px * var(--ui-scale)) !important;
+  width:calc(125px * var(--ui-scale)) !important;
+  height:calc(125px * var(--ui-scale)) !important;
+  background:url('/static/assets/arizona-logo.webp') center/contain no-repeat !important;
+  opacity:.11 !important;
+  transform:none !important;
+  filter:grayscale(.45) saturate(.4) brightness(.85) !important;
+}
+
+#app[data-page="sell"] .sell-workspace {
+  flex:1;
+  min-height:0;
+  display:grid;
+  grid-template-columns:minmax(calc(250px * var(--ui-scale)),.82fr) minmax(calc(430px * var(--ui-scale)),1.48fr) minmax(calc(285px * var(--ui-scale)),.88fr);
+  gap:calc(12px * var(--ui-scale));
+}
+#app[data-page="sell"] .sell-panel {
+  min-width:0;
+  min-height:0;
+  position:relative;
+  overflow:hidden;
+  border:1px solid #40596b;
+  border-radius:calc(12px * var(--ui-scale));
+  background:linear-gradient(180deg,#101e2a 0%,#0c1822 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);
+}
+#app[data-page="sell"] .sell-inventory-panel,
+#app[data-page="sell"] .sell-list-panel { display:flex; flex-direction:column; }
+#app[data-page="sell"] .sell-card-head {
+  min-height:calc(72px * var(--ui-scale));
+  padding:calc(16px * var(--ui-scale)) calc(17px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:calc(10px * var(--ui-scale));
+  flex:none;
+}
+#app[data-page="sell"] .sell-card-head h2,
+#app[data-page="sell"] .sell-info-heading h2 {
+  margin:0;
+  font-size:calc(20px * var(--ui-scale));
+  line-height:1.1;
+  font-weight:720;
+  color:#f0f4f8;
+}
+#app[data-page="sell"] .sell-card-head p {
+  margin:calc(5px * var(--ui-scale)) 0 0;
+  font-size:calc(11.5px * var(--ui-scale));
+  color:#8fa1b1;
+}
+#app[data-page="sell"] .sell-card-head p strong { color:#c8d4df; font-weight:620; }
+#app[data-page="sell"] .sell-head-icon-button {
+  width:calc(32px * var(--ui-scale));
+  height:calc(32px * var(--ui-scale));
+  padding:0;
+  flex:none;
+  border:1px solid #344c5f;
+  border-radius:calc(8px * var(--ui-scale));
+  background:#12222f;
+  color:#9fb0bf;
+  cursor:pointer;
+}
+#app[data-page="sell"] .sell-head-icon-button:hover:not(:disabled) { border-color:#58738a; background:#172a39; color:#e7eef4; }
+#app[data-page="sell"] .sell-head-icon-button:disabled { opacity:.45; cursor:default; }
+#app[data-page="sell"] .sell-scan-button::before,
+#app[data-page="sell"] .sell-scan-button::after { content:""; position:absolute; }
+#app[data-page="sell"] .sell-scan-button { position:relative; }
+#app[data-page="sell"] .sell-scan-button::before {
+  width:calc(15px * var(--ui-scale));
+  height:calc(15px * var(--ui-scale));
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  border:calc(2px * var(--ui-scale)) solid currentColor;
+  border-left-color:transparent;
+  border-radius:50%;
+}
+#app[data-page="sell"] .sell-scan-button::after {
+  width:calc(6px * var(--ui-scale));
+  height:calc(6px * var(--ui-scale));
+  right:calc(6px * var(--ui-scale));
+  top:calc(6px * var(--ui-scale));
+  border-top:calc(2px * var(--ui-scale)) solid currentColor;
+  border-right:calc(2px * var(--ui-scale)) solid currentColor;
+}
+#app[data-page="sell"] .sell-scan-button.active { color:#63efb1; border-color:rgba(74,228,163,.55); background:rgba(31,178,113,.14); }
+
+#app[data-page="sell"] .sell-inventory-search {
+  height:calc(43px * var(--ui-scale));
+  margin:0 calc(14px * var(--ui-scale)) calc(9px * var(--ui-scale));
+  padding:0 calc(12px * var(--ui-scale));
+  display:flex;
+  align-items:center;
+  gap:calc(9px * var(--ui-scale));
+  flex:none;
+  border:1px solid #324b5e;
+  border-radius:calc(8px * var(--ui-scale));
+  background:linear-gradient(180deg,#142432,#101d29);
+}
+#app[data-page="sell"] .sell-inventory-search .search-icon { width:calc(18px * var(--ui-scale)); height:calc(18px * var(--ui-scale)); flex:none; }
+#app[data-page="sell"] .sell-inventory-search input {
+  width:100%;
+  min-width:0;
+  border:0;
+  outline:0;
+  background:transparent;
+  color:#e6edf3;
+  font-size:calc(12.5px * var(--ui-scale));
+}
+#app[data-page="sell"] .sell-inventory-search input::placeholder { color:#8092a2; }
+#app[data-page="sell"] .sell-inventory-list {
+  flex:1;
+  min-height:0;
+  overflow:auto;
+  padding:0 calc(9px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  scrollbar-width:thin;
+  scrollbar-color:#375266 transparent;
+}
+#app[data-page="sell"] .sell-inventory-row {
+  min-height:calc(58px * var(--ui-scale));
+  padding:calc(7px * var(--ui-scale)) calc(7px * var(--ui-scale));
+  display:grid;
+  grid-template-columns:calc(43px * var(--ui-scale)) minmax(0,1fr) auto calc(34px * var(--ui-scale));
+  align-items:center;
+  gap:calc(9px * var(--ui-scale));
+  border:1px solid transparent;
+  border-radius:calc(8px * var(--ui-scale));
+  cursor:default;
+}
+#app[data-page="sell"] .sell-inventory-row:hover { background:#142532; border-color:#284255; }
+#app[data-page="sell"] .sell-inventory-row.configured { background:linear-gradient(90deg,rgba(58,129,198,.16),rgba(39,87,129,.05)); }
+#app[data-page="sell"] .sell-inventory-thumb-box,
+#app[data-page="sell"] .sell-sale-thumb-box,
+#app[data-page="sell"] .sell-info-icon-box {
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  border:1px solid #3b5569;
+  background:linear-gradient(180deg,#1a2d3d,#13222f);
+}
+#app[data-page="sell"] .sell-inventory-thumb-box { width:calc(43px * var(--ui-scale)); height:calc(43px * var(--ui-scale)); border-radius:calc(7px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-inventory-thumb { width:calc(39px * var(--ui-scale)); height:calc(39px * var(--ui-scale)); object-fit:contain; }
+#app[data-page="sell"] .sell-inventory-copy,
+#app[data-page="sell"] .sell-sale-copy { min-width:0; }
+#app[data-page="sell"] .sell-inventory-name,
+#app[data-page="sell"] .sell-sale-name {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:#edf2f6;
+  font-size:calc(12.5px * var(--ui-scale));
+  font-weight:610;
+}
+#app[data-page="sell"] .sell-inventory-kind,
+#app[data-page="sell"] .sell-sale-kind {
+  margin-top:calc(3px * var(--ui-scale));
+  color:#8193a2;
+  font-size:calc(10.5px * var(--ui-scale));
+}
+#app[data-page="sell"] .sell-inventory-count { min-width:calc(24px * var(--ui-scale)); text-align:right; color:#d9e3eb; font-size:calc(12.5px * var(--ui-scale)); font-weight:620; }
+#app[data-page="sell"] .sell-inventory-add {
+  width:calc(31px * var(--ui-scale));
+  height:calc(31px * var(--ui-scale));
+  position:relative;
+  border:1px solid #3e586b;
+  border-radius:calc(7px * var(--ui-scale));
+  background:#1b3142;
+  cursor:pointer;
+}
+#app[data-page="sell"] .sell-inventory-add::before,
+#app[data-page="sell"] .sell-inventory-add::after {
+  content:"";
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:calc(12px * var(--ui-scale));
+  height:calc(2px * var(--ui-scale));
+  border-radius:999px;
+  background:#dfe8ef;
+  transform:translate(-50%,-50%);
+}
+#app[data-page="sell"] .sell-inventory-add::after { transform:translate(-50%,-50%) rotate(90deg); }
+#app[data-page="sell"] .sell-inventory-add:hover:not(:disabled) { border-color:#5a7a91; background:#24445a; }
+#app[data-page="sell"] .sell-inventory-add.added { border-color:rgba(55,221,151,.45); background:rgba(35,190,122,.14); }
+#app[data-page="sell"] .sell-inventory-add.added::before { width:calc(12px * var(--ui-scale)); height:calc(7px * var(--ui-scale)); border-left:calc(2px * var(--ui-scale)) solid #5ce4a9; border-bottom:calc(2px * var(--ui-scale)) solid #5ce4a9; background:transparent; transform:translate(-50%,-62%) rotate(-45deg); }
+#app[data-page="sell"] .sell-inventory-add.added::after { display:none; }
+#app[data-page="sell"] .sell-inventory-add:disabled { opacity:.5; cursor:default; }
+
+#app[data-page="sell"] .sell-list-head { border-bottom:0; }
+#app[data-page="sell"] .sell-tools { position:relative; z-index:15; }
+#app[data-page="sell"] .sell-tools-button { display:flex; align-items:center; justify-content:center; gap:calc(2px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-tools-button span { width:calc(3px * var(--ui-scale)); height:calc(3px * var(--ui-scale)); border-radius:50%; background:currentColor; }
+#app[data-page="sell"] .sell-tools-panel {
+  position:absolute;
+  right:0;
+  top:calc(38px * var(--ui-scale));
+  width:calc(255px * var(--ui-scale));
+  padding:calc(7px * var(--ui-scale));
+  border:1px solid #405b70;
+  border-radius:calc(9px * var(--ui-scale));
+  background:#0d1a24;
+  box-shadow:0 calc(16px * var(--ui-scale)) calc(38px * var(--ui-scale)) rgba(0,0,0,.48);
+  z-index:100;
+}
+#app[data-page="sell"] .sell-tool-row {
+  width:100%;
+  min-height:calc(37px * var(--ui-scale));
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:calc(10px * var(--ui-scale));
+  padding:0 calc(10px * var(--ui-scale));
+  border:0;
+  border-radius:calc(6px * var(--ui-scale));
+  background:transparent;
+  color:#bcc9d4;
+  font-size:calc(11px * var(--ui-scale));
+  text-align:left;
+  cursor:pointer;
+}
+#app[data-page="sell"] .sell-tool-row strong { color:#7feab7; font-size:calc(10.5px * var(--ui-scale)); font-weight:620; }
+#app[data-page="sell"] .sell-tool-row:hover:not(:disabled) { background:#172936; color:#f0f4f7; }
+#app[data-page="sell"] .sell-tool-row:disabled { opacity:.45; cursor:default; }
+#app[data-page="sell"] .sell-tool-danger strong { color:#ff8798; }
+
+#app[data-page="sell"] .sell-table-head,
+#app[data-page="sell"] .sell-sale-row {
+  display:grid;
+  grid-template-columns:minmax(calc(155px * var(--ui-scale)),2fr) minmax(calc(90px * var(--ui-scale)),1fr) minmax(calc(68px * var(--ui-scale)),.72fr) minmax(calc(62px * var(--ui-scale)),.62fr) calc(58px * var(--ui-scale)) calc(32px * var(--ui-scale));
+  column-gap:calc(7px * var(--ui-scale));
+  align-items:center;
+}
+#app[data-page="sell"] .sell-table-head {
+  min-height:calc(43px * var(--ui-scale));
+  padding:0 calc(12px * var(--ui-scale));
+  flex:none;
+  border-top:1px solid #31495b;
+  border-bottom:1px solid #31495b;
+  background:#12222f;
+}
+#app[data-page="sell"] .sell-table-head button {
+  min-width:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:#a9b8c5;
+  font-size:calc(10.5px * var(--ui-scale));
+  text-align:left;
+  cursor:pointer;
+}
+#app[data-page="sell"] .sell-table-head button span { margin-left:calc(3px * var(--ui-scale)); color:#6c8293; }
+#app[data-page="sell"] .sell-table-head button.active { color:#e6eef4; }
+#app[data-page="sell"] .sell-table-head button.active span { color:#75e7b4; }
+#app[data-page="sell"] .sell-sale-list {
+  flex:1;
+  min-height:0;
+  overflow:auto;
+  scrollbar-width:thin;
+  scrollbar-color:#375266 transparent;
+}
+#app[data-page="sell"] .sell-sale-row {
+  min-height:calc(64px * var(--ui-scale));
+  padding:calc(7px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  border-bottom:1px solid #263b4a;
+  background:rgba(12,25,34,.20);
+  cursor:pointer;
+  transition:background .12s ease,box-shadow .12s ease;
+}
+#app[data-page="sell"] .sell-sale-row:hover { background:#142633; }
+#app[data-page="sell"] .sell-sale-row.selected { background:linear-gradient(90deg,rgba(62,137,211,.33),rgba(46,102,161,.10)); box-shadow:inset calc(3px * var(--ui-scale)) 0 0 #6fb8ff; }
+#app[data-page="sell"] .sell-sale-row.disabled-row { opacity:.63; }
+#app[data-page="sell"] .sell-sale-item { min-width:0; display:flex; align-items:center; gap:calc(9px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-sale-thumb-box { width:calc(43px * var(--ui-scale)); height:calc(43px * var(--ui-scale)); flex:none; border-radius:calc(7px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-sale-thumb { width:calc(39px * var(--ui-scale)); height:calc(39px * var(--ui-scale)); object-fit:contain; }
+#app[data-page="sell"] .sell-sale-input-cell { height:calc(35px * var(--ui-scale)); display:flex; align-items:center; border:1px solid #344f63; border-radius:calc(6px * var(--ui-scale)); background:#142633; overflow:hidden; }
+#app[data-page="sell"] .sell-inline-prefix { padding-left:calc(8px * var(--ui-scale)); color:#9fb0be; font-size:calc(11px * var(--ui-scale)); flex:none; }
+#app[data-page="sell"] .sell-inline-input {
+  width:100%;
+  min-width:0;
+  height:calc(35px * var(--ui-scale));
+  padding:0 calc(7px * var(--ui-scale));
+  border:1px solid #344f63;
+  border-radius:calc(6px * var(--ui-scale));
+  outline:0;
+  background:#142633;
+  color:#e7eef4;
+  font-size:calc(11.5px * var(--ui-scale));
+}
+#app[data-page="sell"] .sell-sale-input-cell .sell-inline-input { border:0; background:transparent; }
+#app[data-page="sell"] .sell-inline-input:focus,
+#app[data-page="sell"] .sell-sale-input-cell:focus-within { border-color:#4d7a96; box-shadow:0 0 0 1px rgba(74,143,185,.10); }
+#app[data-page="sell"] .sell-inline-input:disabled { opacity:.65; }
+#app[data-page="sell"] input[type="number"]::-webkit-inner-spin-button,
+#app[data-page="sell"] input[type="number"]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+#app[data-page="sell"] .sell-sale-remaining { color:#50dfa0; font-size:calc(12px * var(--ui-scale)); font-weight:660; text-align:center; }
+#app[data-page="sell"] .sell-sale-status { display:flex; justify-content:center; }
+#app[data-page="sell"] .sell-sale-row .toggle { width:calc(44px * var(--ui-scale)); height:calc(24px * var(--ui-scale)); border-color:#526c80; }
+#app[data-page="sell"] .sell-sale-row .toggle::after { width:calc(16px * var(--ui-scale)); height:calc(16px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-sale-row .toggle.on::after { transform:translateX(calc(20px * var(--ui-scale))); }
+#app[data-page="sell"] .sell-sale-trash { width:calc(31px * var(--ui-scale)); height:calc(31px * var(--ui-scale)); }
+
+#app[data-page="sell"] .sell-summary {
+  min-height:calc(86px * var(--ui-scale));
+  padding:calc(11px * var(--ui-scale)) calc(14px * var(--ui-scale));
+  flex:none;
+  border-top:1px solid #3a5365;
+  background:linear-gradient(180deg,#132431,#0f1d28);
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:calc(8px * var(--ui-scale));
+}
+#app[data-page="sell"] .sell-summary-main { display:flex; justify-content:center; gap:calc(24px * var(--ui-scale)); color:#9eb0bf; font-size:calc(11px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-summary-main strong { color:#dce5ec; font-weight:620; }
+#app[data-page="sell"] .sell-summary-income { display:flex; align-items:center; justify-content:center; gap:calc(9px * var(--ui-scale)); color:#9fb0be; font-size:calc(12px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-summary-income strong { color:#4fe0a0; font-size:calc(18px * var(--ui-scale)); font-weight:720; }
+#app[data-page="sell"] .sell-summary-chart { width:calc(24px * var(--ui-scale)); height:calc(24px * var(--ui-scale)); position:relative; border-left:calc(2px * var(--ui-scale)) solid #7aa1c3; border-bottom:calc(2px * var(--ui-scale)) solid #7aa1c3; }
+#app[data-page="sell"] .sell-summary-chart::before { content:""; position:absolute; left:calc(4px * var(--ui-scale)); bottom:calc(3px * var(--ui-scale)); width:calc(4px * var(--ui-scale)); height:calc(7px * var(--ui-scale)); background:#7aa1c3; box-shadow:calc(6px * var(--ui-scale)) calc(-4px * var(--ui-scale)) 0 #7aa1c3,calc(12px * var(--ui-scale)) calc(-9px * var(--ui-scale)) 0 #7aa1c3; }
+
+#app[data-page="sell"] .sell-info-panel { padding:calc(16px * var(--ui-scale)); display:flex; flex-direction:column; }
+#app[data-page="sell"] .sell-info-heading { flex:none; padding-bottom:calc(12px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-info-heading h2 { font-size:calc(17px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-info-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:calc(7px * var(--ui-scale)); color:#91a2b0; text-align:center; }
+#app[data-page="sell"] .sell-info-empty strong { color:#c8d5de; font-size:calc(14px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-info-empty span { font-size:calc(11px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-info-empty-icon { width:calc(48px * var(--ui-scale)); height:calc(48px * var(--ui-scale)); border:1px solid #3c566a; border-radius:calc(12px * var(--ui-scale)); position:relative; opacity:.7; }
+#app[data-page="sell"] .sell-info-empty-icon::before { content:""; position:absolute; width:calc(18px * var(--ui-scale)); height:calc(18px * var(--ui-scale)); left:50%; top:50%; transform:translate(-50%,-50%) rotate(45deg); border:calc(2px * var(--ui-scale)) solid #70899b; }
+#app[data-page="sell"] .sell-info-content { flex:1; min-height:0; display:flex; flex-direction:column; gap:calc(12px * var(--ui-scale)); overflow:auto; padding-right:calc(2px * var(--ui-scale)); scrollbar-width:thin; scrollbar-color:#375266 transparent; }
+#app[data-page="sell"] .sell-info-top { display:flex; align-items:center; gap:calc(13px * var(--ui-scale)); flex:none; }
+#app[data-page="sell"] .sell-info-icon-box { width:calc(66px * var(--ui-scale)); height:calc(66px * var(--ui-scale)); flex:none; border-radius:calc(9px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-info-icon { width:calc(61px * var(--ui-scale)); height:calc(61px * var(--ui-scale)); object-fit:contain; }
+#app[data-page="sell"] .sell-info-title-wrap { min-width:0; }
+#app[data-page="sell"] .sell-info-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#f3f6f8; font-size:calc(16px * var(--ui-scale)); font-weight:690; }
+#app[data-page="sell"] .sell-info-kind { margin-top:calc(5px * var(--ui-scale)); color:#91a2b1; font-size:calc(11px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-stock-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border:1px solid #334c5e; border-radius:calc(8px * var(--ui-scale)); overflow:hidden; background:#10202c; flex:none; }
+#app[data-page="sell"] .sell-stock-grid > div { min-width:0; min-height:calc(62px * var(--ui-scale)); padding:calc(10px * var(--ui-scale)); border-right:1px solid #2a4050; display:flex; flex-direction:column; gap:calc(5px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-stock-grid > div:last-child { border-right:0; }
+#app[data-page="sell"] .sell-stock-grid span { color:#778b9b; font-size:calc(9.5px * var(--ui-scale)); white-space:nowrap; }
+#app[data-page="sell"] .sell-stock-grid strong { color:#d8e2e9; font-size:calc(13px * var(--ui-scale)); font-weight:650; white-space:nowrap; }
+#app[data-page="sell"] .sell-stock-grid > div:nth-child(3) strong { color:#51dfa0; }
+#app[data-page="sell"] .sell-info-fields { display:grid; grid-template-columns:1fr; gap:calc(9px * var(--ui-scale)); flex:none; }
+#app[data-page="sell"] .sell-info-field { display:grid; grid-template-columns:minmax(calc(105px * var(--ui-scale)),.9fr) minmax(0,1.1fr); align-items:center; gap:calc(10px * var(--ui-scale)); color:#9dafbc; font-size:calc(11px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-field-input-wrap { min-width:0; height:calc(40px * var(--ui-scale)); display:flex; align-items:center; border:1px solid #3b566b; border-radius:calc(7px * var(--ui-scale)); background:#142633; overflow:hidden; }
+#app[data-page="sell"] .sell-field-prefix { padding-left:calc(10px * var(--ui-scale)); color:#9eafbd; font-size:calc(11px * var(--ui-scale)); flex:none; }
+#app[data-page="sell"] .sell-field-input-wrap input { width:100%; min-width:0; height:100%; padding:0 calc(9px * var(--ui-scale)); border:0; outline:0; background:transparent; color:#e7eef4; font-size:calc(12px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-field-input-wrap:focus-within { border-color:#527a95; }
+#app[data-page="sell"] .sell-max-button { height:100%; min-width:calc(50px * var(--ui-scale)); padding:0 calc(8px * var(--ui-scale)); border:0; border-left:1px solid #334d60; background:#12232f; color:#8297a8; font-size:calc(10px * var(--ui-scale)); cursor:pointer; }
+#app[data-page="sell"] .sell-max-button.active { color:#71e9b2; background:rgba(34,185,119,.13); }
+#app[data-page="sell"] .sell-max-button:disabled { opacity:.5; cursor:default; }
+#app[data-page="sell"] .sell-income-row { min-height:calc(40px * var(--ui-scale)); display:flex; align-items:center; justify-content:space-between; gap:calc(10px * var(--ui-scale)); color:#9dafbc; font-size:calc(11px * var(--ui-scale)); flex:none; }
+#app[data-page="sell"] .sell-income-row strong { color:#4fe0a0; font-size:calc(16px * var(--ui-scale)); font-weight:720; }
+#app[data-page="sell"] .sell-market-card { padding:calc(12px * var(--ui-scale)); border:1px solid #314a5c; border-radius:calc(8px * var(--ui-scale)); background:linear-gradient(180deg,#132431,#10202b); flex:none; }
+#app[data-page="sell"] .sell-market-card header { display:flex; align-items:center; gap:calc(8px * var(--ui-scale)); margin-bottom:calc(10px * var(--ui-scale)); color:#d4dee6; font-size:calc(11.5px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-market-icon { width:calc(16px * var(--ui-scale)); height:calc(16px * var(--ui-scale)); position:relative; border-left:calc(2px * var(--ui-scale)) solid #809eb8; border-bottom:calc(2px * var(--ui-scale)) solid #809eb8; }
+#app[data-page="sell"] .sell-market-icon::before { content:""; position:absolute; left:calc(3px * var(--ui-scale)); bottom:calc(2px * var(--ui-scale)); width:calc(3px * var(--ui-scale)); height:calc(5px * var(--ui-scale)); background:#809eb8; box-shadow:calc(5px * var(--ui-scale)) calc(-3px * var(--ui-scale)) 0 #809eb8,calc(10px * var(--ui-scale)) calc(-6px * var(--ui-scale)) 0 #809eb8; }
+#app[data-page="sell"] .sell-market-grid { display:grid; grid-template-columns:1fr auto; row-gap:calc(7px * var(--ui-scale)); column-gap:calc(10px * var(--ui-scale)); font-size:calc(10.5px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-market-grid span { color:#8296a7; }
+#app[data-page="sell"] .sell-market-grid strong { color:#d8e2e9; font-weight:600; text-align:right; }
+#app[data-page="sell"] .sell-start-button { min-height:calc(49px * var(--ui-scale)); display:flex; align-items:center; justify-content:center; gap:calc(9px * var(--ui-scale)); flex:none; border:1px solid rgba(67,232,163,.58); border-radius:calc(8px * var(--ui-scale)); background:linear-gradient(180deg,#4be6a4 0%,#2dcc89 54%,#20b977 100%); color:#06150f; font-size:calc(14px * var(--ui-scale)); font-weight:720; cursor:pointer; box-shadow:inset 0 1px 0 rgba(255,255,255,.30),0 0 calc(22px * var(--ui-scale)) rgba(43,213,143,.17); }
+#app[data-page="sell"] .sell-start-button:hover:not(:disabled) { filter:brightness(1.05); }
+#app[data-page="sell"] .sell-start-button.cancel { border-color:rgba(239,80,104,.55); background:linear-gradient(180deg,#ec6d7f,#c8495d); color:#fff; box-shadow:0 0 calc(18px * var(--ui-scale)) rgba(220,73,93,.14); }
+#app[data-page="sell"] .sell-start-button:disabled { opacity:.55; cursor:default; }
+#app[data-page="sell"] .sell-play-icon { width:0; height:0; border-top:calc(7px * var(--ui-scale)) solid transparent; border-bottom:calc(7px * var(--ui-scale)) solid transparent; border-left:calc(11px * var(--ui-scale)) solid currentColor; }
+#app[data-page="sell"] .sell-start-button.cancel .sell-play-icon { width:calc(12px * var(--ui-scale)); height:calc(12px * var(--ui-scale)); border:0; background:currentColor; }
+#app[data-page="sell"] .sell-autosave-note { min-height:calc(45px * var(--ui-scale)); padding:calc(8px * var(--ui-scale)) calc(10px * var(--ui-scale)); display:flex; align-items:flex-start; gap:calc(8px * var(--ui-scale)); flex:none; border:1px solid #31495b; border-radius:calc(8px * var(--ui-scale)); background:#10202b; color:#8ea0af; font-size:calc(10px * var(--ui-scale)); line-height:1.35; }
+#app[data-page="sell"] .sell-autosave-note small { color:#697e8e; font-size:calc(9px * var(--ui-scale)); }
+#app[data-page="sell"] .sell-info-dot { width:calc(8px * var(--ui-scale)); height:calc(8px * var(--ui-scale)); margin-top:calc(3px * var(--ui-scale)); border-radius:50%; background:#35e49a; box-shadow:0 0 calc(10px * var(--ui-scale)) rgba(53,228,154,.65); flex:none; }
+#app[data-page="sell"] .sell-mini-empty { margin:auto; padding:calc(20px * var(--ui-scale)); color:#758999; font-size:calc(11.5px * var(--ui-scale)); text-align:center; }
+
+#app[data-page="sell"] .custom-select-menu { z-index:2147483550 !important; }
+
+@media (max-width:1180px), (max-height:680px) {
+  #app[data-page="sell"] .sell-workspace {
+    grid-template-columns:minmax(calc(215px * var(--ui-scale)),.76fr) minmax(calc(365px * var(--ui-scale)),1.42fr) minmax(calc(245px * var(--ui-scale)),.86fr);
+    gap:calc(9px * var(--ui-scale));
+  }
+  #app[data-page="sell"] .sell-panel { border-radius:calc(10px * var(--ui-scale)); }
+  #app[data-page="sell"] .sell-card-head { min-height:calc(62px * var(--ui-scale)); padding:calc(12px * var(--ui-scale)); }
+  #app[data-page="sell"] .sell-card-head h2 { font-size:calc(17px * var(--ui-scale)); }
+  #app[data-page="sell"] .sell-info-panel { padding:calc(12px * var(--ui-scale)); }
+  #app[data-page="sell"] .sell-stock-grid span { font-size:calc(8.5px * var(--ui-scale)); }
+  #app[data-page="sell"] .sell-info-field { grid-template-columns:1fr; gap:calc(5px * var(--ui-scale)); }
+  #app[data-page="sell"] .sell-summary { min-height:calc(72px * var(--ui-scale)); }
+}
+
+#app[data-page="sell"] .window[data-ui-density="tiny"] .page-header-hint,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .save-state::after { display:none !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .save-state { min-width:auto; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-workspace {
+  grid-template-columns:minmax(calc(190px * var(--ui-scale)),.72fr) minmax(calc(315px * var(--ui-scale)),1.38fr) minmax(calc(220px * var(--ui-scale)),.82fr);
+}

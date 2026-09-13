@@ -1,0 +1,722 @@
+/* v17 visual-only refinement. No outer window geometry changes here. */
+
+#app[data-page="buy"] .window {
+  border-color: #3a5165 !important;
+  background: #09131d !important;
+  box-shadow:
+    0 30px 90px rgba(0,0,0,.58),
+    inset 0 0 0 1px rgba(120,164,197,.045) !important;
+}
+
+#app[data-page="buy"] .topbar {
+  background:
+    radial-gradient(circle at 45% -160%, rgba(84,145,205,.24), transparent 54%),
+    linear-gradient(180deg, rgba(18,31,44,.995), rgba(9,18,27,.995)) !important;
+  border-bottom-color: #2a3d4d !important;
+}
+
+/* Real generated Arizona-style emblem. */
+#app[data-page="buy"] .brand-mark {
+  background: url('/static/assets/arizona-logo.webp') center/contain no-repeat !important;
+  filter: drop-shadow(0 0 calc(10px * var(--ui-scale)) rgba(70,136,255,.28)) !important;
+}
+#app[data-page="buy"] .brand-mark::before,
+#app[data-page="buy"] .brand-mark::after,
+#app[data-page="buy"] .brand-mark span {
+  display: none !important;
+}
+#app[data-page="buy"] .brand-title {
+  text-shadow: 0 1px 0 rgba(255,255,255,.025), 0 0 calc(16px * var(--ui-scale)) rgba(111,151,198,.06);
+}
+#app[data-page="buy"] .brand-subtitle { color:#9aadc0 !important; }
+
+#app[data-page="buy"] .mode-switch {
+  border-color:#344c60 !important;
+  background:linear-gradient(180deg,#0d1823,#09131c) !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.018) !important;
+}
+#app[data-page="buy"] .mode-btn { transition:background .16s,color .16s,box-shadow .16s !important; }
+#app[data-page="buy"] .mode-btn.active {
+  background:linear-gradient(180deg,#3678df,#244fae) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 calc(18px * var(--ui-scale)) rgba(59,120,239,.24) !important;
+}
+
+/* Desktop-style controls without text glyph artifacts. */
+#app[data-page="buy"] .window-btn {
+  position:relative !important;
+  font-size:0 !important;
+  color:#b7c7d8 !important;
+  transition:background .14s,border-color .14s,opacity .14s !important;
+}
+#app[data-page="buy"] .window-btn::before,
+#app[data-page="buy"] .window-btn::after {
+  content:"";
+  position:absolute;
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  pointer-events:none;
+}
+#app[data-page="buy"] .window-btn[data-action="window-minimize"]::before {
+  width:34%;
+  height:1px;
+  background:#b8c7d5;
+}
+#app[data-page="buy"] .window-btn[data-action="window-maximize"]::before {
+  width:29%;
+  height:29%;
+  border:1.4px solid #b8c7d5;
+  border-radius:1px;
+}
+#app[data-page="buy"] .window-btn[data-action="close"]::before,
+#app[data-page="buy"] .window-btn[data-action="close"]::after {
+  width:38%;
+  height:1.4px;
+  background:#b8c7d5;
+  border-radius:2px;
+}
+#app[data-page="buy"] .window-btn[data-action="close"]::before { transform:translate(-50%,-50%) rotate(45deg); }
+#app[data-page="buy"] .window-btn[data-action="close"]::after { transform:translate(-50%,-50%) rotate(-45deg); }
+#app[data-page="buy"] .window-btn:hover {
+  background:#142330 !important;
+  border-color:#31495d !important;
+}
+#app[data-page="buy"] .window-btn[data-action="close"]:hover {
+  background:rgba(220,64,79,.17) !important;
+  border-color:rgba(239,80,104,.35) !important;
+}
+
+#app[data-page="buy"] .sidebar {
+  background:
+    radial-gradient(circle at 24% 30%, rgba(45,108,158,.10), transparent 42%),
+    linear-gradient(180deg,#0b1621,#08121b 72%,#09131d) !important;
+  border-right-color:#253847 !important;
+}
+#app[data-page="buy"] .nav-item {
+  color:#c0ccda !important;
+  transition:background .15s,border-color .15s,color .15s,box-shadow .15s !important;
+}
+#app[data-page="buy"] .nav-item:not(.active):not(:disabled):hover,
+#app[data-page="buy"] .nav-item.disabled:hover {
+  background:rgba(30,48,63,.55) !important;
+}
+#app[data-page="buy"] .nav-item.active {
+  background:
+    radial-gradient(circle at 10% 50%,rgba(64,247,169,.18),transparent 40%),
+    linear-gradient(90deg,rgba(25,201,124,.34),rgba(17,126,84,.10)) !important;
+  border-color:rgba(65,234,157,.54) !important;
+  box-shadow:
+    inset calc(4px * var(--ui-scale)) 0 0 #54efa9,
+    inset 0 0 calc(28px * var(--ui-scale)) rgba(43,212,143,.055),
+    0 0 calc(26px * var(--ui-scale)) rgba(44,218,143,.12) !important;
+}
+#app[data-page="buy"] .nav-item.active .nav-icon {
+  filter:drop-shadow(0 0 calc(6px * var(--ui-scale)) rgba(83,239,171,.34));
+}
+
+/* Arizona RP card: replace fake bars with the generated cactus art. */
+#app[data-page="buy"] .arizona-card {
+  background:
+    radial-gradient(circle at 75% 68%,rgba(77,113,151,.20),transparent 38%),
+    linear-gradient(135deg,#172638,#0d1824 68%,#172638) !important;
+  border-color:#30485b !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.018) !important;
+}
+#app[data-page="buy"] .arizona-card-glow { display:none !important; }
+#app[data-page="buy"] .arizona-card::before {
+  right:-3% !important;
+  bottom:-4% !important;
+  width:48% !important;
+  height:88% !important;
+  opacity:.25 !important;
+  background:url('/static/assets/arizona-cactus.webp') right bottom/contain no-repeat !important;
+  filter:saturate(.65) brightness(.85) contrast(.96) !important;
+}
+#app[data-page="buy"] .arizona-card-title,
+#app[data-page="buy"] .arizona-card-subtitle,
+#app[data-page="buy"] .arizona-card::after {
+  position:relative !important;
+  z-index:2 !important;
+}
+#app[data-page="buy"] .arizona-card::after { color:rgba(184,201,221,.60) !important; }
+
+#app[data-page="buy"] .runtime-state .status-dot {
+  background:#46e79f !important;
+  box-shadow:0 0 calc(9px * var(--ui-scale)) rgba(70,231,159,.7) !important;
+}
+
+#app[data-page="buy"] .content {
+  background:
+    radial-gradient(circle at 48% -22%,rgba(85,139,190,.075),transparent 40%),
+    radial-gradient(circle at 93% 7%,rgba(49,111,164,.055),transparent 27%),
+    #0a141e !important;
+}
+
+#app[data-page="buy"] .page-header {
+  border-color:#32495b !important;
+  background:
+    radial-gradient(circle at 45% -95%,rgba(112,158,204,.19),transparent 52%),
+    linear-gradient(110deg,#172839,#0f1c28 65%,#142332) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+#app[data-page="buy"] .page-header-icon {
+  background-color:rgba(31,182,113,.17) !important;
+  border-color:rgba(70,238,163,.62) !important;
+  box-shadow:
+    inset 0 0 calc(24px * var(--ui-scale)) rgba(41,213,143,.075),
+    0 0 calc(20px * var(--ui-scale)) rgba(41,213,143,.09) !important;
+}
+#app[data-page="buy"] .page-header h1 { text-shadow:0 1px 0 rgba(255,255,255,.025) !important; }
+#app[data-page="buy"] .page-header p { color:#a3b4c6 !important; }
+#app[data-page="buy"] .config-label { color:#aab9c8 !important; }
+#app[data-page="buy"] .select {
+  background:linear-gradient(180deg,#101c27,#0c1721) !important;
+  border-color:#3a5164 !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+#app[data-page="buy"] .badge-success::before {
+  content:"";
+  width:.65em;
+  height:.65em;
+  margin-right:.55em;
+  border:2px solid #3ce49a;
+  border-radius:50%;
+  box-shadow:0 0 .5em rgba(60,228,154,.36);
+}
+#app[data-page="buy"] .save-state { color:#aab8c8 !important; }
+
+/* Replace the fake letter watermark with the generated emblem. */
+#app[data-page="buy"] .hero-watermark {
+  width:calc(176px * var(--ui-scale)) !important;
+  height:calc(176px * var(--ui-scale)) !important;
+  font-size:0 !important;
+  color:transparent !important;
+  background:url('/static/assets/arizona-logo.webp') center/contain no-repeat !important;
+  opacity:.085 !important;
+  transform:none !important;
+  filter:saturate(.55) brightness(.72) !important;
+}
+
+#app[data-page="buy"] .toolbar {
+  border-color:#31495c !important;
+  background:linear-gradient(180deg,#111f2c,#0c1822) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.016) !important;
+}
+#app[data-page="buy"] .search-wrap,
+#app[data-page="buy"] .btn-secondary,
+#app[data-page="buy"] .more-actions > summary {
+  background:linear-gradient(180deg,#101d29,#0c1822) !important;
+  border-color:#354d60 !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.015) !important;
+}
+#app[data-page="buy"] .search-wrap:focus-within {
+  border-color:#426789 !important;
+  box-shadow:0 0 0 1px rgba(66,103,137,.24),0 0 calc(16px * var(--ui-scale)) rgba(49,111,164,.08) !important;
+}
+#app[data-page="buy"] .btn-secondary:hover,
+#app[data-page="buy"] .more-actions > summary:hover {
+  background:#172838 !important;
+  border-color:#49677e !important;
+}
+#app[data-page="buy"] #startButton {
+  background:linear-gradient(180deg,#34da92,#1eb976) !important;
+  border-color:rgba(103,250,181,.82) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.20),
+    inset 0 -1px 0 rgba(0,0,0,.10),
+    0 0 calc(24px * var(--ui-scale)) rgba(41,213,143,.17) !important;
+  text-shadow:0 1px 1px rgba(0,0,0,.18) !important;
+}
+#app[data-page="buy"] #startButton:hover { filter:brightness(1.055) saturate(1.04) !important; }
+
+#app[data-page="buy"] .table-card,
+#app[data-page="buy"] .detail-card {
+  border-color:#31485a !important;
+  background:linear-gradient(180deg,#0f1b26,#0b1620) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.012) !important;
+}
+#app[data-page="buy"] .table-head {
+  background:linear-gradient(180deg,#152534,#12202d) !important;
+  color:#c0cede !important;
+  border-bottom-color:#354c5e !important;
+}
+#app[data-page="buy"] .trade-row {
+  border-bottom-color:#20313e !important;
+  transition:background .14s,box-shadow .14s,opacity .14s !important;
+}
+#app[data-page="buy"] .trade-row:hover { background:#122331 !important; }
+#app[data-page="buy"] .trade-row.selected {
+  background:linear-gradient(90deg,rgba(55,126,197,.27),rgba(48,103,161,.09)) !important;
+  box-shadow:inset 2px 0 0 #58a5ff, inset 0 0 calc(22px * var(--ui-scale)) rgba(67,132,196,.04) !important;
+}
+#app[data-page="buy"] .item-thumb-box {
+  background:linear-gradient(180deg,#142331,#0f1b26) !important;
+  border-color:#334b5e !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.02) !important;
+}
+#app[data-page="buy"] .toggle {
+  border-color:#40596c !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.015) !important;
+}
+#app[data-page="buy"] .toggle.on {
+  background:linear-gradient(180deg,rgba(37,206,130,.90),rgba(24,166,103,.90)) !important;
+  border-color:rgba(78,234,161,.80) !important;
+  box-shadow:0 0 calc(10px * var(--ui-scale)) rgba(45,210,136,.10) !important;
+}
+#app[data-page="buy"] .trash:hover { background:rgba(239,80,104,.09) !important; }
+
+#app[data-page="buy"] .detail-tabs {
+  background:#101d29 !important;
+  border-color:#31495c !important;
+}
+#app[data-page="buy"] .detail-tab {
+  color:#9eafc0 !important;
+  transition:background .14s,color .14s,border-color .14s,box-shadow .14s !important;
+}
+#app[data-page="buy"] .detail-tab.active {
+  color:#9af5c7 !important;
+  border-color:rgba(62,226,150,.56) !important;
+  background:linear-gradient(180deg,rgba(40,201,128,.18),rgba(26,143,91,.09)) !important;
+  box-shadow:inset 0 0 calc(16px * var(--ui-scale)) rgba(41,213,143,.04),0 0 calc(10px * var(--ui-scale)) rgba(41,213,143,.04) !important;
+}
+#app[data-page="buy"] .field-input {
+  background:linear-gradient(180deg,#121f2b,#0f1b26) !important;
+  border-color:#354c5e !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.012) !important;
+}
+#app[data-page="buy"] .field-input:focus {
+  border-color:#4e7190 !important;
+  box-shadow:0 0 0 1px rgba(78,113,144,.20) !important;
+}
+#app[data-page="buy"] .autosave-note {
+  background:linear-gradient(180deg,#121f2b,#0f1b26) !important;
+  border-color:#344a5b !important;
+}
+
+#app[data-page="buy"] .empty-state,
+#app[data-page="buy"] .detail-empty {
+  color:#8da0b2 !important;
+}
+#app[data-page="buy"] .empty-icon,
+#app[data-page="buy"] .detail-empty-icon {
+  color:#50708b !important;
+}
+
+#app[data-page="buy"] .more-actions-panel {
+  background:linear-gradient(180deg,#101d29,#0b1721) !important;
+  border-color:#385165 !important;
+  box-shadow:0 18px 50px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.02) !important;
+}
+
+#app[data-page="buy"] ::-webkit-scrollbar-thumb {
+  background:#31495b !important;
+}
+#app[data-page="buy"] ::-webkit-scrollbar-thumb:hover {
+  background:#3c5a70 !important;
+}
+
+/* v18 reference-matching pass. Visual/content refinements only.
+   Outer window geometry and responsive sizing intentionally remain untouched. */
+
+#app[data-page="buy"] .window {
+  border-color:#425a70 !important;
+  background:#0a1520 !important;
+  box-shadow:
+    0 30px 90px rgba(0,0,0,.58),
+    inset 0 1px 0 rgba(152,188,222,.07),
+    inset 0 0 0 1px rgba(84,130,166,.035) !important;
+}
+
+#app[data-page="buy"] .topbar {
+  background:
+    radial-gradient(ellipse at 53% -115%,rgba(75,132,190,.25),transparent 55%),
+    linear-gradient(180deg,#142334 0%,#0c1925 72%,#0a1621 100%) !important;
+  border-bottom-color:#304658 !important;
+  box-shadow:inset 0 1px 0 rgba(170,202,233,.045) !important;
+}
+
+/* Generated emblem, tuned closer to the flatter blue/violet reference. */
+#app[data-page="buy"] .brand-mark {
+  background-image:url('/static/assets/arizona-logo.webp') !important;
+  background-position:center !important;
+  background-repeat:no-repeat !important;
+  background-size:contain !important;
+  filter:saturate(.82) brightness(.91) contrast(1.02) hue-rotate(7deg)
+         drop-shadow(0 0 calc(8px * var(--ui-scale)) rgba(71,112,218,.24)) !important;
+}
+#app[data-page="buy"] .brand-title {
+  color:#f4f7fb !important;
+  font-weight:740 !important;
+  text-shadow:0 1px 0 rgba(255,255,255,.035) !important;
+}
+#app[data-page="buy"] .brand-subtitle {
+  color:#8fa4b9 !important;
+  font-weight:560 !important;
+  letter-spacing:.35px !important;
+}
+
+#app[data-page="buy"] .mode-switch {
+  border-color:#3a5266 !important;
+  background:linear-gradient(180deg,#0d1924,#09141e) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025),0 0 0 1px rgba(0,0,0,.12) !important;
+}
+#app[data-page="buy"] .mode-btn { color:#9eb0c0 !important; }
+#app[data-page="buy"] .mode-btn.active {
+  background:linear-gradient(180deg,#346cce 0%,#234ba9 100%) !important;
+  color:#f6f9ff !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.13),0 0 calc(16px * var(--ui-scale)) rgba(57,108,223,.22) !important;
+}
+#app[data-page="buy"] .window-btn::before,
+#app[data-page="buy"] .window-btn::after { background-color:#b9c9da; }
+#app[data-page="buy"] .window-btn[data-action="window-maximize"]::before { border-color:#b9c9da; background:transparent; }
+
+/* Unified line-icon treatment. The renderer injects real inline SVGs. */
+#app[data-page="buy"] .nav-icon {
+  background-image:none !important;
+  color:#b9cef0 !important;
+  filter:none !important;
+}
+#app[data-page="buy"] .nav-icon svg {
+  display:block !important;
+  width:100% !important;
+  height:100% !important;
+  overflow:visible !important;
+  stroke:currentColor !important;
+  vector-effect:non-scaling-stroke;
+}
+#app[data-page="buy"] .nav-item.active .nav-icon {
+  color:#68f2b5 !important;
+  filter:drop-shadow(0 0 calc(5px * var(--ui-scale)) rgba(74,236,165,.30)) !important;
+}
+#app[data-page="buy"] .nav-item.disabled { opacity:1 !important; }
+#app[data-page="buy"] .nav-item.disabled .nav-icon { color:#a8bedf !important; opacity:.82 !important; }
+#app[data-page="buy"] .nav-item.disabled span:last-child { color:#b2c0cf !important; opacity:.82 !important; }
+#app[data-page="buy"] .nav-item.active {
+  background:
+    radial-gradient(circle at 7% 50%,rgba(78,255,178,.22),transparent 38%),
+    linear-gradient(90deg,rgba(31,197,124,.33),rgba(18,126,86,.13)) !important;
+  border-color:rgba(67,226,153,.58) !important;
+  box-shadow:
+    inset calc(4px * var(--ui-scale)) 0 0 #57f0aa,
+    inset 0 0 calc(30px * var(--ui-scale)) rgba(49,221,151,.065),
+    0 0 calc(20px * var(--ui-scale)) rgba(46,209,142,.09) !important;
+}
+
+#app[data-page="buy"] .sidebar {
+  background:
+    radial-gradient(circle at 20% 24%,rgba(51,105,154,.10),transparent 42%),
+    linear-gradient(180deg,#0c1823 0%,#09141e 72%,#0a1520 100%) !important;
+  border-right-color:#2b4051 !important;
+}
+
+/* Reference-style Arizona RP card with generated cactus art used as a silhouette. */
+#app[data-page="buy"] .arizona-card {
+  background:
+    radial-gradient(circle at 78% 68%,rgba(83,111,151,.24),transparent 40%),
+    linear-gradient(135deg,#172638 0%,#101c29 62%,#182638 100%) !important;
+  border-color:#334a5c !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025) !important;
+}
+#app[data-page="buy"] .arizona-card::before {
+  right:-8% !important;
+  bottom:-8% !important;
+  width:62% !important;
+  height:100% !important;
+  opacity:.34 !important;
+  background:url('/static/assets/arizona-cactus.webp') right bottom/contain no-repeat !important;
+  filter:grayscale(.45) saturate(.55) brightness(.86) contrast(.92) !important;
+  transform:scale(1.08) !important;
+  transform-origin:right bottom !important;
+}
+@supports (-webkit-mask-image: url('')) {
+  #app[data-page="buy"] .arizona-card::before {
+    background:#38516a !important;
+    -webkit-mask-image:url('/static/assets/arizona-cactus.webp');
+    -webkit-mask-position:right bottom;
+    -webkit-mask-size:contain;
+    -webkit-mask-repeat:no-repeat;
+    mask-image:url('/static/assets/arizona-cactus.webp');
+    mask-position:right bottom;
+    mask-size:contain;
+    mask-repeat:no-repeat;
+    filter:none !important;
+    opacity:.31 !important;
+  }
+}
+#app[data-page="buy"] .arizona-card-title {
+  color:#f0f4f8 !important;
+  font-weight:720 !important;
+  text-transform:none !important;
+  letter-spacing:.1px !important;
+}
+#app[data-page="buy"] .arizona-card-subtitle { color:#a7b5c4 !important; }
+#app[data-page="buy"] .arizona-card::after {
+  color:rgba(178,196,218,.64) !important;
+  text-shadow:0 1px 0 rgba(0,0,0,.28) !important;
+}
+#app[data-page="buy"] .runtime-state { color:#9bacbc !important; }
+#app[data-page="buy"] .version { color:#94a5b5 !important; }
+
+#app[data-page="buy"] .content {
+  background:
+    radial-gradient(circle at 43% -15%,rgba(77,133,188,.085),transparent 40%),
+    radial-gradient(circle at 92% 7%,rgba(67,110,157,.055),transparent 26%),
+    #0b1621 !important;
+}
+
+#app[data-page="buy"] .page-header {
+  border-color:#3a5062 !important;
+  background:
+    radial-gradient(circle at 44% -90%,rgba(119,164,207,.18),transparent 52%),
+    linear-gradient(110deg,#192a3b 0%,#111e2b 64%,#162638 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025),inset 0 -1px 0 rgba(0,0,0,.13) !important;
+}
+#app[data-page="buy"] .page-header-icon {
+  color:#6af0b4 !important;
+  background:linear-gradient(145deg,rgba(43,208,137,.25),rgba(25,139,92,.12)) !important;
+  border-color:rgba(70,232,160,.64) !important;
+  box-shadow:inset 0 0 calc(24px * var(--ui-scale)) rgba(50,226,151,.07),0 0 calc(15px * var(--ui-scale)) rgba(42,202,137,.08) !important;
+}
+#app[data-page="buy"] .page-header-icon svg {
+  stroke-width:1.95 !important;
+  filter:drop-shadow(0 0 calc(4px * var(--ui-scale)) rgba(69,236,164,.20));
+}
+#app[data-page="buy"] .page-header h1 { color:#f2f5f8 !important; font-weight:720 !important; }
+#app[data-page="buy"] .page-header p { color:#a2b2c3 !important; }
+#app[data-page="buy"] .config-label { color:#a8b7c7 !important; }
+#app[data-page="buy"] .config-caption { color:#aab8c7 !important; }
+#app[data-page="buy"] .select {
+  color:#e3e9ef !important;
+  background:linear-gradient(180deg,#111f2b,#0c1822) !important;
+  border-color:#40576a !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.022) !important;
+}
+#app[data-page="buy"] .badge-success {
+  color:#86efbc !important;
+  background:linear-gradient(180deg,rgba(25,159,99,.23),rgba(20,121,78,.18)) !important;
+  border-color:rgba(51,204,134,.42) !important;
+}
+#app[data-page="buy"] .badge-success::before {
+  border-color:#4de5a0 !important;
+  box-shadow:0 0 .55em rgba(71,228,158,.40) !important;
+}
+#app[data-page="buy"] .save-state {
+  color:#a9b7c7 !important;
+  white-space:nowrap;
+}
+#app[data-page="buy"] .save-state::before {
+  content:"";
+  display:inline-block;
+  width:.65em;
+  height:.65em;
+  margin-right:.55em;
+  border-radius:50%;
+  background:#4ce49e;
+  box-shadow:0 0 .55em rgba(76,228,158,.55);
+  vertical-align:.04em;
+}
+#app[data-page="buy"] .save-state::after {
+  content:"Изменения сохраняются автоматически";
+  display:block;
+  margin-left:1.2em;
+  margin-top:.35em;
+  color:#75889c;
+  font-size:.78em;
+  line-height:1.2;
+}
+#app[data-page="buy"] .page-header-hint {
+  color:#8fa0b5 !important;
+  text-shadow:0 1px 0 rgba(0,0,0,.28) !important;
+}
+#app[data-page="buy"] .hero-watermark {
+  opacity:.145 !important;
+  filter:saturate(.55) brightness(.64) contrast(1.05) hue-rotate(5deg) !important;
+}
+
+/* Reference toolbar: only four visible controls. Secondary actions stay available by right-clicking the toolbar. */
+#app[data-page="buy"] .toolbar {
+  position:relative !important;
+  border-color:#385064 !important;
+  background:linear-gradient(180deg,#12212e,#0d1924) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.02) !important;
+}
+#app[data-page="buy"] .more-actions {
+  position:absolute !important;
+  right:0 !important;
+  top:100% !important;
+  z-index:60 !important;
+  margin:0 !important;
+  padding:0 !important;
+}
+#app[data-page="buy"] .more-actions > summary { display:none !important; }
+#app[data-page="buy"] .more-actions-panel {
+  top:calc(8px * var(--ui-scale)) !important;
+  right:0 !important;
+  border-color:#3d586d !important;
+  background:linear-gradient(180deg,#132230,#0d1924) !important;
+  box-shadow:0 20px 55px rgba(0,0,0,.58),inset 0 1px 0 rgba(255,255,255,.025) !important;
+}
+#app[data-page="buy"] .search-wrap,
+#app[data-page="buy"] .btn-secondary {
+  background:linear-gradient(180deg,#111f2c,#0d1924) !important;
+  border-color:#3b5367 !important;
+  color:#d4dde6 !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+#app[data-page="buy"] .search-wrap input { color:#e9eef3 !important; }
+#app[data-page="buy"] .search-wrap input::placeholder { color:#8ea0b3 !important; }
+#app[data-page="buy"] .search-icon { filter:brightness(1.12) !important; }
+#app[data-page="buy"] kbd {
+  color:#8fa1b3 !important;
+  border-color:#354c5e !important;
+  background:#12202c !important;
+}
+#app[data-page="buy"] .toolbar #addButton::before {
+  content:"" !important;
+  display:inline-block !important;
+  width:1.05em !important;
+  height:1.05em !important;
+  margin-right:.7em !important;
+  vertical-align:-.16em !important;
+  background:
+    linear-gradient(currentColor,currentColor) center/100% 1.5px no-repeat,
+    linear-gradient(currentColor,currentColor) center/1.5px 100% no-repeat !important;
+  opacity:.95 !important;
+}
+#app[data-page="buy"] .toolbar #averageButton::before {
+  content:"" !important;
+  display:inline-block !important;
+  width:1.08em !important;
+  height:1.08em !important;
+  margin-right:.75em !important;
+  vertical-align:-.15em !important;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23bed0e4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 20V10M9 20V4M14 20v-7M19 20V7'/%3E%3Cpath d='M2 20h20'/%3E%3C/svg%3E") center/contain no-repeat !important;
+}
+#app[data-page="buy"] #startButton {
+  color:#f8fffB !important;
+  background:linear-gradient(180deg,#39df98 0%,#21bc79 64%,#19aa6c 100%) !important;
+  border-color:rgba(105,246,181,.80) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -1px 0 rgba(0,0,0,.14),0 0 calc(22px * var(--ui-scale)) rgba(43,213,143,.16) !important;
+}
+#app[data-page="buy"] #startButton::before {
+  color:#fff !important;
+  filter:drop-shadow(0 1px 0 rgba(0,0,0,.18));
+}
+
+#app[data-page="buy"] .table-card,
+#app[data-page="buy"] .detail-card {
+  border-color:#364e61 !important;
+  background:linear-gradient(180deg,#0f1c27,#0b1721) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.015) !important;
+}
+#app[data-page="buy"] .table-head {
+  color:#bac9da !important;
+  background:linear-gradient(180deg,#172736,#132230) !important;
+  border-bottom-color:#3a5265 !important;
+  font-weight:590 !important;
+  text-transform:none !important;
+  letter-spacing:0 !important;
+}
+#app[data-page="buy"] .trade-row {
+  color:#c7d2dc !important;
+  border-bottom-color:#233642 !important;
+}
+#app[data-page="buy"] .trade-row:hover { background:#142532 !important; }
+#app[data-page="buy"] .trade-row.selected {
+  background:linear-gradient(90deg,rgba(56,126,199,.30),rgba(45,99,157,.10)) !important;
+  box-shadow:inset 2px 0 0 #58a7ff,inset 0 0 calc(25px * var(--ui-scale)) rgba(68,132,199,.045) !important;
+}
+#app[data-page="buy"] .item-name { color:#eff3f7 !important; font-weight:580 !important; }
+#app[data-page="buy"] .item-meta { color:#8b9cad !important; }
+#app[data-page="buy"] .money { color:#edf2f6 !important; }
+#app[data-page="buy"] .count { color:#c4d0da !important; }
+#app[data-page="buy"] .trade-row.buy > .count:nth-child(4) { color:#57e7a4 !important; }
+#app[data-page="buy"] .row-status-label { color:#c5d0da !important; }
+#app[data-page="buy"] .disabled-row .row-status-label { color:#96a4b3 !important; }
+#app[data-page="buy"] .item-thumb-box {
+  border-color:#385064 !important;
+  background:linear-gradient(180deg,#142433,#0f1c27) !important;
+}
+#app[data-page="buy"] .toggle {
+  background:#263846 !important;
+  border-color:#486174 !important;
+}
+#app[data-page="buy"] .toggle::after { background:#e9eef2 !important; box-shadow:0 1px 2px rgba(0,0,0,.25) !important; }
+#app[data-page="buy"] .toggle.on {
+  background:linear-gradient(180deg,#31c985,#1ca96b) !important;
+  border-color:#5ae3a5 !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 calc(8px * var(--ui-scale)) rgba(44,205,134,.10) !important;
+}
+#app[data-page="buy"] .trash { color:#f04d62 !important; }
+#app[data-page="buy"] .trash::before,
+#app[data-page="buy"] .trash::after { border-color:#f04d62 !important; background-color:#f04d62 !important; }
+#app[data-page="buy"] .buy-table-footer {
+  color:#a8b8c9 !important;
+  border-top-color:#31495a !important;
+  background:linear-gradient(180deg,#0f1c27,#0c1822) !important;
+}
+
+#app[data-page="buy"] .detail-top { border-bottom-color:#263a49 !important; }
+#app[data-page="buy"] .detail-icon-box {
+  border-color:#385165 !important;
+  background:linear-gradient(180deg,#152534,#0f1d29) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025) !important;
+}
+#app[data-page="buy"] .detail-title { color:#f1f4f7 !important; font-weight:700 !important; }
+#app[data-page="buy"] .detail-kind { color:#94a5b7 !important; }
+#app[data-page="buy"] .detail-tabs {
+  background:#12212d !important;
+  border-color:#374f62 !important;
+}
+#app[data-page="buy"] .detail-tab { color:#aab9c8 !important; }
+#app[data-page="buy"] .detail-tab.active {
+  color:#91f0c0 !important;
+  border-color:rgba(62,221,148,.60) !important;
+  background:linear-gradient(180deg,rgba(41,201,128,.23),rgba(27,137,90,.11)) !important;
+  box-shadow:inset 0 0 calc(18px * var(--ui-scale)) rgba(42,215,143,.05),0 0 calc(10px * var(--ui-scale)) rgba(41,213,143,.05) !important;
+}
+#app[data-page="buy"] .field-label { color:#b5c3d1 !important; }
+#app[data-page="buy"] .field-input {
+  color:#e9eef3 !important;
+  background:linear-gradient(180deg,#142330,#101d28) !important;
+  border-color:#3a5163 !important;
+}
+#app[data-page="buy"] .field-input:disabled { color:#acbac7 !important; }
+#app[data-page="buy"] .field-toggle-row {
+  color:#bac7d3 !important;
+  background:#111f2b !important;
+  border-color:#33495a !important;
+}
+#app[data-page="buy"] .autosave-note {
+  color:#9caec0 !important;
+  background:linear-gradient(180deg,#142330,#101c28) !important;
+  border-color:#385064 !important;
+}
+#app[data-page="buy"] .autosave-note::before {
+  border-color:#4d8fff !important;
+  color:#6ba0ff !important;
+  box-shadow:0 0 calc(7px * var(--ui-scale)) rgba(75,139,255,.12) !important;
+}
+#app[data-page="buy"] .autosave-note span:last-child::after { color:#7f91a4 !important; }
+
+#app[data-page="buy"] .empty-state,
+#app[data-page="buy"] .detail-empty { color:#9aabbb !important; }
+#app[data-page="buy"] .detail-empty-icon,
+#app[data-page="buy"] .empty-icon {
+  color:transparent !important;
+  position:relative !important;
+}
+#app[data-page="buy"] .detail-empty-icon::before,
+#app[data-page="buy"] .empty-icon::before {
+  content:"";
+  display:block;
+  width:1em;
+  height:1em;
+  margin:auto;
+  border:2px solid #557791;
+  transform:rotate(45deg) scale(.72);
+  opacity:.82;
+}
+
+#app[data-page="buy"] ::-webkit-scrollbar-thumb { background:#385165 !important; }
+#app[data-page="buy"] ::-webkit-scrollbar-thumb:hover { background:#476880 !important; }

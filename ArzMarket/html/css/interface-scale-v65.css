@@ -1,0 +1,412 @@
+/* ArzMarket HTML v65
+   Settings -> Appearance -> Interface size scales only the inner UI.
+   The outer .window perimeter remains controlled exclusively by manual resize. */
+
+#app[data-page] .window {
+  --interface-content-scale: 1;
+}
+
+#app[data-page] .window-scale-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Keep the resize hit zones outside the scaled content layer. */
+#app.window-management-enabled[data-page] .window-scale-layer {
+  z-index: 1;
+}
+#app.window-management-enabled[data-page] .window-resize-handle {
+  z-index: 1200 !important;
+}
+
+/* At a large content scale the logical viewport is smaller. Do not silently
+   remove the main Buy action from the toolbar: shrink flexible pieces instead. */
+#app[data-page="buy"] .window[data-ui-density="compact"] #averageButton,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #averageButton {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .toolbar {
+  grid-template-columns: minmax(0,1fr) auto auto auto auto !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #addButton {
+  min-width: calc(100px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #averageButton {
+  min-width: calc(128px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #startButton {
+  min-width: calc(138px * var(--ui-scale)) !important;
+  max-width: calc(165px * var(--ui-scale)) !important;
+}
+
+/* The old tiny Settings rule switches six tabs to two columns while older CSS
+   keeps a one-row height. Let the toolbar grow instead of clipping four tabs. */
+#app[data-page="settings"] .window[data-ui-density="compact"] .settings-toolbar,
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-toolbar {
+  height: auto !important;
+  min-height: calc(52px * var(--ui-scale)) !important;
+  align-self: stretch !important;
+}
+
+/* Preserve the visible controls on the pages that previously dropped one in
+   tiny mode. Layout may compact, but functionality must not disappear. */
+#app[data-page="logs"] .window[data-ui-density="tiny"] .logs-date-btn {
+  display: flex !important;
+}
+#app[data-page="marketplace"] .window[data-ui-density="tiny"] #marketplaceServerButton {
+  display: flex !important;
+}
+
+/* Preview mode has its own CEF scaling and must not get a second transform. */
+html.preview-mode #app .window-scale-layer {
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+/* The scaled layer has a smaller logical viewport. Force the single grid row to
+   stay inside that viewport instead of expanding to the page's min-content
+   height and getting clipped by the outer window. Page workspaces already own
+   their scroll areas. */
+#app[data-page] .window-scale-layer .body-grid {
+  grid-template-rows: minmax(0,1fr) !important;
+  overflow: hidden !important;
+}
+#app[data-page] .window-scale-layer .content {
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Window buttons must never wrap into a vertical column when the inner layout is
+   magnified. This is layout safety, not a visual redesign. */
+#app[data-page] .topbar-actions,
+#app[data-page] .window-controls {
+  flex: none !important;
+}
+#app[data-page] .window-controls {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+}
+#app[data-page] .brand { min-width: 0 !important; }
+
+/* Interface scaling must not make Sell header controls vanish. Compact them
+   instead, keeping the same controls that are visible at 100%. */
+#app[data-page="sell"] .window[data-ui-density="tiny"] .config-label,
+#app[data-page="sell"] .window[data-ui-density="tiny"] #automationBadge,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .page-header-meta .save-state {
+  display: flex !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .page-header-copy {
+  min-width: calc(155px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .select,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .config-select-trigger {
+  width: calc(92px * var(--ui-scale)) !important;
+  min-width: calc(92px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .save-state {
+  min-width: calc(88px * var(--ui-scale)) !important;
+  max-width: calc(104px * var(--ui-scale)) !important;
+}
+
+/* Logs keep all five toolbar controls visible when the inner interface scale
+   reduces the logical workspace. The old tiny rule had four grid columns
+   because it hid the date control, which pushed Refresh outside the window. */
+#app[data-page="logs"] .window[data-ui-density="tiny"] .logs-toolbar {
+  grid-template-columns:
+    minmax(calc(145px * var(--ui-scale)),1fr)
+    calc(102px * var(--ui-scale))
+    calc(102px * var(--ui-scale))
+    calc(108px * var(--ui-scale))
+    calc(90px * var(--ui-scale)) !important;
+}
+/* ArzMarket HTML v67
+   Settings -> Appearance scales the inner controls and typography only.
+   The outer .window rectangle stays controlled by the manual resize handles.
+   Grid/Flex layouts keep the full perimeter and reflow instead of being
+   transformed as one oversized bitmap. */
+
+#app[data-page] .window-scale-layer {
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+  transform-origin: 0 0 !important;
+}
+
+/* Shared high-scale fit. Keep all navigation actions usable. The decorative
+   Arizona card is collapsed only when the enlarged UI cannot physically fit. */
+#app[data-page] .window[data-ui-density="compact"] .sidebar,
+#app[data-page] .window[data-ui-density="tiny"] .sidebar {
+  justify-content: flex-start !important;
+  overflow: hidden !important;
+}
+#app[data-page] .window[data-ui-density="compact"] .nav-list,
+#app[data-page] .window[data-ui-density="tiny"] .nav-list {
+  flex: 0 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+#app[data-page] .window[data-ui-density="compact"] .sidebar-footer,
+#app[data-page] .window[data-ui-density="tiny"] .sidebar-footer {
+  flex: none !important;
+  margin-top: auto !important;
+}
+#app[data-page] .window[data-ui-density="tiny"] .nav-list {
+  gap: calc(5px * var(--ui-scale)) !important;
+}
+#app[data-page] .window[data-ui-density="tiny"] .nav-item {
+  height: calc(46px * var(--ui-scale)) !important;
+  min-height: calc(46px * var(--ui-scale)) !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+  padding-left: calc(11px * var(--ui-scale)) !important;
+  padding-right: calc(11px * var(--ui-scale)) !important;
+  font-size: calc(14px * var(--ui-scale)) !important;
+}
+#app[data-page] .window[data-ui-density="tiny"] .nav-icon {
+  width: calc(27px * var(--ui-scale)) !important;
+  height: calc(27px * var(--ui-scale)) !important;
+}
+#app[data-page] .window[data-ui-density="tiny"] .arizona-card {
+  display: none !important;
+}
+#app[data-page] .window[data-ui-density="tiny"] .sidebar-footer {
+  gap: calc(4px * var(--ui-scale)) !important;
+}
+
+/* BUY: widths are fluid at large interface scale. Do not let fixed button or
+   detail-header minima steal the text column. */
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header {
+  grid-template-columns: auto minmax(0,1fr) auto !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-copy {
+  min-width: 0 !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-meta {
+  min-width: 0 !important;
+  gap: calc(5px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .config-label {
+  min-width: 0 !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .select {
+  width: calc(126px * var(--ui-scale)) !important;
+  min-width: calc(126px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .toolbar {
+  grid-template-columns:
+    minmax(calc(150px * var(--ui-scale)),1fr)
+    calc(102px * var(--ui-scale))
+    calc(146px * var(--ui-scale))
+    calc(96px * var(--ui-scale))
+    minmax(calc(145px * var(--ui-scale)),calc(165px * var(--ui-scale))) !important;
+  gap: calc(6px * var(--ui-scale)) !important;
+  padding-left: calc(7px * var(--ui-scale)) !important;
+  padding-right: calc(7px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .search-wrap,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #addButton,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #averageButton,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #tradeFilterButton,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #startButton {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #addButton,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #averageButton,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #tradeFilterButton {
+  padding-left: calc(8px * var(--ui-scale)) !important;
+  padding-right: calc(8px * var(--ui-scale)) !important;
+  font-size: calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #startButton {
+  font-size: calc(13px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .workspace {
+  grid-template-columns: minmax(0,1fr) minmax(calc(232px * var(--ui-scale)),29%) !important;
+  gap: calc(8px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .table-head.buy,
+#app[data-page="buy"] .window[data-ui-density="tiny"] .trade-row.buy {
+  grid-template-columns:
+    minmax(calc(145px * var(--ui-scale)),2fr)
+    minmax(calc(78px * var(--ui-scale)),.85fr)
+    minmax(calc(46px * var(--ui-scale)),.55fr)
+    minmax(calc(50px * var(--ui-scale)),.6fr)
+    calc(65px * var(--ui-scale))
+    calc(30px * var(--ui-scale)) !important;
+  gap: calc(5px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-card {
+  padding: calc(12px * var(--ui-scale)) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-content {
+  min-height: 0 !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-top {
+  display: grid !important;
+  grid-template-columns: calc(58px * var(--ui-scale)) minmax(0,1fr) !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+  align-items: start !important;
+  height: auto !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-icon-box {
+  width: calc(58px * var(--ui-scale)) !important;
+  height: calc(58px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-icon {
+  width: calc(54px * var(--ui-scale)) !important;
+  height: calc(54px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-title-wrap {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  min-width: 0 !important;
+  height: auto !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-title {
+  width: 100% !important;
+  height: auto !important;
+  margin: 0 !important;
+  word-break: normal !important;
+  overflow-wrap: anywhere !important;
+  line-height: 1.16 !important;
+  font-size: calc(15px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-kind {
+  width: 100% !important;
+  height: auto !important;
+  margin-top: calc(4px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-title-wrap > .badge {
+  align-self: flex-start !important;
+  height: calc(30px * var(--ui-scale)) !important;
+  min-height: calc(30px * var(--ui-scale)) !important;
+  margin-top: calc(7px * var(--ui-scale)) !important;
+  padding-left: calc(8px * var(--ui-scale)) !important;
+  padding-right: calc(8px * var(--ui-scale)) !important;
+  font-size: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-tabs {
+  margin-top: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .buy-main-fields > .field,
+#app[data-page="buy"] .window[data-ui-density="tiny"] .buy-extra-fields > .field {
+  grid-template-columns: minmax(calc(68px * var(--ui-scale)),.72fr) minmax(0,1fr) !important;
+  gap: calc(6px * var(--ui-scale)) !important;
+}
+
+/* SELL: final v35 columns were still wider than the list panel at high scale. */
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-workspace {
+  grid-template-columns: minmax(calc(210px * var(--ui-scale)),.58fr) minmax(0,1.42fr) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-table-head,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-sale-row {
+  grid-template-columns:
+    minmax(calc(115px * var(--ui-scale)),1.7fr)
+    minmax(calc(72px * var(--ui-scale)),.9fr)
+    minmax(calc(74px * var(--ui-scale)),.82fr)
+    calc(48px * var(--ui-scale))
+    calc(52px * var(--ui-scale))
+    calc(28px * var(--ui-scale)) !important;
+  gap: calc(4px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-sale-row {
+  padding-left: calc(8px * var(--ui-scale)) !important;
+  padding-right: calc(8px * var(--ui-scale)) !important;
+}
+
+/* LOGS: five controls must fit the real content width. */
+#app[data-page="logs"] .window[data-ui-density="tiny"] .logs-toolbar {
+  grid-template-columns:
+    minmax(calc(125px * var(--ui-scale)),1fr)
+    calc(88px * var(--ui-scale))
+    calc(88px * var(--ui-scale))
+    calc(94px * var(--ui-scale))
+    calc(82px * var(--ui-scale)) !important;
+  gap: calc(5px * var(--ui-scale)) !important;
+  padding-left: calc(7px * var(--ui-scale)) !important;
+  padding-right: calc(7px * var(--ui-scale)) !important;
+}
+#app[data-page="logs"] .window[data-ui-density="tiny"] .logs-filter-btn,
+#app[data-page="logs"] .window[data-ui-density="tiny"] .logs-date-btn,
+#app[data-page="logs"] .window[data-ui-density="tiny"] .logs-refresh-btn {
+  min-width: 0 !important;
+  width: 100% !important;
+  padding-left: calc(6px * var(--ui-scale)) !important;
+  padding-right: calc(6px * var(--ui-scale)) !important;
+  font-size: calc(9px * var(--ui-scale)) !important;
+}
+
+/* Settings/storage already own vertical scrolling. Keep the enlarged controls,
+   but avoid wasting half of a short window on a two-row navigation toolbar. */
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-toolbar {
+  grid-template-columns: repeat(3,minmax(0,1fr)) !important;
+  gap: calc(5px * var(--ui-scale)) !important;
+  padding: calc(5px * var(--ui-scale)) !important;
+}
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-tab {
+  min-width: 0 !important;
+  padding-left: calc(5px * var(--ui-scale)) !important;
+  padding-right: calc(5px * var(--ui-scale)) !important;
+  font-size: calc(10px * var(--ui-scale)) !important;
+}
+
+/* Scrollable work areas should clip/scroll their own enlarged contents instead
+   of leaking through the outer ArzMarket perimeter. */
+#app[data-page="buy"] .window[data-ui-density="tiny"] .table-card,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-panel,
+#app[data-page="logs"] .window[data-ui-density="tiny"] .logs-workspace,
+#app[data-page="mods"] .window[data-ui-density="tiny"] .mods-workspace,
+#app[data-page="storage"] .window[data-ui-density="tiny"] .storage-workspace,
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-workspace {
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+/* Keep functional Buy header/toolbar controls visible. Compact their chrome
+   instead of deleting them when the interface percentage is high. */
+#app[data-page="buy"] .window[data-ui-density="tiny"] #automationBadge,
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-meta .save-state {
+  display: flex !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-meta .save-state {
+  min-width: 0 !important;
+  max-width: calc(112px * var(--ui-scale)) !important;
+  font-size: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-meta .save-state::after {
+  display: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #automationBadge {
+  min-width: 0 !important;
+  padding-left: calc(8px * var(--ui-scale)) !important;
+  padding-right: calc(8px * var(--ui-scale)) !important;
+  font-size: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #tradeFilterButton > span:last-child {
+  display: inline !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .toolbar {
+  grid-template-columns:
+    minmax(calc(145px * var(--ui-scale)),1fr)
+    calc(100px * var(--ui-scale))
+    calc(142px * var(--ui-scale))
+    calc(108px * var(--ui-scale))
+    minmax(calc(140px * var(--ui-scale)),calc(160px * var(--ui-scale))) !important;
+}

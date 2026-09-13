@@ -1,0 +1,376 @@
+/* ArzMarket HTML v31: closer visual match to the approved Sell reference. */
+
+/* Keep the shared Buy/Sell shell from v30. Only the Sell workspace is tuned here. */
+#app[data-page="sell"] .content {
+  gap: calc(12px * var(--ui-scale)) !important;
+}
+
+/* Reference column balance: inventory is wider, the center is slightly narrower. */
+#app[data-page="sell"] .sell-workspace {
+  grid-template-columns:
+    minmax(calc(285px * var(--ui-scale)), .90fr)
+    minmax(calc(430px * var(--ui-scale)), 1.40fr)
+    minmax(calc(275px * var(--ui-scale)), .86fr) !important;
+  gap: calc(12px * var(--ui-scale)) !important;
+}
+
+/* Panel headings in the reference are compact and do not dominate the content. */
+#app[data-page="sell"] .sell-card-head {
+  min-height: calc(70px * var(--ui-scale)) !important;
+  padding: calc(15px * var(--ui-scale)) calc(16px * var(--ui-scale)) calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-card-head h2,
+#app[data-page="sell"] .sell-info-heading h2 {
+  font-size: calc(19px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-card-head p {
+  margin-top: calc(4px * var(--ui-scale)) !important;
+  font-size: calc(11px * var(--ui-scale)) !important;
+}
+
+/* The reference has no visually heavy utility buttons in the two card headers. */
+#app[data-page="sell"] .sell-scan-button,
+#app[data-page="sell"] .sell-tools-button {
+  border-color: transparent !important;
+  background: transparent !important;
+  opacity: .28;
+}
+#app[data-page="sell"] .sell-scan-button:hover:not(:disabled),
+#app[data-page="sell"] .sell-tools-button:hover:not(:disabled),
+#app[data-page="sell"] .sell-tools-button[aria-expanded="true"] {
+  opacity: 1;
+  border-color: #3d586c !important;
+  background: #142532 !important;
+}
+
+/* Inventory search and rows are denser in the reference. */
+#app[data-page="sell"] .sell-inventory-search {
+  height: calc(40px * var(--ui-scale)) !important;
+  margin: 0 calc(13px * var(--ui-scale)) calc(8px * var(--ui-scale)) !important;
+  padding: 0 calc(11px * var(--ui-scale)) !important;
+  border-radius: calc(7px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-search input {
+  font-size: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-list {
+  padding: 0 calc(8px * var(--ui-scale)) calc(8px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-row {
+  min-height: calc(53px * var(--ui-scale)) !important;
+  padding: calc(5px * var(--ui-scale)) calc(6px * var(--ui-scale)) !important;
+  grid-template-columns: calc(41px * var(--ui-scale)) minmax(0,1fr) auto calc(32px * var(--ui-scale)) !important;
+  gap: calc(8px * var(--ui-scale)) !important;
+  border-radius: calc(7px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-row.configured {
+  background: transparent !important;
+  border-color: transparent !important;
+}
+#app[data-page="sell"] .sell-inventory-row.selected {
+  background: linear-gradient(90deg, rgba(62,137,211,.28), rgba(46,102,161,.08)) !important;
+  border-color: rgba(79,145,204,.18) !important;
+  box-shadow: inset calc(3px * var(--ui-scale)) 0 0 #6fb8ff;
+}
+#app[data-page="sell"] .sell-inventory-row.selected:hover {
+  background: linear-gradient(90deg, rgba(62,137,211,.34), rgba(46,102,161,.11)) !important;
+}
+#app[data-page="sell"] .sell-inventory-thumb-box {
+  width: calc(41px * var(--ui-scale)) !important;
+  height: calc(41px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-thumb {
+  width: calc(37px * var(--ui-scale)) !important;
+  height: calc(37px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-name {
+  font-size: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-kind {
+  margin-top: calc(2px * var(--ui-scale)) !important;
+  font-size: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-count {
+  font-size: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inventory-add {
+  width: calc(30px * var(--ui-scale)) !important;
+  height: calc(30px * var(--ui-scale)) !important;
+}
+
+/* An item that is already in the sell list still uses the same plus glyph as the reference.
+   Clicking it keeps the existing behavior and selects that configured item. */
+#app[data-page="sell"] .sell-inventory-add.added {
+  border-color: #3e586b !important;
+  background: #1b3142 !important;
+}
+#app[data-page="sell"] .sell-inventory-add.added::before {
+  width: calc(12px * var(--ui-scale)) !important;
+  height: calc(2px * var(--ui-scale)) !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #dfe8ef !important;
+  transform: translate(-50%,-50%) !important;
+}
+#app[data-page="sell"] .sell-inventory-add.added::after {
+  display: block !important;
+  width: calc(12px * var(--ui-scale)) !important;
+  height: calc(2px * var(--ui-scale)) !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #dfe8ef !important;
+  transform: translate(-50%,-50%) rotate(90deg) !important;
+}
+#app[data-page="sell"] .sell-inventory-add.added:hover:not(:disabled) {
+  border-color: #5a7a91 !important;
+  background: #24445a !important;
+}
+
+/* Central table geometry from the reference. */
+#app[data-page="sell"] .sell-table-head,
+#app[data-page="sell"] .sell-sale-row {
+  grid-template-columns:
+    minmax(calc(150px * var(--ui-scale)), 2.05fr)
+    minmax(calc(88px * var(--ui-scale)), 1.04fr)
+    minmax(calc(66px * var(--ui-scale)), .76fr)
+    minmax(calc(58px * var(--ui-scale)), .65fr)
+    calc(56px * var(--ui-scale))
+    calc(30px * var(--ui-scale)) !important;
+  column-gap: calc(6px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-table-head {
+  min-height: calc(43px * var(--ui-scale)) !important;
+  padding: 0 calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-table-head button {
+  font-size: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-row {
+  min-height: calc(67px * var(--ui-scale)) !important;
+  padding: calc(7px * var(--ui-scale)) calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-item {
+  gap: calc(8px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-name {
+  font-size: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-kind {
+  margin-top: calc(2px * var(--ui-scale)) !important;
+  font-size: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-thumb-box {
+  width: calc(42px * var(--ui-scale)) !important;
+  height: calc(42px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-thumb {
+  width: calc(38px * var(--ui-scale)) !important;
+  height: calc(38px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-input-cell,
+#app[data-page="sell"] .sell-inline-input {
+  height: calc(36px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-inline-input {
+  font-size: calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-remaining {
+  font-size: calc(11.5px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-row .toggle {
+  width: calc(43px * var(--ui-scale)) !important;
+  height: calc(23px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-row .toggle::after {
+  width: calc(15px * var(--ui-scale)) !important;
+  height: calc(15px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-row .toggle.on::after {
+  transform: translateX(calc(20px * var(--ui-scale))) !important;
+}
+
+/* Sell had an empty trash button because the trash glyph CSS was Buy-only. */
+#app[data-page="sell"] .sell-sale-trash {
+  width: calc(30px * var(--ui-scale)) !important;
+  height: calc(30px * var(--ui-scale)) !important;
+  position: relative !important;
+  color: transparent !important;
+  border: 0 !important;
+  border-radius: calc(7px * var(--ui-scale)) !important;
+  background: transparent !important;
+}
+#app[data-page="sell"] .sell-sale-trash::before {
+  content: "" !important;
+  position: absolute !important;
+  width: calc(10px * var(--ui-scale)) !important;
+  height: calc(12px * var(--ui-scale)) !important;
+  left: 50% !important;
+  top: 53% !important;
+  transform: translate(-50%,-50%) !important;
+  border: calc(2px * var(--ui-scale)) solid #ef5068 !important;
+  border-top: 0 !important;
+  border-radius: 1px 1px calc(3px * var(--ui-scale)) calc(3px * var(--ui-scale)) !important;
+  background: transparent !important;
+  box-sizing: border-box !important;
+}
+#app[data-page="sell"] .sell-sale-trash::after {
+  content: "" !important;
+  position: absolute !important;
+  width: calc(13px * var(--ui-scale)) !important;
+  height: calc(2px * var(--ui-scale)) !important;
+  left: 50% !important;
+  top: calc(9px * var(--ui-scale)) !important;
+  transform: translateX(-50%) !important;
+  border-radius: calc(2px * var(--ui-scale)) !important;
+  background: #ef5068 !important;
+  box-shadow: calc(4px * var(--ui-scale)) calc(-3px * var(--ui-scale)) 0 calc(-1px * var(--ui-scale)) #ef5068 !important;
+}
+#app[data-page="sell"] .sell-sale-trash:hover:not(:disabled) {
+  background: rgba(239,80,104,.08) !important;
+}
+
+/* The reference summary has more vertical presence and is centered lower in the card. */
+#app[data-page="sell"] .sell-summary {
+  min-height: calc(96px * var(--ui-scale)) !important;
+  padding: calc(13px * var(--ui-scale)) calc(14px * var(--ui-scale)) !important;
+  gap: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-summary-main {
+  gap: calc(25px * var(--ui-scale)) !important;
+  font-size: calc(10.5px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-summary-income {
+  font-size: calc(11.5px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-summary-income strong {
+  font-size: calc(17px * var(--ui-scale)) !important;
+}
+
+/* Right card proportions. The approved reference fills the panel instead of leaving a large empty foot. */
+#app[data-page="sell"] .sell-info-panel {
+  padding: calc(16px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-info-heading {
+  padding-bottom: calc(13px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-info-content {
+  gap: calc(13px * var(--ui-scale)) !important;
+  overflow: hidden !important;
+}
+#app[data-page="sell"] .sell-info-top {
+  gap: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-info-title {
+  font-size: calc(15.5px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-stock-grid > div {
+  min-height: calc(68px * var(--ui-scale)) !important;
+  padding: calc(10px * var(--ui-scale)) calc(9px * var(--ui-scale)) !important;
+  gap: calc(6px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-stock-grid span {
+  font-size: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-stock-grid strong {
+  font-size: calc(12.5px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-info-fields {
+  gap: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-info-field {
+  grid-template-columns: minmax(calc(100px * var(--ui-scale)), .88fr) minmax(0, 1.12fr) !important;
+  gap: calc(9px * var(--ui-scale)) !important;
+  font-size: calc(10.5px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-field-input-wrap {
+  height: calc(42px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-income-row {
+  min-height: calc(43px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-income-row strong {
+  font-size: calc(15px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-market-card {
+  min-height: calc(118px * var(--ui-scale)) !important;
+  padding: calc(13px * var(--ui-scale)) !important;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+#app[data-page="sell"] .sell-market-card header {
+  margin-bottom: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-market-grid {
+  row-gap: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-start-button {
+  min-height: calc(55px * var(--ui-scale)) !important;
+  font-size: calc(13.5px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-autosave-note {
+  min-height: calc(61px * var(--ui-scale)) !important;
+  padding: calc(10px * var(--ui-scale)) calc(11px * var(--ui-scale)) !important;
+  align-items: center !important;
+}
+
+/* Give autosave and the three-line hint separate space so they never collide. */
+#app[data-page="sell"] .page-header-meta {
+  flex: 0 0 auto !important;
+  margin-left: auto !important;
+  margin-right: calc(198px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .save-state {
+  min-width: calc(220px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .page-header-hint {
+  position: absolute !important;
+  right: calc(52px * var(--ui-scale)) !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: calc(145px * var(--ui-scale)) !important;
+  min-width: 0 !important;
+  margin-left: 0 !important;
+}
+#app[data-page="sell"] .hero-watermark {
+  right: calc(10px * var(--ui-scale)) !important;
+  pointer-events: none;
+}
+
+/* Compact and tiny modes retain the same proportions without horizontal overflow. */
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-workspace {
+  grid-template-columns:
+    minmax(calc(235px * var(--ui-scale)), .88fr)
+    minmax(calc(360px * var(--ui-scale)), 1.38fr)
+    minmax(calc(245px * var(--ui-scale)), .84fr) !important;
+  gap: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="compact"] .page-header-meta {
+  margin-right: 0 !important;
+}
+#app[data-page="sell"] .window[data-ui-density="compact"] .page-header-hint {
+  display: none !important;
+}
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-market-card {
+  min-height: calc(104px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-autosave-note {
+  min-height: calc(52px * var(--ui-scale)) !important;
+}
+
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-workspace {
+  grid-template-columns:
+    minmax(calc(195px * var(--ui-scale)), .82fr)
+    minmax(calc(310px * var(--ui-scale)), 1.34fr)
+    minmax(calc(220px * var(--ui-scale)), .82fr) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-card-head {
+  min-height: calc(60px * var(--ui-scale)) !important;
+  padding: calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-summary {
+  min-height: calc(76px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-info-content {
+  overflow: auto !important;
+}

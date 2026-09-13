@@ -1,0 +1,142 @@
+/* ArzMarket HTML v46: Settings polish, encoding-safe appearance layout and shell parity. */
+
+/* Match the mature Sell/Buy shell instead of falling back to the old generic logo/card. */
+#app[data-page="settings"] .brand-mark {
+  width: calc(59px * var(--ui-scale)) !important;
+  height: calc(59px * var(--ui-scale)) !important;
+  background: url('/static/assets/arizona-logo.webp') center/contain no-repeat !important;
+  transform: none !important;
+  filter: hue-rotate(8deg) saturate(.82) brightness(.94) drop-shadow(0 0 calc(9px * var(--ui-scale)) rgba(78,111,225,.22)) !important;
+}
+#app[data-page="settings"] .brand-mark::before,
+#app[data-page="settings"] .brand-mark::after,
+#app[data-page="settings"] .brand-mark span { display:none !important; }
+#app[data-page="settings"] .brand-title { letter-spacing:.12px !important; }
+#app[data-page="settings"] .brand-subtitle { color:#acbbca !important; letter-spacing:calc(.45px * var(--ui-scale)) !important; font-weight:650 !important; }
+#app[data-page="settings"] .topbar-actions { gap:calc(14px * var(--ui-scale)) !important; }
+#app[data-page="settings"] .window-btn { opacity:.95 !important; font-size:calc(20px * var(--ui-scale)) !important; }
+#app[data-page="settings"] .window-btn-control { font-size:calc(16px * var(--ui-scale)) !important; }
+
+#app[data-page="settings"] .nav-item.disabled { opacity:.68 !important; }
+#app[data-page="settings"] .nav-item.disabled span:last-child { color:#c2ced9 !important; opacity:.92 !important; }
+#app[data-page="settings"] .nav-icon { filter:brightness(1.13) saturate(.96) !important; }
+#app[data-page="settings"] .nav-item.active .nav-icon {
+  color:#58efaa !important;
+  filter:brightness(1.12) saturate(1.08) drop-shadow(0 0 calc(7px * var(--ui-scale)) rgba(84,242,173,.38)) !important;
+}
+
+#app[data-page="settings"] .arizona-card {
+  position:relative !important;
+  overflow:hidden !important;
+  border-color:#41596d !important;
+  background:radial-gradient(circle at 77% 69%,rgba(86,123,161,.25),transparent 43%),linear-gradient(135deg,#1b2c40 0%,#12202e 64%,#1a2b3e 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.035) !important;
+}
+#app[data-page="settings"] .arizona-card::before {
+  content:"";
+  position:absolute;
+  right:-3%;
+  bottom:-4%;
+  width:54%;
+  height:96%;
+  background:url('/static/assets/arizona-cactus.webp') right bottom/contain no-repeat;
+  opacity:.43;
+  filter:grayscale(.62) saturate(.38) brightness(1.40) contrast(.90);
+}
+#app[data-page="settings"] .arizona-card::after {
+  content:"Players make\A legends";
+  white-space:pre;
+  position:absolute;
+  top:51%;
+  left:calc(20px * var(--ui-scale));
+  max-width:58%;
+  font-family:"Segoe Script","Comic Sans MS",cursive;
+  font-size:calc(14.5px * var(--ui-scale));
+  font-style:italic;
+  line-height:1.16;
+  color:rgba(202,215,232,.73);
+  transform:rotate(-6deg);
+}
+#app[data-page="settings"] .arizona-card-title { position:relative; z-index:1; font-size:calc(18.5px * var(--ui-scale)) !important; color:#f3f6fa !important; }
+#app[data-page="settings"] .arizona-card-subtitle { position:relative; z-index:1; font-size:calc(11.5px * var(--ui-scale)) !important; color:#bac7d4 !important; }
+#app[data-page="settings"] .runtime-state,
+#app[data-page="settings"] .version { position:relative; z-index:1; }
+
+/* Same hero proportions as Sell, so switching sections does not visually resize the app. */
+#app[data-page="settings"] .content { grid-template-rows:calc(112px * var(--ui-scale)) auto minmax(0,1fr) !important; }
+#app[data-page="settings"] .page-header {
+  min-height:calc(112px * var(--ui-scale)) !important;
+  height:calc(112px * var(--ui-scale)) !important;
+  padding:calc(17px * var(--ui-scale)) calc(27px * var(--ui-scale)) !important;
+  gap:calc(19px * var(--ui-scale)) !important;
+}
+#app[data-page="settings"] .page-header-icon { flex:none !important; }
+#app[data-page="settings"] .page-header-icon svg { width:calc(40px * var(--ui-scale)) !important; height:calc(40px * var(--ui-scale)) !important; }
+#app[data-page="settings"] .page-header-copy { min-width:0 !important; }
+
+/* Appearance is a long editor. Make the scroll target obvious and avoid cards looking cut off. */
+#app[data-page="settings"] .settings-content[data-section="appearance"] {
+  align-items:start;
+  padding-bottom:calc(28px * var(--ui-scale));
+}
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-card {
+  align-self:start;
+}
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-card-body {
+  min-height:0;
+}
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-color-group-head strong,
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-color-row > span:first-child {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* Keep labels readable instead of compressing the color editor into tiny cells. */
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-color-row {
+  grid-template-columns:minmax(calc(140px * var(--ui-scale)),1fr) calc(27px * var(--ui-scale)) calc(116px * var(--ui-scale)) calc(34px * var(--ui-scale));
+}
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-color-group-head strong { font-size:calc(12px * var(--ui-scale)); }
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-color-row { font-size:calc(11px * var(--ui-scale)); }
+
+/* Slightly stronger scrollbar for this especially long section. */
+#app[data-page="settings"] .settings-content[data-section="appearance"]::-webkit-scrollbar { width:calc(11px * var(--ui-scale)); }
+#app[data-page="settings"] .settings-content[data-section="appearance"]::-webkit-scrollbar-thumb {
+  background:#4a667b;
+  border:2px solid #0a151e;
+  border-radius:20px;
+}
+
+#app[data-page="settings"] .window[data-ui-density="compact"] .settings-content[data-section="appearance"] .settings-color-row,
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-content[data-section="appearance"] .settings-color-row {
+  grid-template-columns:minmax(0,1fr) calc(25px * var(--ui-scale)) calc(104px * var(--ui-scale)) calc(32px * var(--ui-scale));
+}
+
+/* v66: keep Settings cards sized by their real content after manual window resize.
+   The workspace is a fixed-height scrolling grid. With implicit auto rows, Chromium/CEF
+   may compress long cards when the window enters compact mode, so the next card starts
+   before the previous card body has finished. Use max-content rows so overflow belongs
+   to the settings scroller instead of overlapping neighboring cards. */
+#app[data-page="settings"] .settings-content {
+  grid-auto-rows: max-content !important;
+}
+
+#app[data-page="settings"] .settings-content > .settings-card,
+#app[data-page="settings"] .settings-content > .settings-config-grid {
+  align-self: start !important;
+  min-height: max-content;
+}
+
+/* Tiny mode previously fell back to the base two-column grid because only compact mode
+   had a one-column override. At the minimum window size this made long Settings cards
+   too narrow and amplified the overlap. Keep the intended single-column flow. */
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-content {
+  grid-template-columns: minmax(0,1fr) !important;
+}
+
+/* Appearance contains the tallest cards. Make their bodies participate in normal flow
+   and never allow a later palette card to paint over the Lua-interface controls. */
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-card,
+#app[data-page="settings"] .settings-content[data-section="appearance"] .settings-card-body {
+  height: auto !important;
+}

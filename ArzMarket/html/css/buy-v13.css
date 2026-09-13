@@ -1,0 +1,819 @@
+/* ArzMarket HTML Buy v14. Reference proportion + true resizable window pass. */
+#app[data-page="buy"] .window {
+  --ui-scale: 1;
+  --topbar-h: calc(81px * var(--ui-scale));
+  --sidebar-w: calc(270px * var(--ui-scale));
+  width: min(1600px, 92vw, calc(100vw - 24px)) !important;
+  height: min(900px, 88vh, calc(100vh - 24px)) !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: min(900px, calc(100vw - 16px)) !important;
+  min-height: min(580px, calc(100vh - 16px)) !important;
+  border: 1px solid #354b5d !important;
+  border-radius: calc(20px * var(--ui-scale)) !important;
+  background: #08121b !important;
+  box-shadow: 0 30px 95px rgba(0,0,0,.58), inset 0 0 0 1px rgba(92,138,170,.055) !important;
+}
+
+#app[data-page="buy"] .topbar {
+  height: var(--topbar-h) !important;
+  min-height: var(--topbar-h) !important;
+  padding: 0 calc(24px * var(--ui-scale)) 0 calc(26px * var(--ui-scale)) !important;
+  border-bottom: 1px solid #243746 !important;
+  background:
+    radial-gradient(circle at 55% -170%, rgba(86,141,194,.22), transparent 56%),
+    linear-gradient(180deg, rgba(15,27,39,.995), rgba(9,17,25,.995)) !important;
+}
+
+#app[data-page="buy"] .brand {
+  gap: calc(13px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .brand-mark {
+  width: calc(56px * var(--ui-scale)) !important;
+  height: calc(56px * var(--ui-scale)) !important;
+  transform: none !important;
+  font-size: 0 !important;
+  position: relative !important;
+  filter: drop-shadow(0 0 calc(9px * var(--ui-scale)) rgba(67,128,239,.20));
+}
+#app[data-page="buy"] .brand-mark::before {
+  content: "" !important;
+  position: absolute !important;
+  inset: calc(2px * var(--ui-scale)) !important;
+  border: 0 !important;
+  background: linear-gradient(145deg,#d5e4ff 2%,#85afff 36%,#3d74dc 70%,#274d9c 100%) !important;
+  clip-path: polygon(50% 0,100% 100%,70% 84%,50% 47%,28% 84%,0 100%) !important;
+  filter: none !important;
+}
+#app[data-page="buy"] .brand-mark::after {
+  content: "";
+  position: absolute;
+  left: 38%;
+  top: 43%;
+  width: 25%;
+  height: 24%;
+  background: #0b1622;
+  clip-path: polygon(50% 0,100% 100%,0 100%);
+}
+#app[data-page="buy"] .brand-mark span { display:none !important; }
+#app[data-page="buy"] .brand-title {
+  font-size: calc(33px * var(--ui-scale)) !important;
+  line-height: 1 !important;
+  color: #f4f7fb !important;
+  font-weight: 750 !important;
+  letter-spacing: .1px !important;
+}
+#app[data-page="buy"] .brand-subtitle {
+  margin-top: calc(5px * var(--ui-scale)) !important;
+  font-size: calc(11px * var(--ui-scale)) !important;
+  letter-spacing: calc(.45px * var(--ui-scale)) !important;
+  color: #91a4b8 !important;
+  font-weight: 650 !important;
+}
+
+#app[data-page="buy"] .topbar-actions { gap: calc(14px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .mode-switch {
+  height: calc(44px * var(--ui-scale)) !important;
+  padding: calc(4px * var(--ui-scale)) !important;
+  border: 1px solid #304759 !important;
+  border-radius: calc(11px * var(--ui-scale)) !important;
+  background:#0a141e !important;
+}
+#app[data-page="buy"] .mode-btn {
+  min-width: calc(100px * var(--ui-scale)) !important;
+  padding: 0 calc(16px * var(--ui-scale)) !important;
+  border-radius: calc(8px * var(--ui-scale)) !important;
+  font-size: calc(13px * var(--ui-scale)) !important;
+  color:#9bacbc !important;
+}
+#app[data-page="buy"] .mode-btn.active {
+  background: linear-gradient(180deg,#2f72da,#214fac) !important;
+  color:#fff !important;
+  box-shadow: 0 0 calc(18px * var(--ui-scale)) rgba(62,126,245,.24) !important;
+}
+#app[data-page="buy"] .window-controls {
+  display:flex;
+  align-items:center;
+  gap:calc(4px * var(--ui-scale));
+}
+#app[data-page="buy"] .window-btn {
+  width: calc(36px * var(--ui-scale)) !important;
+  height: calc(36px * var(--ui-scale)) !important;
+  font-size: calc(20px * var(--ui-scale)) !important;
+  color:#b5c4d4 !important;
+}
+#app[data-page="buy"] .window-btn-control { font-size: calc(16px * var(--ui-scale)) !important; }
+
+#app[data-page="buy"] .body-grid {
+  height: calc(100% - var(--topbar-h)) !important;
+  grid-template-columns: var(--sidebar-w) 1fr !important;
+}
+#app[data-page="buy"] .sidebar {
+  padding: calc(27px * var(--ui-scale)) calc(15px * var(--ui-scale)) calc(18px * var(--ui-scale)) !important;
+  background:
+    radial-gradient(circle at 28% 28%, rgba(42,98,145,.085), transparent 43%),
+    linear-gradient(180deg,#0a141e,#08111a) !important;
+  border-right:1px solid #203241 !important;
+}
+#app[data-page="buy"] .nav-list { gap: calc(8px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .nav-item {
+  height: calc(60px * var(--ui-scale)) !important;
+  gap: calc(15px * var(--ui-scale)) !important;
+  padding: 0 calc(18px * var(--ui-scale)) !important;
+  border-radius: calc(11px * var(--ui-scale)) !important;
+  font-size: calc(16px * var(--ui-scale)) !important;
+  color:#b9c6d4 !important;
+  font-weight:520 !important;
+}
+#app[data-page="buy"] .nav-item.disabled { opacity:.92 !important; color:#aebdcd !important; }
+#app[data-page="buy"] .nav-item.active {
+  color:#f7fff9 !important;
+  background:linear-gradient(90deg,rgba(27,201,124,.31),rgba(18,133,87,.11)) !important;
+  border-color:rgba(52,231,151,.52) !important;
+  box-shadow:inset calc(4px * var(--ui-scale)) 0 0 #42ec9f,0 0 calc(26px * var(--ui-scale)) rgba(44,218,143,.12) !important;
+}
+#app[data-page="buy"] .nav-icon {
+  width: calc(31px * var(--ui-scale)) !important;
+  height: calc(31px * var(--ui-scale)) !important;
+  flex:none;
+  display:block !important;
+  background-position:center;
+  background-repeat:no-repeat;
+  background-size:contain;
+  color:transparent !important;
+}
+#app[data-page="buy"] .nav-icon svg { display:none !important; }
+#app[data-page="buy"] .nav-icon-sell {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b7cdf4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 13.5 12 22l-9-9V3h10z'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.3'/%3E%3C/svg%3E");
+}
+#app[data-page="buy"] .nav-icon-buy {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235bf0ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4h2l2.7 10.2a2 2 0 0 0 1.9 1.5h7.8a2 2 0 0 0 1.9-1.4L21 8H7'/%3E%3Ccircle cx='9' cy='20' r='1'/%3E%3Ccircle cx='19' cy='20' r='1'/%3E%3C/svg%3E");
+}
+#app[data-page="buy"] .nav-icon-settings {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b7cdf4' stroke-width='1.8'%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Cpath d='M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.8-1L14.4 3h-4.8l-.4 3.1a8 8 0 0 0-1.8 1l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2L3 14.5l2 3.4 2.4-1a8 8 0 0 0 1.8 1l.4 3.1h4.8l.4-3.1a8 8 0 0 0 1.8-1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z'/%3E%3C/svg%3E");
+}
+#app[data-page="buy"] .nav-icon-logs {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b7cdf4' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M6 2h9l4 4v16H6zM14 2v5h5M9 12h6M9 16h6'/%3E%3C/svg%3E");
+}
+#app[data-page="buy"] .nav-icon-market {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b7cdf4' stroke-width='1.8' stroke-linejoin='round'%3E%3Cpath d='M4 10h16l-1-5H5zM5 10v9h14v-9M8 19v-5h4v5'/%3E%3Cpath d='M3 10c0 1.3 1 2.3 2.3 2.3S7.7 11.3 7.7 10c0 1.3 1 2.3 2.3 2.3s2.3-1 2.3-2.3c0 1.3 1 2.3 2.3 2.3s2.4-1 2.4-2.3c0 1.3 1 2.3 2.3 2.3S21.7 11.3 21.7 10'/%3E%3C/svg%3E");
+}
+#app[data-page="buy"] .nav-icon-storage {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b7cdf4' stroke-width='1.8' stroke-linejoin='round'%3E%3Cpath d='M3 6h18v4H3zM5 10h14v10H5zM9 14h6'/%3E%3C/svg%3E");
+}
+
+#app[data-page="buy"] .sidebar-footer { gap: calc(10px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .arizona-card {
+  height: calc(210px * var(--ui-scale)) !important;
+  min-height: calc(210px * var(--ui-scale)) !important;
+  padding: calc(21px * var(--ui-scale)) !important;
+  border-radius: calc(12px * var(--ui-scale)) !important;
+  border-color:#2a4051 !important;
+  background:
+    radial-gradient(circle at 78% 68%,rgba(82,115,153,.18),transparent 36%),
+    linear-gradient(135deg,#172536,#0c1722 68%,#172638) !important;
+}
+#app[data-page="buy"] .arizona-card::before {
+  content:"";
+  position:absolute;
+  right:calc(14px * var(--ui-scale));
+  bottom:0;
+  width:calc(56px * var(--ui-scale));
+  height:calc(116px * var(--ui-scale));
+  opacity:.18;
+  background:
+    linear-gradient(#566c84,#566c84) 50% 18%/10% 82% no-repeat,
+    linear-gradient(#566c84,#566c84) 25% 50%/9% 50% no-repeat,
+    linear-gradient(#566c84,#566c84) 76% 57%/9% 42% no-repeat,
+    radial-gradient(ellipse at center,#566c84 0 54%,transparent 56%) 50% 0/18% 24% no-repeat,
+    radial-gradient(ellipse at center,#566c84 0 54%,transparent 56%) 25% 34%/17% 20% no-repeat,
+    radial-gradient(ellipse at center,#566c84 0 54%,transparent 56%) 76% 43%/17% 20% no-repeat;
+}
+#app[data-page="buy"] .arizona-card-title { font-size:calc(18px * var(--ui-scale)) !important; color:#eef3f8 !important; }
+#app[data-page="buy"] .arizona-card-subtitle { font-size:calc(11px * var(--ui-scale)) !important; color:#a0afc0 !important; }
+#app[data-page="buy"] .arizona-card::after {
+  left:calc(20px * var(--ui-scale)) !important;
+  bottom:calc(20px * var(--ui-scale)) !important;
+  font-size:calc(14px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .runtime-state { font-size:calc(10.5px * var(--ui-scale)) !important; color:#9aaab9 !important; }
+#app[data-page="buy"] .version { font-size:calc(10px * var(--ui-scale)) !important; color:#8b9aaa !important; }
+
+#app[data-page="buy"] .content {
+  padding: calc(16px * var(--ui-scale)) !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+  background: radial-gradient(circle at 93% 7%,rgba(61,118,169,.045),transparent 24%),#09131d !important;
+}
+#app[data-page="buy"] .page-header {
+  min-height: calc(123px * var(--ui-scale)) !important;
+  height: calc(123px * var(--ui-scale)) !important;
+  padding: calc(17px * var(--ui-scale)) calc(27px * var(--ui-scale)) !important;
+  gap: calc(19px * var(--ui-scale)) !important;
+  border:1px solid #2b4051 !important;
+  border-radius:calc(14px * var(--ui-scale)) !important;
+  background:
+    radial-gradient(circle at 44% -90%,rgba(105,150,195,.17),transparent 50%),
+    linear-gradient(110deg,#152535,#0d1924 65%,#122130) !important;
+}
+#app[data-page="buy"] .page-header-icon {
+  width:calc(72px * var(--ui-scale)) !important;
+  height:calc(72px * var(--ui-scale)) !important;
+  flex:none;
+  border-radius:calc(12px * var(--ui-scale)) !important;
+  border:1px solid rgba(66,238,160,.60) !important;
+  background-color:rgba(35,174,112,.16) !important;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2361f0b1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4h2l2.7 10.2a2 2 0 0 0 1.9 1.5h7.8a2 2 0 0 0 1.9-1.4L21 8H7'/%3E%3Ccircle cx='9' cy='20' r='1'/%3E%3Ccircle cx='19' cy='20' r='1'/%3E%3C/svg%3E") !important;
+  background-position:center !important;
+  background-repeat:no-repeat !important;
+  background-size:calc(40px * var(--ui-scale)) calc(40px * var(--ui-scale)) !important;
+  box-shadow:inset 0 0 calc(24px * var(--ui-scale)) rgba(41,213,143,.06),0 0 calc(18px * var(--ui-scale)) rgba(41,213,143,.07) !important;
+  font-size:0 !important;
+}
+#app[data-page="buy"] .page-header-icon svg { display:none !important; }
+#app[data-page="buy"] .page-header-copy { min-width:calc(295px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .page-header h1 {
+  font-size:calc(34px * var(--ui-scale)) !important;
+  line-height:1.04 !important;
+  color:#f5f8fb !important;
+  font-weight:740 !important;
+}
+#app[data-page="buy"] .page-header p {
+  margin-top:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  color:#9eafc2 !important;
+}
+#app[data-page="buy"] .page-header-meta {
+  margin-left:auto !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+  align-items:center !important;
+}
+#app[data-page="buy"] .config-label {
+  flex-direction:row !important;
+  align-items:center !important;
+  gap:calc(10px * var(--ui-scale)) !important;
+  color:#aebdcc !important;
+  font-size:calc(12px * var(--ui-scale)) !important;
+  text-transform:none !important;
+  letter-spacing:0 !important;
+}
+#app[data-page="buy"] .config-caption { white-space:nowrap; }
+#app[data-page="buy"] .select {
+  width:calc(220px * var(--ui-scale)) !important;
+  height:calc(44px * var(--ui-scale)) !important;
+  padding:0 calc(32px * var(--ui-scale)) 0 calc(14px * var(--ui-scale)) !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  color:#e6ecf2 !important;
+  background:#0d1822 !important;
+  border-color:#354a5d !important;
+}
+#app[data-page="buy"] .badge {
+  min-height:calc(44px * var(--ui-scale)) !important;
+  padding:0 calc(16px * var(--ui-scale)) !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  font-weight:650 !important;
+}
+#app[data-page="buy"] .badge-success {
+  color:#8bf2c1 !important;
+  background:rgba(28,185,112,.16) !important;
+  border-color:rgba(50,226,143,.42) !important;
+}
+#app[data-page="buy"] .save-state {
+  min-width:calc(180px * var(--ui-scale)) !important;
+  height:auto !important;
+  position:relative;
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:flex-start !important;
+  gap:calc(2px * var(--ui-scale)) !important;
+  padding-left:calc(14px * var(--ui-scale)) !important;
+  color:#a6b5c6 !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .save-state::before {
+  content:"";
+  position:absolute;
+  left:0;
+  top:calc(4px * var(--ui-scale));
+  width:calc(9px * var(--ui-scale));
+  height:calc(9px * var(--ui-scale));
+  border-radius:50%;
+  background:#36dd95;
+  box-shadow:0 0 calc(9px * var(--ui-scale)) rgba(54,221,149,.72);
+}
+#app[data-page="buy"] .save-state::after {
+  content:"Изменения сохраняются автоматически";
+  margin-top:calc(3px * var(--ui-scale));
+  color:#718599;
+  font-size:calc(9px * var(--ui-scale));
+  white-space:nowrap;
+}
+#app[data-page="buy"] .page-header-hint {
+  flex:none !important;
+  width:calc(175px * var(--ui-scale)) !important;
+  margin-left:calc(4px * var(--ui-scale)) !important;
+  color:#9aabc0 !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  line-height:1.55 !important;
+}
+#app[data-page="buy"] .hero-watermark {
+  right:calc(17px * var(--ui-scale)) !important;
+  top:calc(-44px * var(--ui-scale)) !important;
+  font-size:calc(175px * var(--ui-scale)) !important;
+  color:rgba(72,126,181,.10) !important;
+}
+
+#app[data-page="buy"] .toolbar {
+  flex:none !important;
+  height:calc(74px * var(--ui-scale)) !important;
+  padding:calc(9px * var(--ui-scale)) calc(11px * var(--ui-scale)) !important;
+  gap:calc(11px * var(--ui-scale)) !important;
+  border:1px solid #2b4051 !important;
+  border-radius:calc(12px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#101d29,#0b1620) !important;
+}
+#app[data-page="buy"] .search-wrap {
+  height:calc(46px * var(--ui-scale)) !important;
+  min-width:calc(300px * var(--ui-scale)) !important;
+  max-width:none !important;
+  flex:1 !important;
+  padding:0 calc(14px * var(--ui-scale)) !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  background:#0d1924 !important;
+  border-color:#31475a !important;
+}
+#app[data-page="buy"] .search-icon {
+  width:calc(20px * var(--ui-scale));
+  height:calc(20px * var(--ui-scale));
+  flex:none;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a7bbd3' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-4-4'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+#app[data-page="buy"] .search-wrap input { font-size:calc(14px * var(--ui-scale)) !important; color:#e8eef4 !important; }
+#app[data-page="buy"] .search-wrap input::placeholder { color:#8294a8 !important; }
+#app[data-page="buy"] kbd { font-size:calc(10px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .btn,
+#app[data-page="buy"] .more-actions > summary {
+  height:calc(46px * var(--ui-scale)) !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .btn { min-width:calc(145px * var(--ui-scale)) !important; }
+#app[data-page="buy"] #addButton { min-width:calc(178px * var(--ui-scale)) !important; }
+#app[data-page="buy"] #averageButton { min-width:calc(190px * var(--ui-scale)) !important; }
+#app[data-page="buy"] #startButton {
+  min-width:calc(330px * var(--ui-scale)) !important;
+  margin-left:0 !important;
+  font-size:calc(15px * var(--ui-scale)) !important;
+  font-weight:750 !important;
+  color:#f7fff9 !important;
+  background:linear-gradient(180deg,#31d68f,#1cb873) !important;
+  border-color:rgba(88,244,170,.78) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 0 calc(24px * var(--ui-scale)) rgba(41,213,143,.16) !important;
+}
+#app[data-page="buy"] .btn-secondary,
+#app[data-page="buy"] .more-actions > summary {
+  background:#0d1924 !important;
+  border-color:#31475a !important;
+  color:#e0e7ed !important;
+}
+#app[data-page="buy"] .more-actions > summary {
+  min-width:calc(56px * var(--ui-scale)) !important;
+  width:calc(56px * var(--ui-scale)) !important;
+  padding:0 !important;
+  font-size:0 !important;
+}
+#app[data-page="buy"] .more-actions > summary::after {
+  content:"•••";
+  font-size:calc(15px * var(--ui-scale));
+  letter-spacing:2px;
+  color:#c1cddd;
+}
+
+#app[data-page="buy"] .workspace {
+  flex:1 !important;
+  min-height:0 !important;
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) minmax(calc(340px * var(--ui-scale)), 30.5%) !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .table-card,
+#app[data-page="buy"] .detail-card {
+  min-height:0 !important;
+  border:1px solid #2b4051 !important;
+  border-radius:calc(13px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#0d1822,#0a141d) !important;
+  overflow:hidden !important;
+}
+#app[data-page="buy"] .table-head {
+  position:relative !important;
+  z-index:5 !important;
+  min-height:calc(48px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  color:#b9c9db !important;
+  background:#13212e !important;
+  border-bottom:1px solid #304659 !important;
+  text-transform:none !important;
+  letter-spacing:0 !important;
+  font-size:calc(12px * var(--ui-scale)) !important;
+  font-weight:560 !important;
+}
+#app[data-page="buy"] .table-head.buy,
+#app[data-page="buy"] .trade-row.buy {
+  grid-template-columns:minmax(calc(220px * var(--ui-scale)),2.25fr) minmax(calc(105px * var(--ui-scale)),.92fr) minmax(calc(70px * var(--ui-scale)),.62fr) minmax(calc(78px * var(--ui-scale)),.66fr) calc(120px * var(--ui-scale)) calc(42px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .table-scroll {
+  flex:1 !important;
+  min-height:0 !important;
+  overflow:auto !important;
+}
+#app[data-page="buy"] .trade-row {
+  min-height:calc(60px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  color:#d4dee6 !important;
+  border-bottom:1px solid #20313e !important;
+}
+#app[data-page="buy"] .trade-row:hover { background:#12202b !important; }
+#app[data-page="buy"] .trade-row.selected {
+  background:linear-gradient(90deg,rgba(52,125,198,.31),rgba(52,125,198,.10)) !important;
+  box-shadow:inset calc(3px * var(--ui-scale)) 0 0 #4b9eff !important;
+}
+#app[data-page="buy"] .item-cell { gap:calc(11px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .item-thumb-box {
+  width:calc(45px * var(--ui-scale)) !important;
+  height:calc(45px * var(--ui-scale)) !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .item-thumb {
+  width:calc(41px * var(--ui-scale)) !important;
+  height:calc(41px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .item-name { font-size:calc(14px * var(--ui-scale)) !important; color:#f0f4f7 !important; font-weight:560 !important; }
+#app[data-page="buy"] .item-meta { font-size:calc(10px * var(--ui-scale)) !important; color:#8fa1b5 !important; }
+#app[data-page="buy"] .money,
+#app[data-page="buy"] .count { font-size:calc(13px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .money { color:#f0f3f6 !important; }
+#app[data-page="buy"] .trade-row.buy > .count:nth-child(4) { color:#57ecaa !important; }
+#app[data-page="buy"] .row-status { min-width:calc(112px * var(--ui-scale)) !important; gap:calc(9px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .row-status-label { font-size:calc(11px * var(--ui-scale)) !important; color:#d0dae4 !important; }
+#app[data-page="buy"] .toggle {
+  width:calc(44px * var(--ui-scale)) !important;
+  height:calc(24px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .toggle::after {
+  width:calc(16px * var(--ui-scale)) !important;
+  height:calc(16px * var(--ui-scale)) !important;
+  left:calc(3px * var(--ui-scale)) !important;
+  top:calc(3px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .toggle.on::after { transform:translateX(calc(20px * var(--ui-scale))) !important; }
+#app[data-page="buy"] .trash { width:calc(38px * var(--ui-scale)) !important; height:calc(38px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .buy-table-footer {
+  min-height:calc(42px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  color:#b4c3d2 !important;
+  border-top-color:#2b4051 !important;
+  background:#101b26 !important;
+}
+#app[data-page="buy"] .empty-state {
+  inset:calc(48px * var(--ui-scale)) 0 calc(42px * var(--ui-scale)) !important;
+  display:grid !important;
+  place-content:center !important;
+  color:#8195a8 !important;
+}
+#app[data-page="buy"] .empty-state.hidden { display:none !important; }
+#app[data-page="buy"] .empty-icon { font-size:calc(40px * var(--ui-scale)) !important; color:#486274 !important; }
+#app[data-page="buy"] .empty-title { font-size:calc(14px * var(--ui-scale)) !important; color:#aebdcc !important; }
+#app[data-page="buy"] .empty-text { font-size:calc(10px * var(--ui-scale)) !important; color:#667b8d !important; }
+
+#app[data-page="buy"] .detail-card {
+  padding:calc(18px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#101b26,#0b151e) !important;
+}
+#app[data-page="buy"] .detail-top { gap:calc(15px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .detail-icon-box {
+  width:calc(70px * var(--ui-scale)) !important;
+  height:calc(70px * var(--ui-scale)) !important;
+  border-radius:calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .detail-icon { width:calc(66px * var(--ui-scale)) !important; height:calc(66px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .detail-title { font-size:calc(18px * var(--ui-scale)) !important; color:#f0f4f7 !important; }
+#app[data-page="buy"] .detail-kind { font-size:calc(11px * var(--ui-scale)) !important; color:#91a4b9 !important; }
+#app[data-page="buy"] .detail-tabs {
+  margin-top:calc(16px * var(--ui-scale)) !important;
+  padding:calc(4px * var(--ui-scale)) !important;
+  border-color:#2e4557 !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  background:#101c27 !important;
+}
+#app[data-page="buy"] .detail-tab { height:calc(36px * var(--ui-scale)) !important; font-size:calc(12px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .detail-tab.active {
+  color:#7cf0b8 !important;
+  border-color:rgba(46,225,143,.57) !important;
+  background:linear-gradient(180deg,rgba(41,213,143,.19),rgba(41,213,143,.08)) !important;
+}
+#app[data-page="buy"] .detail-fields { gap:calc(9px * var(--ui-scale)) !important; padding-top:calc(13px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .buy-main-fields,
+#app[data-page="buy"] .buy-extra-fields { gap:calc(9px * var(--ui-scale)) !important; }
+#app[data-page="buy"] .buy-main-fields > .field,
+#app[data-page="buy"] .buy-extra-fields > .field {
+  grid-template-columns:calc(108px * var(--ui-scale)) minmax(0,1fr) !important;
+  gap:calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .buy-main-fields > .field > .field-label,
+#app[data-page="buy"] .buy-extra-fields > .field > .field-label { font-size:calc(11px * var(--ui-scale)) !important; color:#b6c5d5 !important; }
+#app[data-page="buy"] .buy-main-fields .field-input,
+#app[data-page="buy"] .buy-extra-fields .field-input {
+  height:calc(39px * var(--ui-scale)) !important;
+  padding:0 calc(12px * var(--ui-scale)) !important;
+  border-radius:calc(8px * var(--ui-scale)) !important;
+  font-size:calc(12px * var(--ui-scale)) !important;
+  color:#edf2f6 !important;
+  background:#111e29 !important;
+  border-color:#314759 !important;
+}
+#app[data-page="buy"] .buy-main-fields > .field-toggle-row,
+#app[data-page="buy"] .buy-extra-fields > .field-toggle-row {
+  min-height:calc(41px * var(--ui-scale)) !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  color:#b5c4d4 !important;
+  background:#101c26 !important;
+}
+#app[data-page="buy"] .autosave-note {
+  margin-top:calc(16px * var(--ui-scale)) !important;
+  min-height:calc(62px * var(--ui-scale)) !important;
+  padding:calc(12px * var(--ui-scale)) calc(14px * var(--ui-scale)) !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  color:#9fb0c2 !important;
+  background:#111e29 !important;
+  border-color:#304657 !important;
+}
+#app[data-page="buy"] .detail-empty { font-size:calc(12px * var(--ui-scale)) !important; color:#8fa1b3 !important; }
+#app[data-page="buy"] .detail-empty-icon { color:#496579 !important; }
+#app[data-page="buy"] .detail-empty small { font-size:calc(9px * var(--ui-scale)) !important; color:#667c8f !important; }
+
+#app[data-page="buy"] .more-actions-panel {
+  top:calc(54px * var(--ui-scale)) !important;
+  width:calc(270px * var(--ui-scale)) !important;
+  gap:calc(8px * var(--ui-scale)) !important;
+  padding:calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .more-actions-panel .btn {
+  min-width:0 !important;
+  width:100% !important;
+  height:calc(38px * var(--ui-scale)) !important;
+  font-size:calc(10px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .window-minimized {
+  height:var(--topbar-h) !important;
+  min-height:var(--topbar-h) !important;
+}
+#app[data-page="buy"] .window-minimized .body-grid { display:none !important; }
+#app[data-page="buy"] .window-maximized { border-radius:calc(10px * var(--ui-scale)) !important; }
+
+@media (max-width: 1380px) {
+  #app[data-page="buy"] .page-header-hint { display:none !important; }
+  #app[data-page="buy"] .save-state::after { display:none !important; }
+  #app[data-page="buy"] .page-header-copy { min-width:calc(250px * var(--ui-scale)) !important; }
+  #app[data-page="buy"] #startButton { min-width:calc(220px * var(--ui-scale)) !important; }
+  #app[data-page="buy"] #averageButton { min-width:calc(170px * var(--ui-scale)) !important; }
+}
+
+@media (max-width: 1180px) {
+  #app[data-page="buy"] .window { --sidebar-w:calc(225px * var(--ui-scale)); }
+  #app[data-page="buy"] .nav-item { font-size:calc(14px * var(--ui-scale)) !important; }
+  #app[data-page="buy"] .page-header-meta .save-state { display:none !important; }
+  #app[data-page="buy"] #averageButton { display:none !important; }
+  #app[data-page="buy"] .workspace { grid-template-columns:minmax(0,1fr) calc(310px * var(--ui-scale)) !important; }
+}
+
+
+/* v14 final reference corrections. The JS owns the actual outer geometry. */
+#app.window-management-enabled[data-page="buy"] .window {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="large"] .table-head,
+#app[data-page="buy"] .table-head {
+  min-height: calc(43px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="large"] .trade-row,
+#app[data-page="buy"] .trade-row {
+  min-height: calc(55px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .content {
+  background:
+    radial-gradient(circle at 50% -25%, rgba(81,132,181,.065), transparent 38%),
+    radial-gradient(circle at 93% 7%, rgba(61,118,169,.05), transparent 24%),
+    #09131d !important;
+}
+
+#app[data-page="buy"] .page-header {
+  min-height: calc(112px * var(--ui-scale)) !important;
+  height: calc(112px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .toolbar {
+  height: calc(64px * var(--ui-scale)) !important;
+  padding-top: calc(8px * var(--ui-scale)) !important;
+  padding-bottom: calc(8px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .arizona-card {
+  height: calc(170px * var(--ui-scale)) !important;
+  min-height: calc(170px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .detail-card {
+  min-width: 0 !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="compact"] {
+  --sidebar-w: calc(235px * var(--ui-scale));
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .page-header-hint,
+#app[data-page="buy"] .window[data-ui-density="compact"] .save-state::after {
+  display: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .page-header-copy {
+  min-width: calc(220px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .page-header-meta {
+  gap: calc(7px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .select {
+  width: calc(175px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] #averageButton {
+  display: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] #startButton {
+  min-width: calc(205px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] #addButton {
+  min-width: calc(145px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .search-wrap {
+  min-width: calc(220px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .workspace {
+  grid-template-columns: minmax(0,1fr) minmax(calc(270px * var(--ui-scale)), 31%) !important;
+}
+
+/* Make the resize zones easier to grab without changing the visible border. */
+#app[data-page="buy"] .window-resize-handle.resize-n,
+#app[data-page="buy"] .window-resize-handle.resize-s { height: 16px !important; }
+#app[data-page="buy"] .window-resize-handle.resize-e,
+#app[data-page="buy"] .window-resize-handle.resize-w { width: 16px !important; }
+#app[data-page="buy"] .window-resize-handle.resize-ne,
+#app[data-page="buy"] .window-resize-handle.resize-nw,
+#app[data-page="buy"] .window-resize-handle.resize-se,
+#app[data-page="buy"] .window-resize-handle.resize-sw {
+  width: 28px !important;
+  height: 28px !important;
+}
+
+/* v16 responsive window pass.
+   The window manager owns outer geometry; all inner sizes derive from --ui-scale,
+   which JS calculates from the actual ArzMarket window size. */
+#app.window-management-enabled[data-page="buy"] .window {
+  min-width: min(760px, calc(100vw - 24px)) !important;
+  min-height: min(500px, calc(100vh - 24px)) !important;
+}
+
+#app[data-page="buy"] .content {
+  min-width: 0 !important;
+  padding: calc(16px * var(--ui-scale)) !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .page-header {
+  min-width: 0 !important;
+}
+#app[data-page="buy"] .page-header-copy,
+#app[data-page="buy"] .page-header-meta,
+#app[data-page="buy"] .config-label,
+#app[data-page="buy"] .save-state {
+  min-width: 0 !important;
+}
+
+#app[data-page="buy"] .toolbar {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto !important;
+  align-items: center !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+#app[data-page="buy"] .search-wrap {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+#app[data-page="buy"] #addButton {
+  min-width: calc(160px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] #averageButton {
+  min-width: calc(180px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .more-actions > summary {
+  min-width: calc(68px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] #startButton {
+  min-width: calc(240px * var(--ui-scale)) !important;
+  margin-left: 0 !important;
+}
+
+#app[data-page="buy"] .workspace,
+#app[data-page="buy"] .table-card,
+#app[data-page="buy"] .detail-card {
+  min-width: 0 !important;
+}
+
+/* Window-size based breakpoints. These work even when the game resolution stays
+   the same but the user manually resizes ArzMarket. */
+#app[data-page="buy"] .window[data-ui-density="compact"] {
+  --sidebar-w: calc(225px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .page-header-hint,
+#app[data-page="buy"] .window[data-ui-density="compact"] .save-state::after {
+  display: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .page-header-copy {
+  min-width: calc(205px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .page-header-meta {
+  gap: calc(7px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .select {
+  width: calc(170px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] #averageButton {
+  display: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .toolbar {
+  grid-template-columns: minmax(0, 1fr) auto auto auto !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] #addButton {
+  min-width: calc(130px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] #startButton {
+  min-width: calc(180px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="compact"] .workspace {
+  grid-template-columns: minmax(0,1fr) minmax(calc(245px * var(--ui-scale)), 30%) !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="tiny"] {
+  --sidebar-w: calc(190px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .brand-subtitle,
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-hint,
+#app[data-page="buy"] .window[data-ui-density="tiny"] .save-state,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #averageButton {
+  display: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .nav-item {
+  padding-left: calc(12px * var(--ui-scale)) !important;
+  padding-right: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header {
+  gap: calc(10px * var(--ui-scale)) !important;
+  padding-left: calc(14px * var(--ui-scale)) !important;
+  padding-right: calc(14px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-copy {
+  min-width: calc(165px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .config-caption,
+#app[data-page="buy"] .window[data-ui-density="tiny"] #automationBadge {
+  display: none !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .select {
+  width: calc(150px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .toolbar {
+  grid-template-columns: minmax(0,1fr) auto auto !important;
+  height: auto !important;
+  min-height: calc(58px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #addButton {
+  min-width: calc(112px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] #startButton {
+  min-width: calc(150px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .workspace {
+  grid-template-columns: minmax(0,1fr) minmax(calc(215px * var(--ui-scale)), 31%) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .table-head.buy,
+#app[data-page="buy"] .window[data-ui-density="tiny"] .trade-row.buy {
+  grid-template-columns: minmax(calc(170px * var(--ui-scale)),2fr) minmax(calc(80px * var(--ui-scale)),.85fr) minmax(calc(54px * var(--ui-scale)),.55fr) minmax(calc(58px * var(--ui-scale)),.6fr) calc(78px * var(--ui-scale)) calc(34px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .window[data-ui-density="tiny"] .row-status-label {
+  display: none !important;
+}
