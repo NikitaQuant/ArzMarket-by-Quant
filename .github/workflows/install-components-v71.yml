@@ -21,26 +21,63 @@ jobs:
       - name: Reconstruct component archive
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
+          rm -f .component_diag.txt
           cat .component_upload/part* > /tmp/arzmarket-components.b64
-          base64 -d /tmp/arzmarket-components.b64 > /tmp/arzmarket-components.gz
+          {
+            echo "base64 chars: $(wc -c < /tmp/arzmarket-components.b64)"
+            echo "first: $(head -c 16 /tmp/arzmarket-components.b64)"
+            echo "last: $(tail -c 32 /tmp/arzmarket-components.b64)"
+          } >> .component_diag.txt
+
+          if ! base64 --ignore-garbage -d /tmp/arzmarket-components.b64 > /tmp/arzmarket-components.gz 2>>.component_diag.txt; then
+            echo "base64 decode failed" >> .component_diag.txt
+          fi
+
+          file /tmp/arzmarket-components.gz >> .component_diag.txt 2>&1 || true
+          if gzip -t /tmp/arzmarket-components.gz 2>>.component_diag.txt; then
+            echo "gzip: OK" >> .component_diag.txt
+            gzip -dc /tmp/arzmarket-components.gz > /tmp/arzmarket-components.payload
+            file /tmp/arzmarket-components.payload >> .component_diag.txt 2>&1 || true
+            echo "payload head:" >> .component_diag.txt
+            head -c 512 /tmp/arzmarket-components.payload | xxd >> .component_diag.txt || true
+          else
+            echo "gzip: FAIL" >> .component_diag.txt
+          fi
+
           mkdir -p /tmp/arzmarket-unpack
+          ok=0
           if tar -tzf /tmp/arzmarket-components.gz >/dev/null 2>&1; then
             tar -xzf /tmp/arzmarket-components.gz -C /tmp/arzmarket-unpack
-          else
-            gzip -dc /tmp/arzmarket-components.gz > /tmp/arzmarket-components.payload
-            if unzip -t /tmp/arzmarket-components.payload >/dev/null 2>&1; then
-              unzip -o /tmp/arzmarket-components.payload -d /tmp/arzmarket-unpack
-            elif tar -tf /tmp/arzmarket-components.payload >/dev/null 2>&1; then
-              tar -xf /tmp/arzmarket-components.payload -C /tmp/arzmarket-unpack
-            else
-              echo "Unknown component package format"
-              file /tmp/arzmarket-components.payload || true
-              exit 1
-            fi
+            ok=1
+          elif [ -f /tmp/arzmarket-components.payload ] && unzip -t /tmp/arzmarket-components.payload >/dev/null 2>&1; then
+            unzip -o /tmp/arzmarket-components.payload -d /tmp/arzmarket-unpack
+            ok=1
+          elif [ -f /tmp/arzmarket-components.payload ] && tar -tf /tmp/arzmarket-components.payload >/dev/null 2>&1; then
+            tar -xf /tmp/arzmarket-components.payload -C /tmp/arzmarket-unpack
+            ok=1
           fi
-          cp -a /tmp/arzmarket-unpack/. ./
-          rm -rf .component_upload
+
+          if [ "$ok" = "1" ]; then
+            cp -a /tmp/arzmarket-unpack/. ./
+            rm -rf .component_upload
+            echo "unpack: OK" >> .component_diag.txt
+          else
+            echo "unpack: UNKNOWN FORMAT" >> .component_diag.txt
+          fi
+
+      - name: Commit diagnostics or unpacked files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Diagnose ArzMarket v71 component package"
+          git push origin HEAD:component-upload-v71
 
       - name: Verify required text components
         shell: bash
@@ -54,16 +91,15 @@ jobs:
           test -f modules/ArzMarketQuant/storage_core.lua
           test -f modules/ArzMarketQuant/buyroute_core.lua
 
-      - name: Commit unpacked components
+      - name: Mark unpack complete
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .component_diag.txt
           git add -A
-          if git diff --cached --quiet; then
-            echo "Nothing to commit"
-            exit 0
+          if ! git diff --cached --quiet; then
+            git commit -m "Install ArzMarket v71 components [components unpacked]"
+            git push origin HEAD:component-upload-v71
           fi
-          git commit -m "Install ArzMarket v71 components [components unpacked]"
-          git push origin HEAD:component-upload-v71
