@@ -1,0 +1,228 @@
+{
+  "manifest_version": 1,
+  "bundle_version": 71,
+  "base_url": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/",
+  "files": [
+    {
+      "path": "ArzMarket/html/assets/arizona-cactus.webp",
+      "size": 123584,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/arizona-logo.webp",
+      "size": 148726,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/average-prices-v56.css",
+      "size": 5590,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-polish.css",
+      "size": 5783,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-v13.css",
+      "size": 36853,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy.css",
+      "size": 13176,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/functional-v24.css",
+      "size": 4785,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/functional-v25.css",
+      "size": 7359,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/functional-v26.css",
+      "size": 7156,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/interface-scale-v65.css",
+      "size": 17214,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/logs-v36.css",
+      "size": 25458,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/logs-v37-buy-parity.css",
+      "size": 16304,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/marketplace-v47.css",
+      "size": 31532,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/minimal-mode-v69.css",
+      "size": 13205,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/mods-v55.css",
+      "size": 22798,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sell-v29.css",
+      "size": 34284,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sell-v30-shell-parity.css",
+      "size": 5984,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sell-v31-reference-match.css",
+      "size": 14658,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sell-v32-two-column.css",
+      "size": 9356,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sell-v33-buy-clone.css",
+      "size": 29208,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sell-v34-cleanup.css",
+      "size": 7245,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sell-v35-row-polish.css",
+      "size": 3621,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/settings-v45.css",
+      "size": 23013,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/settings-v46-fix.css",
+      "size": 7692,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/state.css",
+      "size": 610,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/storage-v38.css",
+      "size": 20558,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/storage-v42-layout-fix.css",
+      "size": 6440,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/storage-v43-sell-parity.css",
+      "size": 8694,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/style.css",
+      "size": 17220,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/ui-unified-v59.css",
+      "size": 28876,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/visual-v18.css",
+      "size": 28476,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/visual-v19.css",
+      "size": 9630,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/visual-v20.css",
+      "size": 11477,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/visual-v21.css",
+      "size": 6673,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/visual-v22.css",
+      "size": 7457,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/visual-v23.css",
+      "size": 14479,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/windowing.css",
+      "size": 2963,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/index.html",
+      "size": 37220,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/js/app.js",
+      "size": 207194,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/js/buy-polish.js",
+      "size": 11670,
+      "required": true
+    },
+    {
+      "path": "ArzMarket/lua/arz_item_icons.lua",
+      "size": 13485,
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/buyroute_core.lua",
+      "size": 51287,
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/storage_core.lua",
+      "size": 113516,
+      "required": true
+    },
+    {
+      "path": "modules/arz_html_ui.lua",
+      "size": 99959,
+      "required": true
+    }
+  ],
+  "remove": []
+}
