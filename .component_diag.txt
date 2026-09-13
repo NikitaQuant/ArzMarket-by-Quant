@@ -1,0 +1,8 @@
+base64 chars: 104000
+first: H4sIAAAAAAAAA+z9
+last: cJRHuELB9zWdxMQOJnNBUbtMnYnoxiyH
+/tmp/arzmarket-components.gz: gzip compressed data, from Unix, original size modulo 2^32 2267858664
+
+gzip: /tmp/arzmarket-components.gz: invalid compressed data--format violated
+gzip: FAIL
+unpack: UNKNOWN FORMAT
