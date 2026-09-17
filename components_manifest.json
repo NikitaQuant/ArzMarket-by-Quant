@@ -1,228 +1,563 @@
 {
   "manifest_version": 1,
-  "bundle_version": 71,
+  "bundle_version": 269,
   "base_url": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/",
   "files": [
     {
       "path": "ArzMarket/html/assets/arizona-cactus.webp",
       "size": 123584,
+      "crc32": "F7F5D4F0",
       "required": true
     },
     {
       "path": "ArzMarket/html/assets/arizona-logo.webp",
       "size": 148726,
+      "crc32": "090E4683",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/approval.png",
+      "size": 162270,
+      "crc32": "1B07E057",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/bubble_welcome_upper_left.png",
+      "size": 1085685,
+      "crc32": "D0EEB435",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/bubble_welcome_upper_right.png",
+      "size": 1147684,
+      "crc32": "BB98D7C2",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/caution.png",
+      "size": 170393,
+      "crc32": "2AA267E7",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/celebration.png",
+      "size": 172566,
+      "crc32": "4CA13C69",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/neutral.png",
+      "size": 137719,
+      "crc32": "BE8DF2F5",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/point_down_right.png",
+      "size": 163327,
+      "crc32": "6C2CC7FB",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/point_left.png",
+      "size": 150172,
+      "crc32": "F91C9CF8",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/point_right.png",
+      "size": 149119,
+      "crc32": "32EF3F1A",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/point_up_left.png",
+      "size": 162574,
+      "crc32": "356237A6",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/point_up_right.png",
+      "size": 194304,
+      "crc32": "38EE8462",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/presenting.png",
+      "size": 143432,
+      "crc32": "2F650458",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/promo_panel.png",
+      "size": 959485,
+      "crc32": "1F351B4A",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/question.png",
+      "size": 162890,
+      "crc32": "24F2A14B",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/sad.png",
+      "size": 158027,
+      "crc32": "2B6D13F5",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/talking.png",
+      "size": 145365,
+      "crc32": "AC51CAC9",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/thinking.png",
+      "size": 138411,
+      "crc32": "39CE6DD7",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/thinking_question.png",
+      "size": 153320,
+      "crc32": "6E244B33",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/assets/baron/waving.png",
+      "size": 155307,
+      "crc32": "2977B366",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/assistant-v78.css",
+      "size": 14664,
+      "crc32": "29ADC2FF",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/average-prices-v56.css",
       "size": 5590,
+      "crc32": "5A1C47D4",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-config-sell-copy-v219.css",
+      "size": 1358,
+      "crc32": "45A5ED55",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-detail-layout-v199.css",
+      "size": 2572,
+      "crc32": "BF6C2541",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-header-meta-sell-parity-v194.css",
+      "size": 5134,
+      "crc32": "675A9077",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-list-fixes-v209.css",
+      "size": 280,
+      "crc32": "C951B70D",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/buy-polish.css",
       "size": 5783,
+      "crc32": "F27B7DE8",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-sell-exact-parity-v205.css",
+      "size": 381,
+      "crc32": "66354B77",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-sell-parity-v202.css",
+      "size": 2163,
+      "crc32": "9E5564A3",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-start-sell-parity-v217.css",
+      "size": 3313,
+      "crc32": "DFA6F895",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/buy-topbar-sell-parity-v193.css",
+      "size": 2489,
+      "crc32": "8D310E78",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/buy-v13.css",
-      "size": 36853,
+      "size": 36707,
+      "crc32": "9C2BDDB1",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/buy.css",
       "size": 13176,
+      "crc32": "2A7BACE9",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/functional-v24.css",
       "size": 4785,
+      "crc32": "356A6511",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/functional-v25.css",
       "size": 7359,
+      "crc32": "1D2ED233",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/functional-v26.css",
       "size": 7156,
+      "crc32": "D0F2B25D",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/glow-final-v241.css",
+      "size": 6205,
+      "crc32": "15A56057",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/glow-final-v242.css",
+      "size": 7436,
+      "crc32": "D080B231",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/header-height-sell-parity-v196.css",
+      "size": 2479,
+      "crc32": "1EAF8239",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/html-themes-v88.css",
+      "size": 5888,
+      "crc32": "786B72C2",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/interface-scale-v65.css",
       "size": 17214,
+      "crc32": "04CAAA40",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/logs-v36.css",
       "size": 25458,
+      "crc32": "329120FE",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/logs-v37-buy-parity.css",
       "size": 16304,
+      "crc32": "48EBA88A",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/marketplace-v47.css",
       "size": 31532,
+      "crc32": "45603063",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/minimal-mode-v69.css",
-      "size": 13205,
+      "size": 13614,
+      "crc32": "D15FDDCD",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/mods-catalog-v250.css",
+      "size": 2455,
+      "crc32": "59BFB5EF",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/mods-v55.css",
-      "size": 22798,
+      "size": 24275,
+      "crc32": "F98E1922",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/number-input-no-spinners-v201.css",
+      "size": 413,
+      "crc32": "A3CCA95F",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/sell-v29.css",
       "size": 34284,
+      "crc32": "8F5AAD86",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/sell-v30-shell-parity.css",
       "size": 5984,
+      "crc32": "AD27BBB9",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/sell-v31-reference-match.css",
       "size": 14658,
+      "crc32": "D4344342",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/sell-v32-two-column.css",
       "size": 9356,
+      "crc32": "3E33C315",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/sell-v33-buy-clone.css",
-      "size": 29208,
+      "size": 29306,
+      "crc32": "5681FEFE",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/sell-v34-cleanup.css",
       "size": 7245,
+      "crc32": "493A3675",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/sell-v35-row-polish.css",
-      "size": 3621,
+      "size": 3997,
+      "crc32": "8C5E820D",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/settings-appearance-responsive-v268.css",
+      "size": 2689,
+      "crc32": "94452480",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/settings-v45.css",
       "size": 23013,
+      "crc32": "40267B05",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/settings-v46-fix.css",
-      "size": 7692,
+      "size": 8920,
+      "crc32": "8735A35C",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/sidebar-settings-reference-v214.css",
+      "size": 4478,
+      "crc32": "89A437B4",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/state.css",
       "size": 610,
+      "crc32": "C202EF88",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/storage-v38.css",
       "size": 20558,
+      "crc32": "15654C98",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/storage-v42-layout-fix.css",
       "size": 6440,
+      "crc32": "1AABDC7C",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/storage-v43-sell-parity.css",
       "size": 8694,
+      "crc32": "A779A87F",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/style.css",
-      "size": 17220,
+      "size": 20781,
+      "crc32": "3C01722A",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/theme-accent-parity-v249.css",
+      "size": 10121,
+      "crc32": "45D61943",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/theme-system-v158.css",
+      "size": 109006,
+      "crc32": "F6B81CD9",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/topbar-sell-parity-v195.css",
+      "size": 6426,
+      "crc32": "35A83976",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/trade-controls-parity-v210.css",
+      "size": 3114,
+      "crc32": "FB346869",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/trade-row-sell-parity-v200.css",
+      "size": 7648,
+      "crc32": "DCBDD2F1",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/ui-polish-v89.css",
+      "size": 12551,
+      "crc32": "AED5F5B5",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/ui-unified-v59.css",
       "size": 28876,
+      "crc32": "A3398D50",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/visual-v18.css",
       "size": 28476,
+      "crc32": "77F31F3F",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/visual-v19.css",
       "size": 9630,
+      "crc32": "53D653A6",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/visual-v20.css",
       "size": 11477,
+      "crc32": "BFA0652A",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/visual-v21.css",
       "size": 6673,
+      "crc32": "CEDB6161",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/visual-v22.css",
       "size": 7457,
+      "crc32": "7AB0C528",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/visual-v23.css",
       "size": 14479,
+      "crc32": "1F44C3D6",
       "required": true
     },
     {
       "path": "ArzMarket/html/css/windowing.css",
-      "size": 2963,
+      "size": 3085,
+      "crc32": "C8699C1E",
       "required": true
     },
     {
       "path": "ArzMarket/html/index.html",
-      "size": 37220,
+      "size": 38297,
+      "crc32": "0F509391",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/app.js",
-      "size": 207194,
+      "size": 238822,
+      "crc32": "0C3AD659",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/js/assistant-v78.js",
+      "size": 44291,
+      "crc32": "E639FF65",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/buy-polish.js",
-      "size": 11670,
+      "size": 8802,
+      "crc32": "E28D266D",
       "required": true
     },
     {
       "path": "ArzMarket/lua/arz_item_icons.lua",
-      "size": 13485,
+      "size": 23088,
+      "crc32": "182C3EC2",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/baron_assistant.lua",
+      "size": 108678,
+      "crc32": "F6E32549",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/baron_onboarding.lua",
+      "size": 5285,
+      "crc32": "0FD9CC1E",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/baron_tutorial_html.lua",
+      "size": 34637,
+      "crc32": "83E829BE",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/baron_tutorial_lua.lua",
+      "size": 25314,
+      "crc32": "DCA74434",
       "required": true
     },
     {
       "path": "modules/ArzMarketQuant/buyroute_core.lua",
       "size": 51287,
+      "crc32": "3BB13846",
       "required": true
     },
     {
       "path": "modules/ArzMarketQuant/storage_core.lua",
       "size": 113516,
+      "crc32": "741BC665",
       "required": true
     },
     {
       "path": "modules/arz_html_ui.lua",
-      "size": 99959,
+      "size": 136011,
+      "crc32": "BEFB20E5",
+      "required": true
+    },
+    {
+      "path": "modules/modules_manifest.json",
+      "size": 459,
+      "crc32": "45C8C99A",
       "required": true
     }
   ],
-  "remove": []
+  "remove": [
+    "modules/storage_core.lua",
+    "modules/buyroute_core.lua"
+  ]
 }

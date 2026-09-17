@@ -15773,9 +15773,14 @@ function main()
 		return
 	end
 
-	-- On a clean one-file installation the component bootstrap may have created
-	-- the assistant module only now. Retry loading it after components are ready.
-	if not ARZ_BARON_ASSISTANT then pcall(arzBaronLoadAssistant) end
+	local successfulUpdateBackup = getWorkingDirectory() .. "\\" .. tostring(thisScript().name) .. ".backup"
+	if doesFileExist(successfulUpdateBackup) then
+		pcall(os.remove, successfulUpdateBackup)
+	end
+
+	-- Load Baron again after component bootstrap so a freshly downloaded or
+	-- updated assistant is used immediately in this same script session.
+	pcall(arzBaronLoadAssistant)
 
 	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.registerCommands) == "function" then
 		ARZ_BARON_ASSISTANT.registerCommands()
@@ -16787,9 +16792,12 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
+ARZ_UPDATE_VERSION = "3.56.113"
+ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
+
 function autoUpdateCheckUrl()
 	print("isUpdate?")
-	asyncHttpRequest("GET", "https://raw.githubusercontent.com/FREYM1337/forumnick/main/ArzMarketV3/updateArzMarket.js", {}, function(updateCheckResponse)
+	asyncHttpRequest("GET", ARZ_UPDATE_INFO_URL, {}, function(updateCheckResponse)
 		if updateCheckResponse.status_code == 200 or updateCheckResponse.status_code == 304 then
 			local updateInfo, decodeError = decodeJsonSafe(updateCheckResponse.text)
 
@@ -16797,7 +16805,7 @@ function autoUpdateCheckUrl()
 				print("success updated. " .. tostring(ini.cfg.lastItemsUpdate))
 
 				marketState.scriptVersion[3] = updateInfo
-				local currentVersion = tostring(marketState.scriptVersion[1] or "")
+				local currentVersion = tostring(ARZ_UPDATE_VERSION or marketState.scriptVersion[1] or "")
 				local latestVersion = tostring(updateInfo.latest or "")
 				local compareResult = arzCompareVersions(latestVersion, currentVersion)
 				local hasUpdateUrl = type(updateInfo.updateurl) == "string" and updateInfo.updateurl ~= ""
@@ -20370,48 +20378,85 @@ function downloadScriptPage()
 		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
 
 		if imgui.Button("Обновить сейчас.", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			asyncHttpRequest("GET", marketState.scriptVersion[3].updateurl, {}, function(scriptUpdateResponse)
-				if scriptUpdateResponse.status_code == 200 or scriptUpdateResponse.status_code == 201 then
-					deAFKMessage(debug.getinfo(1, "l"), "updated script?: " .. scriptUpdateResponse.text)
+			local updateUrl = type(marketState.scriptVersion[3]) == "table" and marketState.scriptVersion[3].updateurl or nil
+			if type(updateUrl) ~= "string" or updateUrl == "" then
+				sendNotify(u8:decode("Не удалось обновить ArzMarket: ссылка обновления отсутствует."))
+			else
+				asyncHttpRequest("GET", updateUrl, {}, function(scriptUpdateResponse)
+					if scriptUpdateResponse.status_code == 200 or scriptUpdateResponse.status_code == 201 then
+						local currentScriptPath = getWorkingDirectory() .. "\\" .. tostring(thisScript().name)
+						local updateTempPath = currentScriptPath .. ".update"
+						local backupPath = currentScriptPath .. ".backup"
+						pcall(os.remove, updateTempPath)
+						local updateFile, openError = io.open(updateTempPath, "wb")
+						if not updateFile then
+							deAFKMessage("update temp open failed > " .. tostring(openError))
+							sendNotify(u8:decode("Не удалось сохранить обновление ArzMarket."))
+							return
+						end
+						updateFile:write(scriptUpdateResponse.text or "")
+						updateFile:flush()
+						updateFile:close()
 
-					local updateFilePath = getWorkingDirectory() .. "\\#ArzMarket[" .. tostring(marketState.scriptVersion[3].latest:gsub("%.", "_")) .. "].lua"
-					local updateFile, openError = io.open(updateFilePath, "wb")
-
-					deAFKMessage("saved? > " .. tostring(updateFile) .. "|" .. tostring(openError))
-
-					if updateFile then
-						local currentScriptPath
-
-						if doesFileExist(getWorkingDirectory() .. "\\" .. thisScript().name) then
-							currentScriptPath = getWorkingDirectory() .. "\\" .. thisScript().name
+						local expectedUpdateSize = tonumber(marketState.scriptVersion[3].size)
+						if expectedUpdateSize and expectedUpdateSize > 0 and arzComponentsFileSize(updateTempPath) ~= expectedUpdateSize then
+							pcall(os.remove, updateTempPath)
+							deAFKMessage("update size rejected")
+							sendNotify(u8:decode("Обновление ArzMarket повреждено: размер файла не совпал."))
+							return
 						end
 
-						deAFKMessage("saved!")
-						updateFile:write(scriptUpdateResponse.text)
-						updateFile:close()
-						wait(50)
-						script.load(updateFilePath)
-						wait(50)
-
-						if currentScriptPath then
-							deAFKMessage("unloading old version![1]")
-
-							for scriptIndex, script in pairs(script.list()) do
-								if script.filename == thisScript().name then
-									deAFKMessage("unloading old version![2]")
-									script:unload()
-									os.remove(currentScriptPath)
-
-									break
-								end
+						local expectedUpdateCrc32 = tostring(marketState.scriptVersion[3].crc32 or ""):upper():gsub("[^0-9A-F]", "")
+						if expectedUpdateCrc32 ~= "" and type(arzComponentsFileCrc32) == "function" then
+							local actualUpdateCrc32 = arzComponentsFileCrc32(updateTempPath)
+							if not actualUpdateCrc32 or tostring(actualUpdateCrc32):upper() ~= expectedUpdateCrc32 then
+								pcall(os.remove, updateTempPath)
+								deAFKMessage("update crc32 rejected")
+								sendNotify(u8:decode("Обновление ArzMarket повреждено: контрольная сумма не совпала."))
+								return
 							end
 						end
+
+						local updateChunk, syntaxError = loadfile(updateTempPath)
+						if not updateChunk then
+							pcall(os.remove, updateTempPath)
+							deAFKMessage("update syntax rejected > " .. tostring(syntaxError))
+							sendNotify(u8:decode("Обновление ArzMarket повреждено и не было установлено."))
+							return
+						end
+
+						pcall(os.remove, backupPath)
+						local backedUp, backupError = os.rename(currentScriptPath, backupPath)
+						if not backedUp then
+							pcall(os.remove, updateTempPath)
+							deAFKMessage("update backup failed > " .. tostring(backupError))
+							sendNotify(u8:decode("Не удалось подготовить резервную копию ArzMarket."))
+							return
+						end
+
+						local replaced, replaceError = os.rename(updateTempPath, currentScriptPath)
+						if not replaced then
+							pcall(os.rename, backupPath, currentScriptPath)
+							pcall(os.remove, updateTempPath)
+							deAFKMessage("update replace failed > " .. tostring(replaceError))
+							sendNotify(u8:decode("Не удалось заменить файл ArzMarket. Старая версия восстановлена."))
+							return
+						end
+
+						deAFKMessage("ArzMarket main script updated safely. Reloading.")
+						lua_thread.create(function()
+							wait(250)
+							thisScript():reload()
+						end)
+					else
+						deAFKMessage(debug.getinfo(1, "l"), "update http error " .. tostring(scriptUpdateResponse.status_code))
+						sendNotify(u8:decode("Не удалось скачать обновление ArzMarket."))
 					end
-				end
-			end, function(scriptUpdateError)
-				deAFKMessage(debug.getinfo(1, "l"), "sub error")
-				sendNotify(u8:decode("Ошибка клиента/сервера. Обратитесь в поддержку."))
-			end)
+				end, function(scriptUpdateError)
+					deAFKMessage(debug.getinfo(1, "l"), "update request error " .. tostring(scriptUpdateError))
+					sendNotify(u8:decode("Ошибка загрузки обновления ArzMarket."))
+				end)
+			end
 
 			marketState.isPopupActive = false
 			marketState.scriptVersion[2] = false
@@ -35049,7 +35094,7 @@ end
 -- ============================================================
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
-ARZ_COMPONENTS.bootstrap.manifest_url = "__ARZMARKET_COMPONENTS_MANIFEST_RAW_URL__"
+ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"
@@ -35059,37 +35104,52 @@ ARZ_COMPONENTS.bootstrap.required_local = {
 	"ArzMarket/html/assets/arizona-cactus.webp",
 	"ArzMarket/html/assets/arizona-logo.webp",
 	"ArzMarket/html/assets/baron/approval.png",
+	"ArzMarket/html/assets/baron/bubble_welcome_upper_left.png",
+	"ArzMarket/html/assets/baron/bubble_welcome_upper_right.png",
 	"ArzMarket/html/assets/baron/caution.png",
 	"ArzMarket/html/assets/baron/celebration.png",
 	"ArzMarket/html/assets/baron/neutral.png",
 	"ArzMarket/html/assets/baron/point_down_right.png",
 	"ArzMarket/html/assets/baron/point_left.png",
 	"ArzMarket/html/assets/baron/point_right.png",
-	"ArzMarket/html/assets/baron/presenting.png",
 	"ArzMarket/html/assets/baron/point_up_left.png",
 	"ArzMarket/html/assets/baron/point_up_right.png",
+	"ArzMarket/html/assets/baron/presenting.png",
+	"ArzMarket/html/assets/baron/promo_panel.png",
 	"ArzMarket/html/assets/baron/question.png",
 	"ArzMarket/html/assets/baron/sad.png",
 	"ArzMarket/html/assets/baron/talking.png",
 	"ArzMarket/html/assets/baron/thinking.png",
 	"ArzMarket/html/assets/baron/thinking_question.png",
 	"ArzMarket/html/assets/baron/waving.png",
-	"ArzMarket/html/assets/baron/bubble_welcome_upper_left.png",
-	"ArzMarket/html/assets/baron/bubble_welcome_upper_right.png",
 	"ArzMarket/html/css/assistant-v78.css",
 	"ArzMarket/html/css/average-prices-v56.css",
+	"ArzMarket/html/css/buy-config-sell-copy-v219.css",
+	"ArzMarket/html/css/buy-detail-layout-v199.css",
+	"ArzMarket/html/css/buy-header-meta-sell-parity-v194.css",
+	"ArzMarket/html/css/buy-list-fixes-v209.css",
 	"ArzMarket/html/css/buy-polish.css",
+	"ArzMarket/html/css/buy-sell-exact-parity-v205.css",
+	"ArzMarket/html/css/buy-sell-parity-v202.css",
+	"ArzMarket/html/css/buy-start-sell-parity-v217.css",
+	"ArzMarket/html/css/buy-topbar-sell-parity-v193.css",
 	"ArzMarket/html/css/buy-v13.css",
 	"ArzMarket/html/css/buy.css",
 	"ArzMarket/html/css/functional-v24.css",
 	"ArzMarket/html/css/functional-v25.css",
 	"ArzMarket/html/css/functional-v26.css",
+	"ArzMarket/html/css/glow-final-v241.css",
+	"ArzMarket/html/css/glow-final-v242.css",
+	"ArzMarket/html/css/header-height-sell-parity-v196.css",
+	"ArzMarket/html/css/html-themes-v88.css",
 	"ArzMarket/html/css/interface-scale-v65.css",
 	"ArzMarket/html/css/logs-v36.css",
 	"ArzMarket/html/css/logs-v37-buy-parity.css",
 	"ArzMarket/html/css/marketplace-v47.css",
 	"ArzMarket/html/css/minimal-mode-v69.css",
+	"ArzMarket/html/css/mods-catalog-v250.css",
 	"ArzMarket/html/css/mods-v55.css",
+	"ArzMarket/html/css/number-input-no-spinners-v201.css",
 	"ArzMarket/html/css/sell-v29.css",
 	"ArzMarket/html/css/sell-v30-shell-parity.css",
 	"ArzMarket/html/css/sell-v31-reference-match.css",
@@ -35097,13 +35157,21 @@ ARZ_COMPONENTS.bootstrap.required_local = {
 	"ArzMarket/html/css/sell-v33-buy-clone.css",
 	"ArzMarket/html/css/sell-v34-cleanup.css",
 	"ArzMarket/html/css/sell-v35-row-polish.css",
+	"ArzMarket/html/css/settings-appearance-responsive-v268.css",
 	"ArzMarket/html/css/settings-v45.css",
 	"ArzMarket/html/css/settings-v46-fix.css",
+	"ArzMarket/html/css/sidebar-settings-reference-v214.css",
 	"ArzMarket/html/css/state.css",
 	"ArzMarket/html/css/storage-v38.css",
 	"ArzMarket/html/css/storage-v42-layout-fix.css",
 	"ArzMarket/html/css/storage-v43-sell-parity.css",
 	"ArzMarket/html/css/style.css",
+	"ArzMarket/html/css/theme-accent-parity-v249.css",
+	"ArzMarket/html/css/theme-system-v158.css",
+	"ArzMarket/html/css/topbar-sell-parity-v195.css",
+	"ArzMarket/html/css/trade-controls-parity-v210.css",
+	"ArzMarket/html/css/trade-row-sell-parity-v200.css",
+	"ArzMarket/html/css/ui-polish-v89.css",
 	"ArzMarket/html/css/ui-unified-v59.css",
 	"ArzMarket/html/css/visual-v18.css",
 	"ArzMarket/html/css/visual-v19.css",
@@ -35119,11 +35187,12 @@ ARZ_COMPONENTS.bootstrap.required_local = {
 	"ArzMarket/lua/arz_item_icons.lua",
 	"modules/ArzMarketQuant/baron_assistant.lua",
 	"modules/ArzMarketQuant/baron_onboarding.lua",
-	"modules/ArzMarketQuant/baron_tutorial_lua.lua",
 	"modules/ArzMarketQuant/baron_tutorial_html.lua",
+	"modules/ArzMarketQuant/baron_tutorial_lua.lua",
 	"modules/ArzMarketQuant/buyroute_core.lua",
 	"modules/ArzMarketQuant/storage_core.lua",
 	"modules/arz_html_ui.lua",
+	"modules/modules_manifest.json",
 }
 ARZ_COMPONENTS.bootstrap.last_error = nil
 ARZ_COMPONENTS.bootstrap.last_status = nil
@@ -35257,6 +35326,50 @@ function arzComponentsDownloadFile(url, path, timeoutSeconds)
 	return true
 end
 
+ARZ_COMPONENTS.bootstrap.crc32_table = ARZ_COMPONENTS.bootstrap.crc32_table or nil
+
+function arzComponentsCrc32Table()
+	if type(ARZ_COMPONENTS.bootstrap.crc32_table) == "table" then
+		return ARZ_COMPONENTS.bootstrap.crc32_table
+	end
+	local result = {}
+	for index = 0, 255 do
+		local value = index
+		for _ = 1, 8 do
+			if bit.band(value, 1) ~= 0 then
+				value = bit.bxor(bit.rshift(value, 1), 0xEDB88320)
+			else
+				value = bit.rshift(value, 1)
+			end
+		end
+		result[index] = value
+	end
+	ARZ_COMPONENTS.bootstrap.crc32_table = result
+	return result
+end
+
+function arzComponentsFileCrc32(path)
+	local file = io.open(path, "rb")
+	if not file then return nil end
+	local crc = 0xFFFFFFFF
+	local lookup = arzComponentsCrc32Table()
+	while true do
+		local chunk = file:read(65536)
+		if not chunk or chunk == "" then break end
+		for index = 1, #chunk do
+			local tableIndex = bit.band(bit.bxor(crc, chunk:byte(index)), 0xFF)
+			crc = bit.bxor(bit.rshift(crc, 8), lookup[tableIndex])
+		end
+	end
+	file:close()
+	crc = bit.bxor(crc, 0xFFFFFFFF)
+	if type(bit.tohex) == "function" then
+		return tostring(bit.tohex(crc, 8)):upper()
+	end
+	if crc < 0 then crc = crc + 4294967296 end
+	return string.format("%08X", crc)
+end
+
 function arzComponentsValidateFile(path, entry)
 	local size = arzComponentsFileSize(path)
 	if size <= 0 then return false, "empty_file" end
@@ -35269,6 +35382,15 @@ function arzComponentsValidateFile(path, entry)
 	local expectedSize = tonumber(type(entry) == "table" and entry.size or nil)
 	if expectedSize and expectedSize > 0 and size ~= expectedSize then
 		return false, "file_size_mismatch"
+	end
+
+	local expectedCrc32 = tostring(type(entry) == "table" and entry.crc32 or ""):upper():gsub("[^0-9A-F]", "")
+	if expectedCrc32 ~= "" then
+		local actualCrc32 = arzComponentsFileCrc32(path)
+		if not actualCrc32 then return false, "crc32_read_failed" end
+		if tostring(actualCrc32):upper() ~= expectedCrc32 then
+			return false, "crc32_mismatch"
+		end
 	end
 
 	local relativePath = tostring(type(entry) == "table" and entry.path or path):lower()
@@ -35423,35 +35545,46 @@ function arzComponentsDownloadManifestFiles(manifest)
 	arzComponentsCleanupWorkFiles(manifest)
 
 	for _, entry in ipairs(manifest.files or {}) do
+		entry._skip_install = nil
 		local relativePath = entry.path
-		local url = arzComponentsResolveEntryUrl(manifest, entry)
-		if not url then
-			if entry.required == false then
+		local currentPath = arzComponentsAbsolutePath(relativePath)
+		if currentPath and doesFileExist(currentPath) then
+			local currentValid = arzComponentsValidateFile(currentPath, entry)
+			if currentValid then
 				entry._skip_install = true
-			else
-				arzComponentsCleanupWorkFiles(manifest)
-				return false, "component_url_not_configured:" .. tostring(relativePath)
 			end
-		else
-			local stagePath = ARZ_COMPONENTS.bootstrap.stage_root .. "\\" .. relativePath:gsub("/", "\\")
-			local downloaded, downloadError = arzComponentsDownloadFile(url, stagePath, tonumber(entry.timeout) or 45)
-			if not downloaded then
+		end
+
+		if not entry._skip_install then
+			local url = arzComponentsResolveEntryUrl(manifest, entry)
+			if not url then
 				if entry.required == false then
 					entry._skip_install = true
-					pcall(os.remove, stagePath)
 				else
 					arzComponentsCleanupWorkFiles(manifest)
-					return false, "component_download_failed:" .. tostring(relativePath) .. ":" .. tostring(downloadError)
+					return false, "component_url_not_configured:" .. tostring(relativePath)
 				end
 			else
-				local valid, validationError = arzComponentsValidateFile(stagePath, entry)
-				if not valid then
-					pcall(os.remove, stagePath)
+				local stagePath = ARZ_COMPONENTS.bootstrap.stage_root .. "\\" .. relativePath:gsub("/", "\\")
+				local downloaded, downloadError = arzComponentsDownloadFile(url, stagePath, tonumber(entry.timeout) or 45)
+				if not downloaded then
 					if entry.required == false then
 						entry._skip_install = true
+						pcall(os.remove, stagePath)
 					else
 						arzComponentsCleanupWorkFiles(manifest)
-						return false, "component_validation_failed:" .. tostring(relativePath) .. ":" .. tostring(validationError)
+						return false, "component_download_failed:" .. tostring(relativePath) .. ":" .. tostring(downloadError)
+					end
+				else
+					local valid, validationError = arzComponentsValidateFile(stagePath, entry)
+					if not valid then
+						pcall(os.remove, stagePath)
+						if entry.required == false then
+							entry._skip_install = true
+						else
+							arzComponentsCleanupWorkFiles(manifest)
+							return false, "component_validation_failed:" .. tostring(relativePath) .. ":" .. tostring(validationError)
+						end
 					end
 				end
 			end
@@ -35523,9 +35656,14 @@ function arzComponentsInstallManifestFiles(manifest)
 	end
 
 	for _, entry in ipairs(manifest.files or {}) do
-		if not entry._skip_install then
+		if entry.required ~= false then
 			local targetPath = arzComponentsAbsolutePath(entry.path)
-			local valid, validationError = arzComponentsValidateFile(targetPath, entry)
+			local valid, validationError
+			if targetPath then
+				valid, validationError = arzComponentsValidateFile(targetPath, entry)
+			else
+				valid, validationError = false, "target_missing"
+			end
 			if not valid then
 				arzComponentsRollbackInstall(installedEntries)
 				arzComponentsCleanupWorkFiles(manifest)
