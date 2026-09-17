@@ -1,6 +1,6 @@
 local M = {}
 
-M.VERSION = 60
+M.VERSION = 61
 M.REQUIRED_TUTORIAL_VERSION = 1
 M.NAME = "Барон дю Валлон де Брасье де Пьерфон"
 
@@ -57,12 +57,13 @@ local missingAnchorWatch = {
 }
 
 local displayGate = {
+    scriptReady = false,
     readySince = nil
 }
 
 local commandsRegistered = false
 
-local DISPLAY_DELAY_MS = 90000
+local DISPLAY_DELAY_MS = 40000
 
 -- Lua tutorial is preserved in baron_tutorial_lua.lua, but temporarily disabled.
 local LUA_TUTORIAL_ENABLED = false
@@ -449,7 +450,11 @@ local function migrateState(loaded, firstLaunch, preferredInterface)
         -- a script/CEF reload can make an unfinished tutorial look completed.
         if out.active == true and tostring(out.current_step or "") ~= "dormant" then
             out.dismissed_step = nil
-            out.display_delay_done = true
+            if tostring(out.current_step or "") ~= "welcome" then
+                out.display_delay_done = true
+            else
+                out.display_delay_done = out.display_delay_done == true
+            end
         else
             out.display_delay_done = out.display_delay_done == true
         end
@@ -554,21 +559,9 @@ local function visibleSegments(step)
     return out, typed.count >= typed.total
 end
 
-local function isPlayerReady()
-    if ctx and type(ctx.isPlayerReady) == "function" then
-        local ok, value = pcall(ctx.isPlayerReady)
-        if ok then return value == true end
-    end
-    return true
-end
-
 local function isDisplayReady()
-    if not isPlayerReady() then
-        displayGate.readySince = nil
+    if displayGate.scriptReady ~= true then
         return false
-    end
-    if type(state) == "table" and state.display_delay_done == true then
-        return true
     end
     local now = nowMs()
     if not tonumber(displayGate.readySince) then
@@ -616,9 +609,12 @@ function M.init(context)
     -- accidentally retrigger training. Increment REQUIRED_TUTORIAL_VERSION only
     -- when a future release must force onboarding for all users again.
     if (tonumber(state.required_tutorial_version) or 0) < M.REQUIRED_TUTORIAL_VERSION then
-        local hasSavedProgress = state.active == true
-            and tostring(state.current_step or state.step or "") ~= ""
-            and tostring(state.current_step or state.step or "") ~= "dormant"
+        local savedStep = tostring(state.current_step or state.step or "")
+        local hasSavedProgress = loaded ~= nil
+            and state.active == true
+            and savedStep ~= ""
+            and savedStep ~= "dormant"
+            and (state.display_delay_done == true or savedStep ~= "welcome")
 
         if hasSavedProgress then
             -- The current tutorial wave has already started. Mark the release as
@@ -663,7 +659,9 @@ function M.init(context)
     -- unfinished training visibly and immediately after a script/CEF reload.
     if loaded ~= nil and state.active == true and tostring(state.current_step or "") ~= "dormant" then
         state.dismissed_step = nil
-        state.display_delay_done = true
+        if tostring(state.current_step or "") ~= "welcome" then
+            state.display_delay_done = true
+        end
     end
 
     -- Repair old/corrupted states where a visible tutorial step was saved with
@@ -686,8 +684,28 @@ function M.init(context)
     -- after UI modules are initialized and can safely validate those steps.
     state.version = M.VERSION
     state.step = state.current_step
+    displayGate.scriptReady = false
     displayGate.readySince = nil
     save()
+    return true
+end
+
+function M.markScriptReady()
+    displayGate.scriptReady = true
+    displayGate.readySince = nowMs()
+    return true
+end
+
+function M.getDisplayDelayMs()
+    return DISPLAY_DELAY_MS
+end
+
+function M.openDisplayGateNow()
+    displayGate.scriptReady = true
+    displayGate.readySince = nowMs() - DISPLAY_DELAY_MS
+    if type(state) == "table" then
+        state.display_delay_done = true
+    end
     return true
 end
 
@@ -1244,6 +1262,12 @@ end
 
 function M.handleFaqCommand(argument)
     local level = tostring(argument or ""):match("^%s*(.-)%s*$") or ""
+
+    -- /faqq is a manual debug/training command. It must start immediately and
+    -- must not wait for either of the automatic 40 second onboarding gates.
+    M.openDisplayGateNow()
+    runtimeCall("openTutorialGate")
+
     local ok = false
     local kind = nil
     local mode = nil
@@ -2461,17 +2485,9 @@ function M.render(imgui, params)
         imgui.PopStyleColor(4)
         if noReady and clickedNo then M.chooseFutureDetails(false) end
     elseif step.choice == "tutorial" then
-        local gap = 10 * uiScale
         local buttonH = 42 * uiScale
-        local totalAvailableW = math.max(310 * uiScale, actionRegionW - 16 * uiScale)
-        local acceptW = math.min(200 * uiScale, math.max(180 * uiScale, totalAvailableW * 0.62))
-        local laterW = math.min(112 * uiScale, math.max(100 * uiScale, totalAvailableW - acceptW - gap))
-        local totalW = acceptW + laterW + gap
-        if totalW > totalAvailableW then
-            acceptW = math.max(170 * uiScale, totalAvailableW - laterW - gap)
-            totalW = acceptW + laterW + gap
-        end
-        local actionX = actionRegionX + math.max(0, (actionRegionW - totalW) * 0.5)
+        local acceptW = 200 * uiScale
+        local actionX = actionRegionX + math.max(0, (actionRegionW - acceptW) * 0.5)
         imgui.SetCursorPos(imgui.ImVec2(actionX, actionY - wp.y))
         imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.13, 0.52, 0.82, 1))
         imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.17, 0.59, 0.90, 1))
@@ -2480,15 +2496,6 @@ function M.render(imgui, params)
         local acceptClicked = imgui.Button("Пройти обучение##baron_accept", imgui.ImVec2(acceptW, buttonH))
         imgui.PopStyleColor(4)
         if acceptClicked then M.chooseTutorial(true) end
-
-        imgui.SameLine(0, gap)
-        imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.90, 0.94, 0.98, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.84, 0.91, 0.97, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.80, 0.88, 0.95, 1))
-        imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(0.29, 0.43, 0.60, 1))
-        local laterClicked = imgui.Button("Позже##baron_decline", imgui.ImVec2(laterW, buttonH))
-        imgui.PopStyleColor(4)
-        if laterClicked then M.chooseTutorial(false) end
     elseif tostring(step.message_link_label or "") ~= "" and tostring(step.message_link_url or "") ~= "" then
         local linkLabel = tostring(step.message_link_label)
         local linkUrl = tostring(step.message_link_url)

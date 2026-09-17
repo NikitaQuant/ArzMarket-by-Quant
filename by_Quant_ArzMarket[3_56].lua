@@ -4265,7 +4265,49 @@ end
 ARZ_BARON_SHOWCASE_MODE = ARZ_BARON_SHOWCASE_MODE or nil
 ARZ_BARON_PENDING_STAGE_SYNC = ARZ_BARON_PENDING_STAGE_SYNC or nil
 
+ARZ_BARON_START_DELAY_MS = 40000
+ARZ_BARON_SESSION_READY_AT_MS = nil
+ARZ_BARON_SESSION_MANUAL_OVERRIDE = false
+
+function arzBaronNowMs()
+	if type(getGameTimer) == "function" then
+		local okTimer, value = pcall(getGameTimer)
+		if okTimer and tonumber(value) then return tonumber(value) end
+	end
+	return os.time() * 1000
+end
+
+function arzBaronArmSessionGate()
+	local now = arzBaronNowMs()
+	ARZ_BARON_SESSION_READY_AT_MS = now + ARZ_BARON_START_DELAY_MS
+	ARZ_BARON_SESSION_MANUAL_OVERRIDE = false
+	ARZ_BARON_PENDING_STAGE_SYNC = nil
+	ARZ_BARON_SHOWCASE_MODE = nil
+	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
+		ARZ_INTERFACE_CHOOSER.visible[0] = false
+	end
+	return ARZ_BARON_SESSION_READY_AT_MS
+end
+
+function arzBaronOpenSessionGateForManualCommand()
+	ARZ_BARON_SESSION_READY_AT_MS = arzBaronNowMs()
+	ARZ_BARON_SESSION_MANUAL_OVERRIDE = true
+	ARZ_BARON_PENDING_STAGE_SYNC = nil
+	ARZ_BARON_SHOWCASE_MODE = nil
+	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
+		ARZ_INTERFACE_CHOOSER.visible[0] = false
+	end
+	return true
+end
+
+function arzBaronSessionGateOpen()
+	local readyAt = tonumber(ARZ_BARON_SESSION_READY_AT_MS)
+	if not readyAt then return false end
+	return arzBaronNowMs() >= readyAt
+end
+
 function arzBaronApplyOnboardingStage(moduleId, stepId)
+	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
 	if tostring(moduleId or "") ~= "onboarding" then return false end
 	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true then return false end
 	stepId = tostring(stepId or "")
@@ -4365,6 +4407,7 @@ function arzBaronApplyOnboardingStage(moduleId, stepId)
 end
 
 function arzBaronProcessPendingStageSync()
+    if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
     local pending = ARZ_BARON_PENDING_STAGE_SYNC
     if type(pending) ~= "table" then return false end
     ARZ_BARON_PENDING_STAGE_SYNC = nil
@@ -4373,6 +4416,7 @@ function arzBaronProcessPendingStageSync()
 end
 
 function arzBaronResumeOnboardingShowcase()
+	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
 	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
 	if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
 		local okVisible, visible = pcall(ARZ_BARON_ASSISTANT.isActive)
@@ -4388,6 +4432,7 @@ function arzBaronResumeOnboardingShowcase()
 end
 
 function arzBaronOpenSavedProgress()
+	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
 	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
 	if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
 		local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
@@ -4497,18 +4542,6 @@ function arzBaronLoadAssistant()
 			end
 			return math.floor(os.clock() * 1000)
 		end,
-		isPlayerReady = function()
-			-- Start Baron's initial 90-second timer only after the character has
-			-- actually entered the server world. Script/SA-MP availability alone
-			-- is too early because authorization and loading may still be open.
-			if type(isSampAvailable) == "function" and not isSampAvailable() then return false end
-			if type(doesCharExist) == "function" and not doesCharExist(PLAYER_PED) then return false end
-			if type(sampIsLocalPlayerSpawned) == "function" then
-				local okSpawned, spawned = pcall(sampIsLocalPlayerSpawned)
-				if not okSpawned or spawned ~= true then return false end
-			end
-			return true
-		end,
 		loadState = function()
 			local target = ARZ_BARON_ASSISTANT_STATE_PATH
 			local backup = target .. ".bak"
@@ -4615,6 +4648,12 @@ function arzBaronLoadAssistant()
 			return ok == true
 		end,
 		runtime = {
+			openTutorialGate = function()
+				if type(arzBaronOpenSessionGateForManualCommand) == "function" then
+					return arzBaronOpenSessionGateForManualCommand() ~= false
+				end
+				return true
+			end,
 			resetTransientUi = function(clearPending)
 				if clearPending == true then ARZ_BARON_PENDING_STAGE_SYNC = nil end
 				ARZ_BARON_SHOWCASE_MODE = nil
@@ -4626,7 +4665,8 @@ function arzBaronLoadAssistant()
 			end,
 			setChooserVisible = function(visible)
 				if not ARZ_INTERFACE_CHOOSER then return true end
-				if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = visible == true end
+				local allowVisible = visible == true and (type(arzBaronSessionGateOpen) ~= "function" or arzBaronSessionGateOpen())
+				if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = allowVisible == true end
 				ARZ_INTERFACE_CHOOSER.selection = nil
 				ARZ_INTERFACE_CHOOSER.phase = "preview"
 				ARZ_INTERFACE_CHOOSER.transition_started = 0
@@ -4758,10 +4798,9 @@ function arzBaronLoadAssistant()
 	end
 	ARZ_BARON_ASSISTANT = assistant
 	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and type(assistant.needsChooser) == "function" then
+		local gateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
 		local okChooser, needsChooser = pcall(assistant.needsChooser)
-		-- The chooser is part of Baron's onboarding and must not appear before
-		-- the post-login display gate. assistant.needsChooser() already includes it.
-		if okChooser then ARZ_INTERFACE_CHOOSER.visible[0] = needsChooser == true end
+		if okChooser then ARZ_INTERFACE_CHOOSER.visible[0] = gateOpen and needsChooser == true or false end
 	end
 	return true
 end
@@ -4772,6 +4811,9 @@ function arzBaronCurrentPageName()
 end
 
 function arzBaronAssistantSnapshot(page, mode)
+	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then
+		return { active = false }
+	end
 	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.snapshot) ~= "function" then
 		return { active = false }
 	end
@@ -15752,8 +15794,22 @@ function arzAuthFreezeInitialize()
 end
 
 function main()
-	-- First-run/update bootstrap is intentionally silent. The user sees the
-	-- normal ArzMarket loaded message only after every required component is ready.
+	local loaderInstallMarkerPath = getWorkingDirectory() .. "\\.arzmarket_loader_downloaded"
+	local startedFromFreshLoaderDownload = doesFileExist(loaderInstallMarkerPath)
+
+	if startedFromFreshLoaderDownload then
+		while not isSampLoaded() do
+			wait(0)
+		end
+
+		while not isSampAvailable() do
+			wait(0)
+		end
+
+		pcall(os.remove, loaderInstallMarkerPath)
+		pcall(sampAddChatMessage, u8:decode("[ArzMarket] ArzMarket успешно скачан. Начинаю скачивание остальных файлов..."), 0xFF70C8FF)
+	end
+
 	ARZ_COMPONENTS.bootstrap_ready, ARZ_COMPONENTS.bootstrap_error = arzComponentsBootstrapAll()
 
 	while not isSampLoaded() do
@@ -15833,10 +15889,10 @@ function main()
 	-- UI extensions are discovered only after the normal ArzMarket configs are ready.
 	-- They append pages after all built-in pages, so existing numeric page ids stay unchanged.
 	pcall(arzUiExtensionsInitialize)
-	if ARZ_INTERFACE_CHOOSER then ARZ_INTERFACE_CHOOSER.ready = true end
-	pcall(arzBaronResumeOnboardingShowcase)
-	pcall(arzBaronResumePendingInterfaceSelection)
-	pcall(arzBaronResumeActiveTutorial)
+	if ARZ_INTERFACE_CHOOSER then
+		ARZ_INTERFACE_CHOOSER.ready = true
+		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+	end
 
 	-- Keep average-price tables warm for the HTML UI from a normal MoonLoader thread.
 	-- The HTTP bridge must never call lowPriceGuardRefreshPriceData() directly because
@@ -15985,6 +16041,22 @@ function main()
 	AFKMessage(u8:decode("Arizona Market 3.56 | Все компоненты загружены. Открыть: /crr"))
 	sendNotify(u8:decode("Arizona Market успешно загружен! Все компоненты готовы. Открыть меню: /crr"))
 
+	arzBaronArmSessionGate()
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.markScriptReady) == "function" then
+		pcall(ARZ_BARON_ASSISTANT.markScriptReady)
+	end
+	lua_thread.create(function()
+		wait(ARZ_BARON_START_DELAY_MS + 100)
+		if ARZ_BARON_SESSION_MANUAL_OVERRIDE == true then return end
+		if type(arzBaronSessionGateOpen) ~= "function" or not arzBaronSessionGateOpen() then return end
+		if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.isActive) ~= "function" then return end
+		local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
+		if not okActive or active ~= true then return end
+		pcall(arzBaronResumeOnboardingShowcase)
+		pcall(arzBaronResumePendingInterfaceSelection)
+		pcall(arzBaronResumeActiveTutorial)
+	end)
+
 	-- Keep the last Marketplace server across script reloads/restarts.
 	marketState.marketplace_serversSelected[0] = math.max(0, math.min(#marketState.marketplace_servers - 1, math.floor(tonumber(ini.cfg.marketplaceSelectedItem) or 1)))
 	ini.cfg.marketplaceSelectedItem = marketState.marketplace_serversSelected[0]
@@ -16039,7 +16111,8 @@ function main()
 		sendNotify(u8:decode("Авто установка лавки ") .. (marketState.autoLavka and u8:decode("включено") or u8:decode("выключено")))
 	end)
 	sampRegisterChatCommand("crr", function()
-		if type(arzBaronOpenSavedProgress) == "function" and arzBaronOpenSavedProgress() == true then
+		local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
+		if baronGateOpen and type(arzBaronOpenSavedProgress) == "function" and arzBaronOpenSavedProgress() == true then
 			return
 		end
 		if ini.cfg.interface_choice_done ~= true then
@@ -16048,7 +16121,7 @@ function main()
 				local okNeed, value = pcall(ARZ_BARON_ASSISTANT.needsChooser)
 				chooserNeeded = okNeed and value == true
 			end
-			if chooserNeeded then
+			if baronGateOpen and chooserNeeded then
 				menuOpen = false
 				menuVisible[0] = false
 				if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
@@ -16792,7 +16865,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.56.113"
+ARZ_UPDATE_VERSION = "3.56.118"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -18188,7 +18261,12 @@ function arzInterfaceSelectMode(mode)
 end
 
 function arzBaronResumePendingInterfaceSelection()
+	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
 	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+	if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
+		local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
+		if not okActive or active ~= true then return false end
+	end
 	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true then return false end
 	local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
 	if not okState or type(assistantState) ~= "table" then return false end
@@ -18211,7 +18289,12 @@ function arzBaronResumePendingInterfaceSelection()
 end
 
 function arzBaronResumeActiveTutorial()
+	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
 	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+	if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
+		local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
+		if not okActive or active ~= true then return false end
+	end
 	local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
 	if not okState or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
 	if assistantState.current_module ~= "tutorial_lua" and assistantState.current_module ~= "tutorial_html" then return false end
@@ -18310,6 +18393,7 @@ function arzRenderInterfaceLoadingModal(screenWidth, screenHeight)
 end
 
 function arzRenderInterfaceChooser(frame)
+	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return end
 	local chooserNeeded = false
 	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.needsChooser) == "function" then
 		local okNeed, needValue = pcall(ARZ_BARON_ASSISTANT.needsChooser)
@@ -18415,8 +18499,9 @@ function ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
 	if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true then return end
 	local baronUsesLua = ini.cfg.interface_mode ~= "html"
 	if ARZ_BARON_SHOWCASE_MODE ~= nil then baronUsesLua = ARZ_BARON_SHOWCASE_MODE ~= "html" end
-	local baronLuaActive = ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
-	local chooserActive = ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]
+	local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
+	local baronLuaActive = baronGateOpen and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
+	local chooserActive = baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]
 	local luaUiActive = (menuVisible and menuVisible[0] == true) or baronLuaActive or chooserActive
 	if not luaUiActive or not ARZ_INPUT_CURSOR_GUARD.backgroundInterference() then return end
 
@@ -18442,16 +18527,17 @@ mainUiFrame = imgui.OnFrame(function()
 	if ARZ_BARON_SHOWCASE_MODE ~= nil then
 		baronUsesLua = ARZ_BARON_SHOWCASE_MODE ~= "html"
 	end
-	local baronLuaActive = ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
+	local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
+	local baronLuaActive = baronGateOpen and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
 	local htmlUiActive = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true
 	local baronStageSyncPending = ARZ_BARON_PENDING_STAGE_SYNC ~= nil
-	return baronStageSyncPending or (ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]) or baronLuaActive or htmlUiActive or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
+	return (baronGateOpen and baronStageSyncPending) or (baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]) or baronLuaActive or htmlUiActive or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
 end, function(frame)
 	ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
-	if ARZ_BARON_PENDING_STAGE_SYNC ~= nil then
+	if ARZ_BARON_PENDING_STAGE_SYNC ~= nil and (type(arzBaronSessionGateOpen) ~= "function" or arzBaronSessionGateOpen()) then
 		arzBaronProcessPendingStageSync()
 	end
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] then
+	if (type(arzBaronSessionGateOpen) ~= "function" or arzBaronSessionGateOpen()) and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] then
 		arzRenderInterfaceChooser(frame)
 	end
 
@@ -19693,11 +19779,12 @@ end, function(frame)
 		_G.ARZ_INTERFACE_PREVIEW_UI_SCALE = nil
 	end
 
-	local baronChooserVisible = ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] == true
+	local baronGateOpenForRender = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
+	local baronChooserVisible = baronGateOpenForRender and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] == true
 	local baronCanRenderInLua = ini.cfg.interface_mode ~= "html"
 	if ARZ_BARON_SHOWCASE_MODE ~= nil then baronCanRenderInLua = ARZ_BARON_SHOWCASE_MODE ~= "html" end
 	if baronChooserVisible then baronCanRenderInLua = true end
-	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.render) == "function" and ARZ_BARON_ASSISTANT.isActive and ARZ_BARON_ASSISTANT.isActive() and baronCanRenderInLua then
+	if baronGateOpenForRender and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.render) == "function" and ARZ_BARON_ASSISTANT.isActive and ARZ_BARON_ASSISTANT.isActive() and baronCanRenderInLua then
 		local screenWidth, screenHeight = getScreenResolution()
 		local snapshot = arzBaronAssistantSnapshot(arzBaronCurrentPageName(), "lua")
 		local anchor = snapshot.target and arzBaronAnchorGet(snapshot.target) or nil
@@ -35095,6 +35182,7 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 276
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"
@@ -35716,6 +35804,19 @@ function arzComponentsBootstrapAll()
 	end
 
 	ARZ_COMPONENTS.bootstrap.remote_bundle_version = manifest.bundle_version
+	local expectedBundleVersion = tonumber(ARZ_COMPONENTS.bootstrap.expected_bundle_version) or 0
+	local remoteBundleVersion = tonumber(manifest.bundle_version) or 0
+	if expectedBundleVersion > 0 and remoteBundleVersion < expectedBundleVersion then
+		local localReady, localError = arzComponentsValidateLocalRequired()
+		if localReady then
+			ARZ_COMPONENTS.bootstrap.last_status = "local_newer_than_remote"
+			ARZ_COMPONENTS.bootstrap.last_error = "remote_manifest_too_old:" .. tostring(remoteBundleVersion) .. "<" .. tostring(expectedBundleVersion)
+			return true
+		end
+		ARZ_COMPONENTS.bootstrap.last_status = "failed"
+		ARZ_COMPONENTS.bootstrap.last_error = "remote_manifest_too_old:" .. tostring(remoteBundleVersion) .. "<" .. tostring(expectedBundleVersion) .. ";" .. tostring(localError or "local_components_missing")
+		return false, ARZ_COMPONENTS.bootstrap.last_error
+	end
 	local state = arzComponentsReadState()
 	local localBundleVersion = state.bundle_version
 	if tostring(localBundleVersion or "") == tostring(manifest.bundle_version)

@@ -751,8 +751,7 @@
       }
       if (snapshot.choiceType === 'tutorial') {
         actionsEl.append(
-          button('Пройти обучение', 'primary tutorial-accept', () => runAction('tutorial_accept')),
-          button('Позже', 'tutorial-later', () => runAction('tutorial_decline'))
+          button('Пройти обучение', 'primary tutorial-accept', () => runAction('tutorial_accept'))
         );
         return;
       }

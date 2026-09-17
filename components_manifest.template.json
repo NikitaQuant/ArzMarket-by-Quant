@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "bundle_version": 269,
+  "bundle_version": 276,
   "base_url": "__ARZMARKET_COMPONENTS_RAW_BASE_URL__",
   "files": [
     {
@@ -491,8 +491,8 @@
     },
     {
       "path": "ArzMarket/html/js/assistant-v78.js",
-      "size": 44291,
-      "crc32": "E639FF65",
+      "size": 44204,
+      "crc32": "2AEFB9B0",
       "required": true
     },
     {
@@ -509,8 +509,8 @@
     },
     {
       "path": "modules/ArzMarketQuant/baron_assistant.lua",
-      "size": 108678,
-      "crc32": "F6E32549",
+      "size": 108330,
+      "crc32": "45A2A1B6",
       "required": true
     },
     {
