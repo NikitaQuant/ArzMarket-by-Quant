@@ -92,9 +92,15 @@ html.window-is-moving * {
   user-select: none !important;
 }
 
-html.preview-mode #app,
+html.preview-mode #app {
+  pointer-events: auto;
+}
 html.preview-mode #app .window {
   pointer-events: none;
+}
+html.preview-mode #app .sidebar,
+html.preview-mode #app .sidebar * {
+  pointer-events: auto;
 }
 
 html.preview-mode .window-resize-handle {

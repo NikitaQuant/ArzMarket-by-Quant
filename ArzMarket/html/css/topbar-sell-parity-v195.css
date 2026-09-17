@@ -1,0 +1,152 @@
+/* v195: remaining pages use the same top-right control geometry as Sell. */
+#app[data-page="settings"] .topbar-actions,
+#app[data-page="logs"] .topbar-actions,
+#app[data-page="marketplace"] .topbar-actions,
+#app[data-page="mods"] .topbar-actions,
+#app[data-page="storage"] .topbar-actions {
+  display: flex !important;
+  align-items: center !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: calc(9px * var(--ui-scale)) !important;
+  height: 100% !important;
+  flex: none !important;
+}
+
+#app[data-page="settings"] .mode-switch,
+#app[data-page="logs"] .mode-switch,
+#app[data-page="marketplace"] .mode-switch,
+#app[data-page="mods"] .mode-switch,
+#app[data-page="storage"] .mode-switch {
+  height: calc(38px * var(--ui-scale)) !important;
+  padding: calc(3px * var(--ui-scale)) !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+  flex: none !important;
+}
+
+#app[data-page="settings"] .mode-btn,
+#app[data-page="logs"] .mode-btn,
+#app[data-page="marketplace"] .mode-btn,
+#app[data-page="mods"] .mode-btn,
+#app[data-page="storage"] .mode-btn {
+  min-width: calc(84px * var(--ui-scale)) !important;
+  padding: 0 calc(12px * var(--ui-scale)) !important;
+  border-radius: calc(7px * var(--ui-scale)) !important;
+  font-size: calc(12px * var(--ui-scale)) !important;
+}
+
+#app[data-page="settings"] .minimal-mode-switch .mode-btn,
+#app[data-page="logs"] .minimal-mode-switch .mode-btn,
+#app[data-page="marketplace"] .minimal-mode-switch .mode-btn,
+#app[data-page="mods"] .minimal-mode-switch .mode-btn,
+#app[data-page="storage"] .minimal-mode-switch .mode-btn {
+  min-width: calc(88px * var(--ui-scale)) !important;
+}
+
+#app[data-page="settings"] .window-controls,
+#app[data-page="logs"] .window-controls,
+#app[data-page="marketplace"] .window-controls,
+#app[data-page="mods"] .window-controls,
+#app[data-page="storage"] .window-controls {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: calc(4px * var(--ui-scale)) !important;
+  height: calc(36px * var(--ui-scale)) !important;
+  min-width: calc(116px * var(--ui-scale)) !important;
+  flex: 0 0 calc(116px * var(--ui-scale)) !important;
+}
+
+#app[data-page="settings"] .topbar .window-btn,
+#app[data-page="logs"] .topbar .window-btn,
+#app[data-page="marketplace"] .topbar .window-btn,
+#app[data-page="mods"] .topbar .window-btn,
+#app[data-page="storage"] .topbar .window-btn {
+  width: calc(36px * var(--ui-scale)) !important;
+  height: calc(36px * var(--ui-scale)) !important;
+  flex: 0 0 calc(36px * var(--ui-scale)) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  position: relative !important;
+  display: block !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  vertical-align: middle !important;
+}
+
+#app[data-page="settings"] .topbar .window-btn::before,
+#app[data-page="logs"] .topbar .window-btn::before,
+#app[data-page="marketplace"] .topbar .window-btn::before,
+#app[data-page="mods"] .topbar .window-btn::before,
+#app[data-page="storage"] .topbar .window-btn::before,
+#app[data-page="settings"] .topbar .window-btn::after,
+#app[data-page="logs"] .topbar .window-btn::after,
+#app[data-page="marketplace"] .topbar .window-btn::after,
+#app[data-page="mods"] .topbar .window-btn::after,
+#app[data-page="storage"] .topbar .window-btn::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+#app[data-page="settings"] .topbar .window-btn[data-action="window-minimize"]::before,
+#app[data-page="logs"] .topbar .window-btn[data-action="window-minimize"]::before,
+#app[data-page="marketplace"] .topbar .window-btn[data-action="window-minimize"]::before,
+#app[data-page="mods"] .topbar .window-btn[data-action="window-minimize"]::before,
+#app[data-page="storage"] .topbar .window-btn[data-action="window-minimize"]::before {
+  width: 34%;
+  height: 1px;
+  background: var(--am-text-soft, #b8c7d5) !important;
+}
+
+#app[data-page="settings"] .topbar .window-btn[data-action="window-maximize"]::before,
+#app[data-page="logs"] .topbar .window-btn[data-action="window-maximize"]::before,
+#app[data-page="marketplace"] .topbar .window-btn[data-action="window-maximize"]::before,
+#app[data-page="mods"] .topbar .window-btn[data-action="window-maximize"]::before,
+#app[data-page="storage"] .topbar .window-btn[data-action="window-maximize"]::before {
+  width: 29%;
+  height: 29%;
+  border: 1.4px solid var(--am-text-soft, #b8c7d5) !important;
+  border-radius: 1px;
+  background: transparent !important;
+  box-sizing: border-box;
+}
+
+#app[data-page="settings"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="logs"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="marketplace"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="mods"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="storage"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="settings"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="logs"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="marketplace"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="mods"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="storage"] .topbar .window-btn[data-action="close"]::after {
+  width: 38%;
+  height: 1.4px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--am-text-soft, #b8c7d5) !important;
+}
+
+#app[data-page="settings"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="logs"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="marketplace"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="mods"] .topbar .window-btn[data-action="close"]::before,
+#app[data-page="storage"] .topbar .window-btn[data-action="close"]::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+#app[data-page="settings"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="logs"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="marketplace"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="mods"] .topbar .window-btn[data-action="close"]::after,
+#app[data-page="storage"] .topbar .window-btn[data-action="close"]::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}

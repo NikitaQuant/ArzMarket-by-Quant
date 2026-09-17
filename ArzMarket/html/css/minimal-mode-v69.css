@@ -303,3 +303,16 @@
   padding:0 calc(9px * var(--ui-scale)) !important;
   font-size:calc(11.5px * var(--ui-scale)) !important;
 }
+
+
+/* v88: minimal mode removes the large page hero completely. */
+#app.minimal-mode:not([data-page="settings"]) .page-header {
+  display:none !important;
+}
+#app.minimal-mode[data-page="marketplace"] .content,
+#app.minimal-mode[data-page="storage"] .content {
+  grid-template-rows:auto minmax(0,1fr) !important;
+}
+#app.minimal-mode[data-page="mods"] .content {
+  grid-template-rows:minmax(0,1fr) !important;
+}

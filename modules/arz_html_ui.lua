@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 55,
+    module_version = 71,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -9,25 +9,75 @@ local M = {
 }
 
 local ctx, acef, server, port, itemIcons
+local socketApi = nil
 local running, htmlOpen, suppressAutoOpen = false, false, false
 local previewOpen, previewSignature = false, ""
+local htmlTemporaryMode = false
+local cefCursorOwned = false
+local cursorWasActiveBeforeHtml = false
 local clients, token, htmlRoot, currentPage, currentSettingsSection = {}, "", "", "buy", nil
+local requestQueue = {}
+local requestWorkerRunning = false
+local serverGeneration = 0
+local serviceBusy = false
+local lastServiceErrorAt = 0
 local htmlWindowStatePath, htmlWindowState = nil, {}
 local HTML_LAYOUT_VERSION = 16
 local revision, fingerprints = { buy = 1, sell = 1, settings = 1, logs = 1, marketplace = 1, storage = 1, mods = 1 }, { buy = "", sell = "", settings = "", logs = "", marketplace = "", storage = "", mods = "" }
 local lastInjectCheck = 0
+local lastHtmlInputReclaim = 0
 local lastMenuAutoOpenAttempt = 0
-local sourceCache = { buy = {at=0,data={}}, sell = {at=0,data={}} }
+local sourceCache = { buy = {at=0,data={},fingerprint="0"}, sell = {at=0,data={},fingerprint="0"} }
+local utf8ValueCache = {}
+local stateResponseCache = {}
+local lastForegroundState = nil
+local foregroundStableSince = 0
+local FOCUS_STABILIZE_MS = 1500
 local settingsSnapshotCache = { at = 0, data = nil }
+local tradeDraftHydrated = { buy = false, sell = false }
+local tradeDraftPaths = {
+    buy = "moonloader/ArzMarket/html_draft_buy.json",
+    sell = "moonloader/ArzMarket/html_draft_sell.json"
+}
 local globalDecodeJson, globalEncodeJson = decodeJson, encodeJson
 
 local function log(v) print("[ArzMarket HTML] " .. tostring(v)) end
+
+-- IMPORTANT: HTTP service itself runs inside a MoonLoader lua_thread.
+-- Do not wrap callbacks into the game/core with pcall/xpcall here: some of those
+-- callbacks can yield to the MoonLoader scheduler. A C pcall boundary around a
+-- yielding callback corrupts the scheduler state and causes
+-- "cannot resume non-suspended coroutine". This Lua-only wrapper preserves the
+-- old (ok, result, extra) calling convention without introducing a C boundary.
+local function callCore(fn, ...)
+    if type(fn) ~= "function" then return false, "function_unavailable" end
+    return true, fn(...)
+end
 local function nowMs()
     if type(getGameTimer) == "function" then
         local ok,v = pcall(getGameTimer)
         if ok and tonumber(v) then return tonumber(v) end
     end
     return math.floor(os.clock()*1000)
+end
+local function gameWindowForeground()
+    if type(isGameWindowForeground) ~= "function" then return true end
+    local ok,value = pcall(isGameWindowForeground)
+    if not ok then return true end
+    return value == true
+end
+local function focusIsStable()
+    local now = nowMs()
+    local foreground = gameWindowForeground()
+    if lastForegroundState == nil then
+        lastForegroundState = foreground
+        foregroundStableSince = now
+    elseif foreground ~= lastForegroundState then
+        lastForegroundState = foreground
+        foregroundStableSince = now
+    end
+    if not foreground then return false end
+    return now - foregroundStableSince >= FOCUS_STABILIZE_MS
 end
 local function encode(v)
     if type(globalEncodeJson)=="function" then
@@ -42,21 +92,250 @@ local function decode(v)
         if ok then return out end
     end
 end
-local function toUtf8(v)
-    v=tostring(v or "")
-    if ctx and ctx.u8 and type(ctx.u8.encode)=="function" then
-        local ok,out=pcall(function() return ctx.u8:encode(v) end)
-        if ok and type(out)=="string" then return out end
-    end
-    return v
+local CP1251_TO_UNICODE = {
+    [0x80] = 0x0402,
+    [0x81] = 0x0403,
+    [0x82] = 0x201A,
+    [0x83] = 0x0453,
+    [0x84] = 0x201E,
+    [0x85] = 0x2026,
+    [0x86] = 0x2020,
+    [0x87] = 0x2021,
+    [0x88] = 0x20AC,
+    [0x89] = 0x2030,
+    [0x8A] = 0x0409,
+    [0x8B] = 0x2039,
+    [0x8C] = 0x040A,
+    [0x8D] = 0x040C,
+    [0x8E] = 0x040B,
+    [0x8F] = 0x040F,
+    [0x90] = 0x0452,
+    [0x91] = 0x2018,
+    [0x92] = 0x2019,
+    [0x93] = 0x201C,
+    [0x94] = 0x201D,
+    [0x95] = 0x2022,
+    [0x96] = 0x2013,
+    [0x97] = 0x2014,
+    [0x99] = 0x2122,
+    [0x9A] = 0x0459,
+    [0x9B] = 0x203A,
+    [0x9C] = 0x045A,
+    [0x9D] = 0x045C,
+    [0x9E] = 0x045B,
+    [0x9F] = 0x045F,
+    [0xA0] = 0x00A0,
+    [0xA1] = 0x040E,
+    [0xA2] = 0x045E,
+    [0xA3] = 0x0408,
+    [0xA4] = 0x00A4,
+    [0xA5] = 0x0490,
+    [0xA6] = 0x00A6,
+    [0xA7] = 0x00A7,
+    [0xA8] = 0x0401,
+    [0xA9] = 0x00A9,
+    [0xAA] = 0x0404,
+    [0xAB] = 0x00AB,
+    [0xAC] = 0x00AC,
+    [0xAD] = 0x00AD,
+    [0xAE] = 0x00AE,
+    [0xAF] = 0x0407,
+    [0xB0] = 0x00B0,
+    [0xB1] = 0x00B1,
+    [0xB2] = 0x0406,
+    [0xB3] = 0x0456,
+    [0xB4] = 0x0491,
+    [0xB5] = 0x00B5,
+    [0xB6] = 0x00B6,
+    [0xB7] = 0x00B7,
+    [0xB8] = 0x0451,
+    [0xB9] = 0x2116,
+    [0xBA] = 0x0454,
+    [0xBB] = 0x00BB,
+    [0xBC] = 0x0458,
+    [0xBD] = 0x0405,
+    [0xBE] = 0x0455,
+    [0xBF] = 0x0457,
+    [0xC0] = 0x0410,
+    [0xC1] = 0x0411,
+    [0xC2] = 0x0412,
+    [0xC3] = 0x0413,
+    [0xC4] = 0x0414,
+    [0xC5] = 0x0415,
+    [0xC6] = 0x0416,
+    [0xC7] = 0x0417,
+    [0xC8] = 0x0418,
+    [0xC9] = 0x0419,
+    [0xCA] = 0x041A,
+    [0xCB] = 0x041B,
+    [0xCC] = 0x041C,
+    [0xCD] = 0x041D,
+    [0xCE] = 0x041E,
+    [0xCF] = 0x041F,
+    [0xD0] = 0x0420,
+    [0xD1] = 0x0421,
+    [0xD2] = 0x0422,
+    [0xD3] = 0x0423,
+    [0xD4] = 0x0424,
+    [0xD5] = 0x0425,
+    [0xD6] = 0x0426,
+    [0xD7] = 0x0427,
+    [0xD8] = 0x0428,
+    [0xD9] = 0x0429,
+    [0xDA] = 0x042A,
+    [0xDB] = 0x042B,
+    [0xDC] = 0x042C,
+    [0xDD] = 0x042D,
+    [0xDE] = 0x042E,
+    [0xDF] = 0x042F,
+    [0xE0] = 0x0430,
+    [0xE1] = 0x0431,
+    [0xE2] = 0x0432,
+    [0xE3] = 0x0433,
+    [0xE4] = 0x0434,
+    [0xE5] = 0x0435,
+    [0xE6] = 0x0436,
+    [0xE7] = 0x0437,
+    [0xE8] = 0x0438,
+    [0xE9] = 0x0439,
+    [0xEA] = 0x043A,
+    [0xEB] = 0x043B,
+    [0xEC] = 0x043C,
+    [0xED] = 0x043D,
+    [0xEE] = 0x043E,
+    [0xEF] = 0x043F,
+    [0xF0] = 0x0440,
+    [0xF1] = 0x0441,
+    [0xF2] = 0x0442,
+    [0xF3] = 0x0443,
+    [0xF4] = 0x0444,
+    [0xF5] = 0x0445,
+    [0xF6] = 0x0446,
+    [0xF7] = 0x0447,
+    [0xF8] = 0x0448,
+    [0xF9] = 0x0449,
+    [0xFA] = 0x044A,
+    [0xFB] = 0x044B,
+    [0xFC] = 0x044C,
+    [0xFD] = 0x044D,
+    [0xFE] = 0x044E,
+    [0xFF] = 0x044F,
+}
+local UNICODE_TO_CP1251 = {}
+for byteValue, codepoint in pairs(CP1251_TO_UNICODE) do
+    UNICODE_TO_CP1251[codepoint] = byteValue
 end
-local function fromUtf8(v)
-    v=tostring(v or "")
-    if ctx and ctx.u8 and type(ctx.u8.decode)=="function" then
-        local ok,out=pcall(function() return ctx.u8:decode(v) end)
-        if ok and type(out)=="string" then return out end
+
+local function utf8FromCodepoint(cp)
+    cp = tonumber(cp) or 0x3F
+    if cp <= 0x7F then
+        return string.char(cp)
+    elseif cp <= 0x7FF then
+        return string.char(
+            0xC0 + math.floor(cp / 0x40),
+            0x80 + (cp % 0x40)
+        )
+    elseif cp <= 0xFFFF then
+        return string.char(
+            0xE0 + math.floor(cp / 0x1000),
+            0x80 + (math.floor(cp / 0x40) % 0x40),
+            0x80 + (cp % 0x40)
+        )
+    elseif cp <= 0x10FFFF then
+        return string.char(
+            0xF0 + math.floor(cp / 0x40000),
+            0x80 + (math.floor(cp / 0x1000) % 0x40),
+            0x80 + (math.floor(cp / 0x40) % 0x40),
+            0x80 + (cp % 0x40)
+        )
     end
-    return v
+    return "?"
+end
+
+local function utf8CodepointAt(value, index)
+    local b1 = value:byte(index)
+    if not b1 then return nil, index + 1 end
+    if b1 < 0x80 then return b1, index + 1 end
+
+    local b2 = value:byte(index + 1)
+    if b1 >= 0xC2 and b1 <= 0xDF and b2 and b2 >= 0x80 and b2 <= 0xBF then
+        return (b1 - 0xC0) * 0x40 + (b2 - 0x80), index + 2
+    end
+
+    local b3 = value:byte(index + 2)
+    if b1 >= 0xE0 and b1 <= 0xEF and b2 and b3 and b2 >= 0x80 and b2 <= 0xBF and b3 >= 0x80 and b3 <= 0xBF then
+        if (b1 ~= 0xE0 or b2 >= 0xA0) and (b1 ~= 0xED or b2 <= 0x9F) then
+            return (b1 - 0xE0) * 0x1000 + (b2 - 0x80) * 0x40 + (b3 - 0x80), index + 3
+        end
+    end
+
+    local b4 = value:byte(index + 3)
+    if b1 >= 0xF0 and b1 <= 0xF4 and b2 and b3 and b4
+        and b2 >= 0x80 and b2 <= 0xBF
+        and b3 >= 0x80 and b3 <= 0xBF
+        and b4 >= 0x80 and b4 <= 0xBF then
+        if (b1 ~= 0xF0 or b2 >= 0x90) and (b1 ~= 0xF4 or b2 <= 0x8F) then
+            return (b1 - 0xF0) * 0x40000 + (b2 - 0x80) * 0x1000 + (b3 - 0x80) * 0x40 + (b4 - 0x80), index + 4
+        end
+    end
+
+    return nil, index + 1
+end
+
+local function toUtf8(v)
+    local valueType = type(v)
+    local value
+    if valueType == "string" then
+        value = v
+    elseif valueType == "number" or valueType == "boolean" then
+        value = tostring(v)
+    elseif v == nil then
+        value = ""
+    else
+        -- Never invoke __tostring on userdata/cdata/thread values from the HTTP worker.
+        return ""
+    end
+    if value == "" then return value end
+    local cached = utf8ValueCache[value]
+    if cached ~= nil then return cached end
+    local out = {}
+    for i = 1, #value do
+        local byteValue = string.byte(value, i)
+        if byteValue < 0x80 then
+            out[#out + 1] = string.char(byteValue)
+        else
+            local codepoint = CP1251_TO_UNICODE[byteValue]
+            out[#out + 1] = codepoint and utf8FromCodepoint(codepoint) or "?"
+        end
+    end
+    local converted = table.concat(out)
+    if #utf8ValueCache < 4096 then utf8ValueCache[value] = converted end
+    return converted
+end
+
+local function fromUtf8(v)
+    local value = tostring(v or "")
+    if value == "" then return value end
+    local out = {}
+    local index = 1
+    while index <= #value do
+        local first = value:byte(index)
+        if first and first < 0x80 then
+            out[#out + 1] = string.char(first)
+            index = index + 1
+        else
+            local codepoint, nextIndex = utf8CodepointAt(value, index)
+            if codepoint then
+                local byteValue = UNICODE_TO_CP1251[codepoint]
+                out[#out + 1] = byteValue and string.char(byteValue) or "?"
+                index = nextIndex
+            else
+                out[#out + 1] = "?"
+                index = index + 1
+            end
+        end
+    end
+    return table.concat(out)
 end
 local function utf8Tree(value,depth)
     depth=(tonumber(depth) or 0)+1
@@ -83,7 +362,7 @@ local function makeToken()
 end
 local function currentMenuScalePercent()
     if ctx and type(ctx.getMenuScalePercent)=="function" then
-        local ok,value=pcall(ctx.getMenuScalePercent)
+        local ok,value=callCore(ctx.getMenuScalePercent)
         if ok then
             local number=saneNumber(value,100) or 100
             return math.max(100,math.min(150,math.floor(number+0.5)))
@@ -176,7 +455,7 @@ local function configName(side)
 end
 local function configList(side)
     if not ctx or type(ctx.listTradeConfigs)~="function" then return {} end
-    local ok,value=pcall(ctx.listTradeConfigs,side)
+    local ok,value=callCore(ctx.listTradeConfigs,side)
     if not ok or type(value)~="table" then return {} end
     local out={}
     for i=1,#value do
@@ -185,11 +464,75 @@ local function configList(side)
     end
     return out
 end
+local function draftPath(side)
+    return tradeDraftPaths[side=="sell" and "sell" or "buy"]
+end
+local function clearTradeDraft(side)
+    side=side=="sell" and "sell" or "buy"
+    local path=draftPath(side)
+    if path and doesFileExist(path) then pcall(os.remove,path) end
+    tradeDraftHydrated[side]=true
+    return true
+end
+local function saveTradeDraft(side,list)
+    side=side=="sell" and "sell" or "buy"
+    if configName(side)~="" then
+        clearTradeDraft(side)
+        return true
+    end
+    if not ctx or type(ctx.writeJsonFile)~="function" then return false,"draft_save_unavailable" end
+    list=type(list)=="table" and list or {}
+    local ok,result=callCore(ctx.writeJsonFile,list,draftPath(side))
+    if not ok or result==false then return false,"draft_save_failed" end
+    tradeDraftHydrated[side]=true
+    return true
+end
+local function restoreTradeDraft(side)
+    side=side=="sell" and "sell" or "buy"
+    if tradeDraftHydrated[side] then return true end
+    tradeDraftHydrated[side]=true
+    if configName(side)~="" then
+        clearTradeDraft(side)
+        return true
+    end
+    local buy,sell=lists()
+    local list=side=="buy" and buy or sell
+    if #list>0 then
+        local ok=saveTradeDraft(side,list)
+        return ok~=false
+    end
+    if not ctx or type(ctx.readJsonFile)~="function" then return true end
+    local path=draftPath(side)
+    if not path or not doesFileExist(path) then return true end
+    local ok,raw=callCore(ctx.readJsonFile,path)
+    if not ok or type(raw)~="table" then return true end
+    local restored=0
+    for i=1,#raw do
+        if type(raw[i])=="table" then
+            list[#list+1]=raw[i]
+            restored=restored+1
+        end
+    end
+    if restored>0 then
+        if type(tradeFilterInvalidate)=="function" then pcall(tradeFilterInvalidate,side) end
+        fingerprints[side]=""
+    end
+    return true
+end
+
 local autoConfigAttempted={buy=false,sell=false}
 local function ensureLoadedConfig(side)
     side=side=="sell" and "sell" or "buy"
     local current=configName(side)
-    if current~="" then return current end
+    if current~="" then
+        clearTradeDraft(side)
+        return current
+    end
+    -- Never replace an unsaved/draft list by auto-loading some config.
+    -- This keeps tutorial-selected items alive across CEF/script reloads.
+    local buy,sell=lists()
+    local liveList=side=="buy" and buy or sell
+    if #liveList>0 then return "" end
     if autoConfigAttempted[side] then return "" end
     autoConfigAttempted[side]=true
     if not ctx or type(ctx.loadTradeConfig)~="function" then return "" end
@@ -203,15 +546,20 @@ local function ensureLoadedConfig(side)
             break
         end
     end
-    local ok,result=pcall(ctx.loadTradeConfig,side,selected)
+    local ok,result=callCore(ctx.loadTradeConfig,side,selected)
     if not ok or result==false then return "" end
+    clearTradeDraft(side)
     return configName(side)
 end
 local function persist(side)
     local buy,sell=lists()
     local list=side=="buy" and buy or sell
     local name=configName(side)
-    if name=="" then return false,"config_not_loaded" end
+    -- Without a selected config keep a durable draft instead of RAM-only state.
+    -- Baron tutorial progress survives script reloads, so the edited item list must
+    -- survive too; otherwise the next tutorial step has no status toggle to point at.
+    if name=="" then return saveTradeDraft(side,list) end
+    clearTradeDraft(side)
     if type(createConfig)~="function" then return false,"save_unavailable" end
     local ok,result=pcall(createConfig,side.."-cfg/"..name,list,side.."-cfg",name)
     return ok and result~=false, ok and result~=false and nil or "save_failed"
@@ -220,20 +568,20 @@ local function resolvedItemId(item)
     local id=item.item_id or item.foreign_item_id or item.id
     if id~=nil and tostring(id)~="" then return tostring(id) end
     if itemIcons and type(itemIcons.resolveItemId)=="function" then
-        local ok,value=pcall(itemIcons.resolveItemId,item.name or item.item or "")
+        local ok,value=callCore(itemIcons.resolveItemId,item.name or item.item or "")
         if ok and value~=nil and tostring(value)~="" then return tostring(value) end
     end
 end
 local function itemCategory(item)
     if ctx and type(ctx.getTradeItemCategory)=="function" then
-        local ok,category=pcall(ctx.getTradeItemCategory,item)
+        local ok,category=callCore(ctx.getTradeItemCategory,item)
         if ok and type(category)=="string" and category~="" then return category end
     end
     return "other"
 end
 local function itemCategorySubtypeRank(item)
     if ctx and type(ctx.getTradeFilterSubtypeRank)=="function" then
-        local ok,rank=pcall(ctx.getTradeFilterSubtypeRank,item)
+        local ok,rank=callCore(ctx.getTradeFilterSubtypeRank,item)
         if ok then return math.max(0,math.floor(saneNumber(rank,0) or 0)) end
     end
     return 0
@@ -247,7 +595,7 @@ local FALLBACK_CATEGORIES={
 local function categoryOptions(side)
     local raw=nil
     if ctx and type(ctx.getTradeFilterCategories)=="function" then
-        local ok,value=pcall(ctx.getTradeFilterCategories,side)
+        local ok,value=callCore(ctx.getTradeFilterCategories,side)
         if ok and type(value)=="table" then raw=value end
     end
     if type(raw)~="table" or #raw==0 then return FALLBACK_CATEGORIES end
@@ -299,49 +647,99 @@ local function touchRevision(side,list,runtimeKey)
         revision[side]=revision[side]+1
     end
 end
-local function sources(side)
-    local cached=sourceCache[side]
-    local now=nowMs()
-    if cached and now-cached.at<1000 then return cached.data end
-    if not ctx or type(ctx.readJsonFile)~="function" then return {} end
-    local path=side=="buy" and "moonloader/ArzMarket/buy.json" or "moonloader/ArzMarket/sell.json"
-    local ok,raw=pcall(ctx.readJsonFile,path)
-    local out={}
-    if ok and type(raw)=="table" then
-        for i=1,#raw do
-            local x=raw[i]
-            if side=="buy" and type(x)=="string" then
-                local id=itemIcons and itemIcons.resolveItemId and itemIcons.resolveItemId(x) or nil
-                local sourceItem={name=x,item_id=id}
-                out[#out+1]={index=i,name=toUtf8(x),item_id=id,category=itemCategory(sourceItem)}
-            elseif side=="sell" and type(x)=="table" then
-                local name=x.item or x.name or ("Item #"..tostring(i))
-                local id=x.item_id or x.foreign_item_id or x.id
-                if id==nil and itemIcons and itemIcons.resolveItemId then id=itemIcons.resolveItemId(name) end
-                out[#out+1]={index=i,name=toUtf8(name),all_count=saneNumber(x.all_count,saneNumber(x.count,0)),
-                    slot_count=saneNumber(x.count,0),slot_id=x.slot_id,item_id=id,category=itemCategory(x)}
-            end
+local function fingerprintScalar(value)
+    local valueType=type(value)
+    if value==nil then return "" end
+    if valueType=="string" then return value end
+    if valueType=="number" then return string.format("%.17g",value) end
+    if valueType=="boolean" then return value and "1" or "0" end
+    if valueType=="table" then
+        local parts={}
+        local count=0
+        for index=1,#value do
+            count=count+1
+            parts[count]=fingerprintScalar(rawget(value,index))
         end
+        if count>0 then return table.concat(parts,"\28") end
+        return "<table>"
     end
-    sourceCache[side]={at=now,data=out}
-    return out
+    -- Never call tostring() for userdata/thread/function/cdata here. Some host
+    -- objects expose metamethods that can cross MoonLoader coroutine boundaries.
+    return "<"..valueType..">"
 end
 
 local function sourceFingerprint(source)
-    local out={tostring(type(source)=="table" and #source or 0)}
+    if type(source)~="table" then return "0" end
+    local out={}
+    local count=0
     for i=1,#source do
-        local x=source[i]
-        out[#out+1]=table.concat({
-            tostring(x.name or ""),tostring(x.item_id or ""),tostring(x.all_count or ""),
-            tostring(x.slot_count or ""),tostring(x.slot_id or ""),tostring(x.category or "")
-        },"\30")
+        local x=rawget(source,i)
+        if type(x)=="table" then
+            count=count+1
+            out[count+1]=table.concat({
+                fingerprintScalar(rawget(x,"name")),fingerprintScalar(rawget(x,"item_id")),fingerprintScalar(rawget(x,"all_count")),
+                fingerprintScalar(rawget(x,"slot_count")),fingerprintScalar(rawget(x,"slot_id")),fingerprintScalar(rawget(x,"category"))
+            },"\30")
+        end
     end
+    out[1]=fingerprintScalar(count)
     return table.concat(out,"\31")
+end
+
+local function buildSourceCache(side, raw)
+    side = side == "sell" and "sell" or "buy"
+    local out = {}
+    if type(raw) == "table" then
+        for i = 1, #raw do
+            local x = raw[i]
+            if side == "buy" and type(x) == "string" then
+                local id = itemIcons and itemIcons.resolveItemId and itemIcons.resolveItemId(x) or nil
+                local sourceItem = {name=x,item_id=id}
+                out[#out+1] = {index=i,name=toUtf8(x),item_id=id,category=itemCategory(sourceItem)}
+            elseif side == "sell" and type(x) == "table" then
+                local rawName = rawget(x,"item") or rawget(x,"name")
+                local name = type(rawName) == "string" and rawName or ("Item #"..tostring(i))
+                local id = rawget(x,"item_id") or rawget(x,"foreign_item_id") or rawget(x,"id")
+                if id == nil and itemIcons and itemIcons.resolveItemId then id = itemIcons.resolveItemId(name) end
+                out[#out+1] = {index=i,name=toUtf8(name),all_count=saneNumber(rawget(x,"all_count"),saneNumber(rawget(x,"count"),0)),
+                    slot_count=saneNumber(rawget(x,"count"),0),slot_id=rawget(x,"slot_id"),item_id=id,category=itemCategory(x)}
+            end
+        end
+    end
+    sourceCache[side] = {at=nowMs(),data=out,fingerprint=sourceFingerprint(out)}
+    return out
+end
+
+local function refreshSourceCache(side, allowDisk)
+    side = side == "sell" and "sell" or "buy"
+    local raw = nil
+    if ctx and type(ctx.getTradeSource) == "function" then
+        local ok,value = callCore(ctx.getTradeSource,side)
+        if ok and type(value) == "table" then raw = value end
+    end
+    if raw == nil and allowDisk == true and ctx and type(ctx.readJsonFile) == "function" then
+        local path = side == "buy" and "moonloader/ArzMarket/buy.json" or "moonloader/ArzMarket/sell.json"
+        local ok,value = callCore(ctx.readJsonFile,path)
+        if ok and type(value) == "table" then raw = value end
+    end
+    if type(raw) == "table" then return buildSourceCache(side,raw) end
+    return sourceCache[side] and sourceCache[side].data or {}
+end
+
+local function sources(side)
+    side = side == "sell" and "sell" or "buy"
+    local cached = sourceCache[side]
+    local now = nowMs()
+    if cached and now - cached.at < 1000 then return cached.data end
+    -- HTTP requests must never perform file I/O. Use the live in-memory source
+    -- when available; otherwise keep the last safe cache until the producer
+    -- refreshes it from init/invalidation.
+    return refreshSourceCache(side,false)
 end
 
 local function automationSnapshot()
     if not ctx or type(ctx.getTradeAutomationState)~="function" then return {sell=false,buy=false,score=0,score_from=0} end
-    local ok,state=pcall(ctx.getTradeAutomationState)
+    local ok,state=callCore(ctx.getTradeAutomationState)
     if not ok or type(state)~="table" then return {sell=false,buy=false,score=0,score_from=0} end
     return state
 end
@@ -355,13 +753,13 @@ local function tradeBusy()
 end
 local function setMenuVisible(value)
     if not ctx or type(ctx.setCoreMenuVisible)~="function" then return false end
-    local ok,result=pcall(ctx.setCoreMenuVisible,value==true)
+    local ok,result=callCore(ctx.setCoreMenuVisible,value==true)
     return ok and result~=false
 end
 local function selectLuaPage(page)
     if ctx and type(ctx.selectCorePage)=="function" then
         local pageId=page=="sell" and 1 or page=="settings" and 3 or page=="logs" and 4 or page=="marketplace" and 5 or page=="mods" and 7 or page=="storage" and 8 or 2
-        local ok,result=pcall(ctx.selectCorePage,pageId)
+        local ok,result=callCore(ctx.selectCorePage,pageId)
         if ok and result~=false then return true end
     end
     return false
@@ -446,7 +844,7 @@ local function parseRentalLog(out,dateText,index,rawLine)
 end
 local function logsRaw()
     if not ctx or type(ctx.getLogsData)~="function" then return {} end
-    local ok,value=pcall(ctx.getLogsData)
+    local ok,value=callCore(ctx.getLogsData)
     if not ok or type(value)~="table" then return {} end
     return value
 end
@@ -514,7 +912,7 @@ local storageRefreshRequested=true
 
 local function safeStorageFinder()
     if not ctx or type(ctx.getStorageFinder)~="function" then return nil end
-    local ok,finder=pcall(ctx.getStorageFinder)
+    local ok,finder=callCore(ctx.getStorageFinder)
     if ok and type(finder)=="table" then return finder end
     return nil
 end
@@ -556,7 +954,7 @@ local function buildStorageSnapshotFromFinder()
     if finder.ready~=true then return nil,"storage_not_ready" end
     if type(finder.getVisibleRows)~="function" then return nil,"storage_rows_unavailable" end
 
-    local okRows,rows=pcall(finder.getVisibleRows,"",{storage_type="all",category="all"})
+    local okRows,rows=callCore(finder.getVisibleRows,"",{storage_type="all",category="all"})
     if not okRows or type(rows)~="table" then return nil,okRows and "storage_rows_invalid" or tostring(rows) end
 
     local groups,items,locationKeys={}, {}, {}
@@ -622,7 +1020,7 @@ local function buildStorageSnapshotFromFinder()
 
     local scanning=false
     if type(finder.getState)=="function" then
-        local okState,coreState=pcall(finder.getState)
+        local okState,coreState=callCore(finder.getState)
         if okState and type(coreState)=="table" then
             scanning=coreState.player_scan_active==true or (type(coreState.manual_scan)=="table" and coreState.manual_scan.requested==true)
             local coreLast=type(coreState.last_scan)=="table" and saneNumber(coreState.last_scan.time,0) or 0
@@ -634,7 +1032,7 @@ local function buildStorageSnapshotFromFinder()
 end
 
 local function refreshStorageSnapshotCache()
-    local ok,snapshotOrErr,maybeErr=pcall(buildStorageSnapshotFromFinder)
+    local ok,snapshotOrErr,maybeErr=callCore(buildStorageSnapshotFromFinder)
     local snapshot=nil
     local err=nil
     if ok then snapshot=snapshotOrErr; err=maybeErr else err=snapshotOrErr end
@@ -666,7 +1064,7 @@ local function startStorageSnapshotWorker()
     ctx.lua_thread.create(function()
         ctx.wait(0)
         while storageWorkerRunning do
-            local ok,err=pcall(refreshStorageSnapshotCache)
+            local ok,err=callCore(refreshStorageSnapshotCache)
             if not ok then
                 storageSnapshotCache.error=tostring(err)
                 log("storage snapshot worker failed: "..tostring(err))
@@ -735,7 +1133,7 @@ local function marketplaceOffers(names,counts,prices)
         local rawName=tostring(names[i] or "")
         local itemId=nil
         if itemIcons and type(itemIcons.resolveItemId)=="function" then
-            local ok,value=pcall(itemIcons.resolveItemId,rawName)
+            local ok,value=callCore(itemIcons.resolveItemId,rawName)
             if ok and value~=nil and tostring(value)~="" then itemId=tostring(value) end
         end
         out[#out+1]={name=marketplaceText(rawName),count=saneNumber(counts[i],0) or 0,price=saneNumber(prices[i],0) or 0,item_id=itemId}
@@ -746,7 +1144,7 @@ local function marketplaceState()
     currentPage="marketplace"
     local raw={}
     if ctx and type(ctx.getMarketplaceSnapshot)=="function" then
-        local ok,value=pcall(ctx.getMarketplaceSnapshot)
+        local ok,value=callCore(ctx.getMarketplaceSnapshot)
         if ok and type(value)=="table" then raw=value end
     end
     local servers={}
@@ -796,7 +1194,7 @@ local function modsState()
     currentPage="mods"
     local data={}
     if ctx and type(ctx.getModsSnapshot)=="function" then
-        local ok,value=pcall(ctx.getModsSnapshot)
+        local ok,value=callCore(ctx.getModsSnapshot)
         if ok and type(value)=="table" then data=utf8Tree(value,0) or {} end
     end
     local fp=encode(data)
@@ -811,20 +1209,51 @@ local function modsState()
     }
 end
 
-local function settingsState()
-    currentPage="settings"
+local function settingsSnapshotData(force)
     local now=nowMs()
-    local dirty=fingerprints.settings==""
-    if dirty or type(settingsSnapshotCache.data)~="table" or now-(settingsSnapshotCache.at or 0)>=1500 then
+    if force==true or type(settingsSnapshotCache.data)~="table" or now-(settingsSnapshotCache.at or 0)>=1500 then
         local snapshot={}
         if ctx and type(ctx.getSettingsSnapshot)=="function" then
-            local ok,value=pcall(ctx.getSettingsSnapshot)
+            local ok,value=callCore(ctx.getSettingsSnapshot)
             if ok and type(value)=="table" then snapshot=value end
         end
         settingsSnapshotCache.data=utf8Tree(snapshot,0) or {}
         settingsSnapshotCache.at=now
     end
-    local data=settingsSnapshotCache.data or {}
+    return settingsSnapshotCache.data or {}
+end
+
+local function currentHtmlThemeKey()
+    local data=settingsSnapshotData(false)
+    local appearance=type(data.appearance)=="table" and data.appearance or {}
+    local globalPalette=type(appearance.global_palette)=="table" and appearance.global_palette or {}
+    if globalPalette.enabled==true then return "global_palette" end
+    local key=tostring(appearance.palette_key or "")
+    if key=="" then key="arzmarket_default" end
+    return key
+end
+
+local function currentHtmlThemeProfile()
+    local data=settingsSnapshotData(false)
+    local appearance=type(data.appearance)=="table" and data.appearance or {}
+    local profile=type(appearance.global_palette)=="table" and appearance.global_palette or {}
+    return profile
+end
+
+local function settingsState()
+    currentPage="settings"
+    local dirty=fingerprints.settings==""
+    local base=settingsSnapshotData(dirty)
+    local data={}
+    if type(base)=="table" then
+        for k,v in pairs(base) do data[k]=v end
+    end
+    local mods={}
+    if ctx and type(ctx.getModsSnapshot)=="function" then
+        local ok,value=callCore(ctx.getModsSnapshot)
+        if ok and type(value)=="table" then mods=utf8Tree(value,0) or {} end
+    end
+    data.mods=mods
     local fp=encode(data)
     if fp~=fingerprints.settings then
         fingerprints.settings=fp
@@ -832,7 +1261,7 @@ local function settingsState()
     end
     return {
         revision=revision.settings,page="settings",
-        common={uiMode="html",htmlWindow=htmlWindowState,menuScalePercent=currentMenuScalePercent()},
+        common={uiMode="html",htmlWindow=htmlWindowState,menuScalePercent=currentMenuScalePercent(),htmlThemeKey=currentHtmlThemeKey(),htmlThemeProfile=currentHtmlThemeProfile()},
         data=data
     }
 end
@@ -846,6 +1275,7 @@ local function stateFor(page)
     page=page=="sell" and "sell" or "buy"
     currentPage=page
     ensureLoadedConfig(page)
+    restoreTradeDraft(page)
     local buy,sell=lists()
     local list=page=="buy" and buy or sell
     local snapshot=automationSnapshot()
@@ -861,43 +1291,33 @@ local function stateFor(page)
     local categories=categoryOptions(page)
     local uiState={currency="SA",buy_scan=false,sell_scan=false}
     if ctx and type(ctx.getTradeUiState)=="function" then
-        local ok,value=pcall(ctx.getTradeUiState)
+        local ok,value=callCore(ctx.getTradeUiState)
         if ok and type(value)=="table" then uiState=value end
-    end
-    -- HTML Buy uses SA$ as its primary table currency, matching the reference UI.
-    -- If Lua is idle and still left in VC mode, switch only the mode flag and then
-    -- read the state again. Do not do this during an active trade.
-    if page=="buy" and not busy and uiState.currency=="VC" and ctx and type(ctx.ensureHtmlTradeCurrency)=="function" then
-        pcall(ctx.ensureHtmlTradeCurrency,"SA")
-        if type(ctx.getTradeUiState)=="function" then
-            local ok,value=pcall(ctx.getTradeUiState)
-            if ok and type(value)=="table" then uiState=value end
-        end
     end
     local currency=uiState.currency=="VC" and "VC" or "SA"
     local buyScan=uiState.buy_scan==true
     local sellScan=uiState.sell_scan==true
     local undoCount=0
     if ctx and type(ctx.getTradeUndoCount)=="function" then
-        local ok,value=pcall(ctx.getTradeUndoCount,page)
+        local ok,value=callCore(ctx.getTradeUndoCount,page)
         if ok then undoCount=math.max(0,math.floor(tonumber(value) or 0)) end
     end
     local buyContinue=false
     if ctx and type(ctx.getBuyContinueMode)=="function" then
-        local ok,value=pcall(ctx.getBuyContinueMode)
+        local ok,value=callCore(ctx.getBuyContinueMode)
         if ok then buyContinue=value==true end
     end
     local runtimeKey=table.concat({
         tostring(active),tostring(busy),tostring(snapshot.buy==true),tostring(snapshot.sell==true),
         tostring(score),tostring(total),tostring(cfg),table.concat(configs,"\29"),currency,tostring(buyScan),tostring(sellScan),
-        tostring(undoCount),tostring(buyContinue),sourceFingerprint(source),encode(categories)
+        tostring(undoCount),tostring(buyContinue),(sourceCache[page] and sourceCache[page].fingerprint) or "0",encode(categories)
     },"\30")
     touchRevision(page,list,runtimeKey)
     local items={}
     for i=1,#list do items[i]=itemDto(list[i],i,page) end
     local address,serverPort="",0
     if type(sampGetCurrentServerAddress)=="function" then
-        local ok,a,p=pcall(sampGetCurrentServerAddress)
+        local ok,a,p=callCore(sampGetCurrentServerAddress)
         if ok then address,serverPort=tostring(a or ""),tonumber(p) or 0 end
     end
     local iconStatus=itemIcons and itemIcons.getStatus and itemIcons.getStatus() or {}
@@ -915,12 +1335,83 @@ local function findItem(side,identity)
     if type(identity)~="table" then return nil,nil,"identity_missing" end
     local buy,sell=lists()
     local list=side=="buy" and buy or sell
+    local wantedName=tostring(identity.name or "")
+    local wantedId=identity.item_id~=nil and tostring(identity.item_id) or ""
+
+    -- Scanned sell items can have several inventory slots. In that case slot_id
+    -- is a Lua array, for example {"17", "28"}. JSON round-trips create a new
+    -- table object, so tostring(table) compares memory addresses and is never a
+    -- stable identity. Build a deterministic key from the table contents instead.
+    local function slotKey(value)
+        if value==nil then return "" end
+        if type(value)~="table" then return tostring(value) end
+        local count=#value
+        if count>0 then
+            local parts={}
+            for i=1,count do parts[i]=tostring(value[i] or "") end
+            return table.concat(parts,"\31")
+        end
+        local entries={}
+        for key,itemValue in pairs(value) do
+            entries[#entries+1]=tostring(key).."="..tostring(itemValue or "")
+        end
+        table.sort(entries)
+        return table.concat(entries,"\31")
+    end
+    local wantedSlot=slotKey(identity.slot_id)
+
+    local function itemName(item)
+        return toUtf8(item and (item.name or item.item) or "")
+    end
+    local function itemSlot(item)
+        return item and slotKey(item.slot_id) or ""
+    end
+    local function itemId(item)
+        if type(item)~="table" then return "" end
+        local value=item.item_id or item.foreign_item_id or item.id
+        return value~=nil and tostring(value) or ""
+    end
+    local function matches(item)
+        if type(item)~="table" then return false end
+        local actualSlot=itemSlot(item)
+        local actualId=itemId(item)
+        local actualName=itemName(item)
+        -- slot_id is the strongest identity for scanned inventory rows, but do
+        -- not reject immediately when slots changed after a rescan. In that case
+        -- item_id/name can still safely resolve the row below.
+        if wantedSlot~="" and actualSlot~="" and actualSlot==wantedSlot then
+            if wantedName~="" and actualName~=wantedName then return false end
+            if wantedId~="" and actualId~="" and actualId~=wantedId then return false end
+            return true
+        end
+        -- item_id stays stable when rows are reordered or the draft is restored.
+        if wantedId~="" and actualId~="" then
+            if actualId~=wantedId then return false end
+            return wantedName=="" or actualName==wantedName
+        end
+        if wantedName~="" then return actualName==wantedName end
+        return false
+    end
+
+    -- Fast path: keep using the original index when it still points to the same item.
     local index=math.floor(saneNumber(identity.index,0) or 0)
-    if index<1 or index>#list then return nil,nil,"stale_state" end
-    local item=list[index]
-    if tostring(identity.name or "")~="" and toUtf8(item.name or item.item or "")~=tostring(identity.name) then return nil,nil,"stale_state" end
-    if identity.slot_id~=nil and item.slot_id~=nil and tostring(identity.slot_id)~=tostring(item.slot_id) then return nil,nil,"stale_state" end
-    return item,index
+    if index>=1 and index<=#list and matches(list[index]) then return list[index],index end
+
+    -- The list may be sorted/rebuilt between render and click. Resolve the same
+    -- item again by stable identity instead of rejecting a valid edit as stale.
+    local foundIndex=nil
+    for i=1,#list do
+        if matches(list[i]) then
+            if foundIndex~=nil then
+                -- Ambiguous name-only matches are unsafe to edit.
+                if wantedSlot=="" and wantedId=="" then return nil,nil,"stale_state" end
+            else
+                foundIndex=i
+            end
+        end
+    end
+    if foundIndex then return list[foundIndex],foundIndex end
+    return nil,nil,"stale_state"
 end
 local numeric={price=true,price_vc=true,count=true,continue=true,count_maximum=true}
 local boolean={enabled=true,maximum=true}
@@ -955,8 +1446,14 @@ local function removeItem(side,payload)
     local _,index,err=findItem(side,payload.identity)
     if not index then return false,err end
     if not ctx or type(ctx.deleteTradeItem)~="function" then return false,"delete_unavailable" end
-    local ok,result,coreErr=pcall(ctx.deleteTradeItem,side,index)
+    local ok,result,coreErr=callCore(ctx.deleteTradeItem,side,index)
     local success=ok and result~=false
+    if success and configName(side)=="" then
+        local buy,sell=lists()
+        local list=side=="buy" and buy or sell
+        local saved,saveErr=saveTradeDraft(side,list)
+        if not saved then return false,saveErr end
+    end
     fingerprints[side]=""
     return success,success and nil or (ok and coreErr or tostring(result))
 end
@@ -971,7 +1468,7 @@ local function addItem(side,payload)
     for i=1,#list do if tostring(list[i].name or list[i].item or "")==luaName then return false,"already_exists" end end
     local defaults={price=side=="sell" and 9 or 10,count=1,sort_mode=false}
     if ctx and type(ctx.getTradeAddDefaults)=="function" then
-        local ok,value=pcall(ctx.getTradeAddDefaults,side)
+        local ok,value=callCore(ctx.getTradeAddDefaults,side)
         if ok and type(value)=="table" then defaults=value end
     end
     local defaultPrice=saneNumber(defaults.price,side=="sell" and 9 or 10) or (side=="sell" and 9 or 10)
@@ -1012,77 +1509,282 @@ local function addItem(side,payload)
 end
 
 local function setCefCursor(value)
+    value=value==true
+    local alreadyActive=false
+    if type(sampIsCursorActive)=="function" then
+        local ok,active=pcall(sampIsCursorActive)
+        alreadyActive=ok and active==true
+    end
+
+    if value then
+        -- If ImGui already owns an active cursor, do not cycle SA-MP cursor modes.
+        -- Cycling 2 -> 1 recenters the mouse, which made every Baron step jump
+        -- the cursor to the middle of the screen.
+        pcall(function()
+            local bs=raknetNewBitStream()
+            raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
+            raknetBitStreamWriteInt8(bs,128); raknetBitStreamWriteInt16(bs,0)
+            raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
+        end)
+        if not alreadyActive then
+            pcall(function() if sampSetCursorMode then sampSetCursorMode(2); sampSetCursorMode(1) end end)
+            pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
+            cefCursorOwned=true
+        else
+            cefCursorOwned=false
+        end
+        pcall(function() if sampShowCursor then sampShowCursor(true) end end)
+        pcall(function() if showCursor then showCursor(true) end end)
+        return
+    end
+
+    -- Never disable a cursor that was already active before CEF opened.
+    if not cefCursorOwned then return end
     pcall(function()
         local bs=raknetNewBitStream()
         raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
-        raknetBitStreamWriteInt8(bs,value and 128 or 0); raknetBitStreamWriteInt16(bs,0)
+        raknetBitStreamWriteInt8(bs,0); raknetBitStreamWriteInt16(bs,0)
         raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
     end)
-    pcall(function() if sampSetCursorMode then if value then sampSetCursorMode(2); sampSetCursorMode(1) else sampSetCursorMode(0) end end end)
-    pcall(function() if sampToggleCursor then sampToggleCursor(value) end end)
-    pcall(function() if sampShowCursor then sampShowCursor(value) end end)
-    pcall(function() if showCursor then showCursor(value) end end)
+    pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
+    pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
+    pcall(function() if sampShowCursor then sampShowCursor(false) end end)
+    pcall(function() if showCursor then showCursor(false) end end)
+    cefCursorOwned=false
 end
+
+local function forceDisableCefCursor()
+    pcall(function()
+        local bs=raknetNewBitStream()
+        raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
+        raknetBitStreamWriteInt8(bs,0); raknetBitStreamWriteInt16(bs,0)
+        raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
+    end)
+    pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
+    pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
+    pcall(function() if sampShowCursor then sampShowCursor(false) end end)
+    pcall(function() if showCursor then showCursor(false) end end)
+    cefCursorOwned=false
+end
+
+local function refocusHtmlFrame()
+    if not htmlOpen or not acef or type(acef.eval)~="function" then return end
+    pcall(acef.eval, [[
+        var f=document.getElementById('arzmarket-html-frame');
+        if(f){
+            f.style.visibility='visible';
+            f.style.pointerEvents='auto';
+            try{f.focus();}catch(e){}
+            try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}
+        }
+    ]])
+end
+local function gameUiNeedsCursor()
+    if type(isPauseMenuActive)=="function" then
+        local ok,v=pcall(isPauseMenuActive)
+        if ok and v==true then return true end
+    end
+    if type(sampIsChatInputActive)=="function" then
+        local ok,v=pcall(sampIsChatInputActive)
+        if ok and v==true then return true end
+    end
+    if type(sampIsDialogActive)=="function" then
+        local ok,v=pcall(sampIsDialogActive)
+        if ok and v==true then return true end
+    end
+    return false
+end
+
+local function backgroundGameUiStealsCursor()
+    if type(sampIsDialogActive)=="function" then
+        local ok,v=pcall(sampIsDialogActive)
+        if ok and v==true then return true end
+    end
+    if ctx and type(ctx.getMainState)=="function" then
+        local ok,state=pcall(ctx.getMainState)
+        if ok and type(state)=="table" and state.isEnableCursor==true then return true end
+    end
+    return false
+end
+
+local function reclaimHtmlInputIfNeeded()
+    if not htmlOpen or not acef then return end
+    local now=nowMs()
+    if now-lastHtmlInputReclaim<75 then return end
+    lastHtmlInputReclaim=now
+
+    -- A SA-MP dialog or the game's own CEF can enable the stock cursor after
+    -- ArzMarket is already open. In that case the iframe stays visible, but
+    -- mouse clicks are consumed by the game UI. Reassert our cursor mode and
+    -- focus without using the old 2 -> 1 cycle, so the pointer is not recentered.
+    if backgroundGameUiStealsCursor() then
+        pcall(function()
+            local bs=raknetNewBitStream()
+            raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
+            raknetBitStreamWriteInt8(bs,128); raknetBitStreamWriteInt16(bs,0)
+            raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
+        end)
+        pcall(function() if sampSetCursorMode then sampSetCursorMode(1) end end)
+        pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
+        pcall(function() if sampShowCursor then sampShowCursor(true) end end)
+        pcall(function() if showCursor then showCursor(true) end end)
+        cefCursorOwned=true
+    end
+
+    -- Refocus is cheap and also protects against another CEF stealing DOM focus.
+    refocusHtmlFrame()
+end
+
+-- CEF and mimgui can release their cursor one frame later than the visible UI.
+-- When HTML closes, clear the cursor immediately and repeat the cleanup for a
+-- few frames. Stop as soon as another real game UI needs the cursor.
+local function releaseCursorAfterHtmlClose()
+    cefCursorOwned=false
+    if not gameUiNeedsCursor() and not backgroundGameUiStealsCursor() then forceDisableCefCursor() end
+    if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create)~="function" then return end
+    ctx.lua_thread.create(function()
+        local delays={0,50,120,220}
+        for i=1,#delays do
+            wait(delays[i])
+            if htmlOpen or previewOpen then return end
+            if gameUiNeedsCursor() or backgroundGameUiStealsCursor() then return end
+            forceDisableCefCursor()
+        end
+    end)
+end
+
+local function removeStaleCefFrames()
+    htmlOpen=false
+    previewOpen=false
+    previewSignature=""
+    htmlTemporaryMode=false
+    if acef and type(acef.eval)=="function" then
+        pcall(acef.eval, [[
+            (function(){
+                var ids=['arzmarket-html-frame','arzmarket-html-preview-frame'];
+                for(var i=0;i<ids.length;i++){
+                    var f=document.getElementById(ids[i]);
+                    if(f){
+                        try{f.style.pointerEvents='none';}catch(e){}
+                        try{f.blur();}catch(e){}
+                        try{if(f.contentWindow)f.contentWindow.blur();}catch(e){}
+                        try{f.remove();}catch(e){try{if(f.parentNode)f.parentNode.removeChild(f);}catch(_){} }
+                    }
+                }
+                try{if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();}catch(e){}
+            })();
+        ]])
+    end
+end
+
+local function recoverGameInputAfterReload()
+    removeStaleCefFrames()
+    cursorWasActiveBeforeHtml=false
+    cefCursorOwned=false
+    if not gameUiNeedsCursor() and not backgroundGameUiStealsCursor() then
+        forceDisableCefCursor()
+    end
+end
+
 local function quoteJs(v) return string.format("%q",tostring(v or "")):gsub("\r","\\r"):gsub("\n","\\n") end
 local function parentFrameBootstrap(url,replaceExisting)
     local replaceCode=replaceExisting and "var old=document.getElementById('arzmarket-html-frame');if(old)old.remove();" or ""
     return "window.__arzMarketFrameToken="..quoteJs(token)..";"..
-        "window.__arzMarketFocusFrame=function(f,activate){if(!f)return;if(activate!==false)f.style.pointerEvents='auto';f.style.visibility='visible';try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}};"..
+        "window.__arzMarketFocusFrame=function(f,activate){if(!f)return;if(activate!==false){f.style.visibility='visible';f.style.pointerEvents='auto';}try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}};"..
         "if(!window.__arzMarketFrameMessageBound){window.addEventListener('message',function(e){var d=e&&e.data;if(!d||d.channel!=='arzmarket-html'||d.token!==window.__arzMarketFrameToken)return;var f=document.getElementById('arzmarket-html-frame');if(d.action==='detach'){if(f)f.remove();return;}if(d.action==='hide'){if(f){f.style.visibility='hidden';f.style.pointerEvents='none';}return;}if(d.action==='show'){if(f){f.style.visibility='visible';window.__arzMarketFocusFrame(f);}return;}if(d.action==='ready'&&f){f.setAttribute('data-ready','1');window.__arzMarketFocusFrame(f);}},false);window.__arzMarketFrameMessageBound=true;}"..
         replaceCode..
         "if(!document.getElementById('arzmarket-html-frame')){var f=document.createElement('iframe');f.id='arzmarket-html-frame';f.src="..quoteJs(url)..";"..
         "f.style.position='fixed';f.style.left='0';f.style.top='0';f.style.width='100vw';f.style.height='100vh';"..
-        "f.style.border='0';f.style.background='transparent';f.style.zIndex='2147483000';f.style.pointerEvents='none';f.style.visibility='visible';"..
-        "f.onload=function(){var self=this;setTimeout(function(){if(self&&self.parentNode){window.__arzMarketFocusFrame(self,false);}},80);};"..
+        "f.style.border='0';f.style.background='transparent';f.style.zIndex='2147483000';f.style.pointerEvents='none';f.style.visibility='hidden';"..
+        "f.onload=function(){var self=this;if(self&&self.parentNode){self.style.visibility='hidden';self.style.pointerEvents='none';}};"..
         "document.body.appendChild(f);}else{var f=document.getElementById('arzmarket-html-frame');if(f&&f.getAttribute('data-ready')==='1')window.__arzMarketFocusFrame(f);}"
 end
-local function previewFrameBootstrap(url,bounds)
+local function previewFrameBootstrap(url,bounds,options)
     local left=math.max(0,math.floor(tonumber(bounds and bounds.x) or 0))
     local top=math.max(0,math.floor(tonumber(bounds and bounds.y) or 0))
     local width=math.max(180,math.floor(tonumber(bounds and bounds.w) or 320))
     local height=math.max(120,math.floor(tonumber(bounds and bounds.h) or 240))
-    return "var p=document.getElementById('arzmarket-html-preview-frame');"..
-        "if(!p){p=document.createElement('iframe');p.id='arzmarket-html-preview-frame';document.body.appendChild(p);}"..
-        "if(p.getAttribute('data-arz-src')!=="..quoteJs(url).."){p.src="..quoteJs(url)..";p.setAttribute('data-arz-src',"..quoteJs(url)..");}"..
+    local alpha=math.max(0,math.min(1,tonumber(options and options.alpha) or 1))
+    local interactive=options and options.interactive==true
+    return "var p=document.getElementById('arzmarket-html-preview-frame');var pc=false;"..
+        "if(!p){p=document.createElement('iframe');p.id='arzmarket-html-preview-frame';document.body.appendChild(p);pc=true;}"..
+        "if(pc||!p.getAttribute('data-arz-src')){p.src="..quoteJs(url)..";p.setAttribute('data-arz-src',"..quoteJs(url)..");}"..
         "p.style.position='fixed';p.style.left='"..tostring(left).."px';p.style.top='"..tostring(top).."px';"..
         "p.style.width='"..tostring(width).."px';p.style.height='"..tostring(height).."px';"..
-        "p.style.border='1px solid rgba(55,82,105,.95)';p.style.borderRadius='10px';p.style.background='#071018';p.style.zIndex='2147482998';p.style.pointerEvents='none';"..
-        "p.style.boxShadow='0 0 0 rgba(0,0,0,0)';p.style.opacity='1';"
+        "p.style.border='1px solid rgba(55,82,105,.95)';p.style.borderRadius='10px';p.style.background='#071018';p.style.zIndex='2147482998';"..
+        "p.style.pointerEvents='"..(interactive and "auto" or "none").."';p.style.transition='opacity .32s ease';"..
+        "p.style.boxShadow='0 0 0 rgba(0,0,0,0)';p.style.opacity='"..string.format("%.3f",alpha).."';p.onload=function(){var self=this;setTimeout(function(){if(!self)return;try{self.focus();}catch(e){}try{if(self.contentWindow)self.contentWindow.focus();}catch(e){}},80);};"
 end
+
 local function buildUiUrl(preview)
-    local url="http://127.0.0.1:"..tostring(port).."/ui?"..(preview and "preview=1&" or "").."page="..tostring(currentPage or "buy")
-    if currentPage=="settings" and currentSettingsSection=="appearance" then
-        url=url.."&section=appearance"
+    local url="http://127.0.0.1:"..tostring(port).."/ui?"..(preview and "preview=1&" or "").."page="..tostring(currentPage or "buy").."&ui_rev=268&session="..tostring(token or "")
+    if (not preview) and htmlTemporaryMode then url=url.."&temporary=1" end
+    if currentPage=="settings" and type(currentSettingsSection)=="string" and currentSettingsSection~="" then
+        url=url.."&section="..tostring(currentSettingsSection)
     end
     return url
 end
 local function removePreviewIframe()
+    local wasPreviewOpen=previewOpen==true
     previewOpen=false
     previewSignature=""
     if acef and type(acef.eval)=="function" then pcall(acef.eval,"var p=document.getElementById('arzmarket-html-preview-frame');if(p)p.remove();") end
+    if wasPreviewOpen and not htmlOpen then setCefCursor(false) end
 end
-local function injectPreviewIframe(bounds)
+local function injectPreviewIframe(bounds,options)
     if not acef or type(acef.eval)~="function" or not port then return false end
     local url=buildUiUrl(true)
-    local signature=table.concat({tostring(math.floor(tonumber(bounds and bounds.x) or 0)),tostring(math.floor(tonumber(bounds and bounds.y) or 0)),tostring(math.floor(tonumber(bounds and bounds.w) or 0)),tostring(math.floor(tonumber(bounds and bounds.h) or 0)),tostring(currentPage or "buy")},":")
-    if previewOpen and previewSignature==signature then return true end
+    local alpha=math.max(0,math.min(1,tonumber(options and options.alpha) or 1))
+    local interactive=options and options.interactive==true
+    local signature=table.concat({tostring(math.floor(tonumber(bounds and bounds.x) or 0)),tostring(math.floor(tonumber(bounds and bounds.y) or 0)),tostring(math.floor(tonumber(bounds and bounds.w) or 0)),tostring(math.floor(tonumber(bounds and bounds.h) or 0)),tostring(currentPage or "buy"),string.format("%.3f",alpha),interactive and "1" or "0"},":")
+    if previewOpen and previewSignature==signature then
+        if not htmlOpen then setCefCursor(interactive) end
+        return true
+    end
     previewSignature=signature
-    local ok,result=pcall(acef.eval,previewFrameBootstrap(url,bounds))
+    local ok,result=pcall(acef.eval,previewFrameBootstrap(url,bounds,options))
     ok=ok and result~=false
-    if ok then previewOpen=true else previewSignature="" end
+    if ok then
+        previewOpen=true
+        if not htmlOpen then setCefCursor(interactive) end
+    else
+        previewSignature=""
+        if not htmlOpen then setCefCursor(false) end
+    end
     return ok
 end
 local function removeIframe()
+    local wasHtmlOpen=htmlOpen==true
     htmlOpen=false
-    if acef and type(acef.eval)=="function" then pcall(acef.eval,"var f=document.getElementById('arzmarket-html-frame');if(f)f.remove();") end
-    setCefCursor(false)
+    htmlTemporaryMode=false
+    if acef and type(acef.eval)=="function" then pcall(acef.eval,"var f=document.getElementById('arzmarket-html-frame');if(f){f.style.pointerEvents='none';try{f.blur();}catch(e){}try{if(f.contentWindow)f.contentWindow.blur();}catch(e){}f.remove();}") end
+    if wasHtmlOpen then
+        -- Preserve the cursor only while a real game UI still needs it. A cursor
+        -- left active by the ArzMarket Lua window is not considered external.
+        if not (cursorWasActiveBeforeHtml and gameUiNeedsCursor()) then
+            releaseCursorAfterHtmlClose()
+        end
+    end
+    cursorWasActiveBeforeHtml=false
 end
 local function injectIframe()
     if not acef or type(acef.eval)~="function" or not port then return false end
+    local activeBefore=false
+    if type(sampIsCursorActive)=="function" then
+        local activeOk,activeValue=pcall(sampIsCursorActive)
+        activeBefore=activeOk and activeValue==true
+    end
+    -- Capture ownership before injecting CEF, because focusing the iframe may
+    -- change the input state that sampIsCursorActive/game UI functions report.
+    local protectedCursorBefore=activeBefore and gameUiNeedsCursor()
     local url=buildUiUrl(false)
     local ok,result=pcall(acef.eval,parentFrameBootstrap(url,true))
     ok=ok and result~=false
     if ok then
+        -- sampIsCursorActive() can stay true for one frame after the Lua
+        -- ArzMarket window was hidden. Only protect a pre-existing cursor when
+        -- an actual game UI (pause/chat/dialog) owned it before CEF opened.
+        cursorWasActiveBeforeHtml=protectedCursorBefore
         htmlOpen=true
         lastInjectCheck=nowMs()
         setCefCursor(true)
@@ -1104,10 +1806,11 @@ local function injectIframe()
     return ok
 end
 local function ensureIframe()
-    if not htmlOpen or not acef or nowMs()-lastInjectCheck<1500 then return end
+    if not htmlOpen or not acef or nowMs()-lastInjectCheck<650 then return end
     lastInjectCheck=nowMs()
     local url=buildUiUrl(false)
     pcall(acef.eval,parentFrameBootstrap(url,false))
+    refocusHtmlFrame()
 end
 
 local function readFile(path,binary)
@@ -1115,7 +1818,7 @@ local function readFile(path,binary)
     if not f then return nil end
     local data=f:read("*a"); f:close(); return data
 end
-local mime={html="text/html; charset=utf-8",css="text/css; charset=utf-8",js="application/javascript; charset=utf-8",svg="image/svg+xml",webp="image/webp"}
+local mime={html="text/html; charset=utf-8",css="text/css; charset=utf-8",js="application/javascript; charset=utf-8",svg="image/svg+xml",webp="image/webp",png="image/png",jpg="image/jpeg",jpeg="image/jpeg"}
 local reasons={[200]="OK",[204]="No Content",[400]="Bad Request",[403]="Forbidden",[404]="Not Found",[405]="Method Not Allowed",[409]="Conflict",[413]="Payload Too Large",[500]="Internal Server Error"}
 local function response(status,body,contentType,cacheControl)
     body=body or ""
@@ -1193,7 +1896,7 @@ local function getPriceStats(side,item,currency)
     if not ctx or type(ctx.getPriceData)~="function" or type(item)~="table" then
         return {available=false}
     end
-    local ok,data=pcall(ctx.getPriceData)
+    local ok,data=callCore(ctx.getPriceData)
     if not ok or type(data)~="table" then return {available=false} end
     local sourceKey
     if side=="sell" then sourceKey=currency=="VC" and "sell_vc" or "sell_"
@@ -1265,11 +1968,11 @@ end
 local function getAveragePriceDetails(itemName)
     if not ctx or type(ctx.getPriceData)~="function" then return {available=false,name=toUtf8(itemName or "")} end
     itemName=normalizePriceItemName(itemName):gsub("%(%+%d+%)",""):gsub("^%s+",""):gsub("%s+$","")
-    local ok,data=pcall(ctx.getPriceData)
+    local ok,data=callCore(ctx.getPriceData)
     if not ok or type(data)~="table" then return {available=false,name=toUtf8(itemName)} end
     local meta={}
     if type(ctx.getAveragePriceMeta)=="function" then
-        local okMeta,value=pcall(ctx.getAveragePriceMeta,itemName)
+        local okMeta,value=callCore(ctx.getAveragePriceMeta,itemName)
         if okMeta and type(value)=="table" then meta=value end
     end
     local buyRate=math.max(1,tonumber(meta.buy_vc_rate) or 1)
@@ -1331,12 +2034,12 @@ local function doAction(req)
         -- Change Lua state synchronously while the HTTP request is still alive.
         -- Only iframe destruction is delayed until after the response.
         if ctx and type(ctx.activateLuaPage)=="function" then
-            local ok,result=pcall(ctx.activateLuaPage,pageId)
+            local ok,result=callCore(ctx.activateLuaPage,pageId)
             switched=ok and result~=false
         else
             switched=selectLuaPage(requestedPage)
             if switched then
-                if ctx and type(ctx.setPreferredInterfaceMode)=="function" then pcall(ctx.setPreferredInterfaceMode,"lua") end
+                if ctx and type(ctx.setPreferredInterfaceMode)=="function" then callCore(ctx.setPreferredInterfaceMode,"lua") end
                 setMenuVisible(true)
             end
         end
@@ -1360,33 +2063,50 @@ local function doAction(req)
         return jsonResponse(200,{ok=true,mode="lua",page=requestedPage})
     elseif action=="ui.navigate" then
         currentPage=requestedPage
-        if requestedPage=="marketplace" and ctx and type(ctx.ensureMarketplaceLoaded)=="function" then pcall(ctx.ensureMarketplaceLoaded) end
-        return jsonResponse(200,{ok=true,page=requestedPage})
+        local previewRequest=data.preview==true
+        if not previewRequest and ctx and type(ctx.assistantPageChanged)=="function" then callCore(ctx.assistantPageChanged,requestedPage) end
+        if not previewRequest and revision[requestedPage] then revision[requestedPage]=revision[requestedPage]+1 end
+        if not previewRequest and requestedPage=="marketplace" and ctx and type(ctx.ensureMarketplaceLoaded)=="function" then callCore(ctx.ensureMarketplaceLoaded) end
+        return jsonResponse(200,{ok=true,page=requestedPage,preview=previewRequest})
+    elseif action=="assistant.action" then
+        if not ctx or type(ctx.assistantAction)~="function" then return jsonResponse(400,{ok=false,error="assistant_unavailable"}) end
+        local assistantAction=tostring(data.assistantAction or "")
+        local ok,result,assistantErr=callCore(ctx.assistantAction,assistantAction,data)
+        local success=ok and result~=false
+        if success then
+            for key,value in pairs(revision) do revision[key]=(tonumber(value) or 0)+1 end
+        end
+        local snapshot=nil
+        if type(ctx.getAssistantSnapshot)=="function" then
+            local snapOk,snap=callCore(ctx.getAssistantSnapshot,requestedPage,"html")
+            if snapOk and type(snap)=="table" then snapshot=snap end
+        end
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and assistantErr or tostring(result)),assistant=snapshot})
     elseif action=="marketplace.refresh" then
         if not ctx or type(ctx.refreshMarketplace)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.refreshMarketplace,data.serverIndex)
+        local ok,result,coreErr=callCore(ctx.refreshMarketplace,data.serverIndex)
         local success=ok and result~=false
         fingerprints.marketplace=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="marketplace.server.select" then
         if not ctx or type(ctx.refreshMarketplace)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.refreshMarketplace,data.index)
+        local ok,result,coreErr=callCore(ctx.refreshMarketplace,data.index)
         local success=ok and result~=false
         fingerprints.marketplace=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="marketplace.sort" then
         if not ctx or type(ctx.setMarketplaceSortMode)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
-        local ok,value=pcall(ctx.setMarketplaceSortMode,data.mode)
+        local ok,value=callCore(ctx.setMarketplaceSortMode,data.mode)
         fingerprints.marketplace=""
         return jsonResponse(ok and 200 or 400,{ok=ok,mode=ok and value or nil,error=ok and nil or tostring(value)})
     elseif action=="marketplace.find" then
         if not ctx or type(ctx.findMarketplaceStall)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.findMarketplaceStall,data.uid,data.serverId)
+        local ok,result,coreErr=callCore(ctx.findMarketplaceStall,data.uid,data.serverId)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="marketplace.auth.open" then
         if not ctx or type(ctx.openMarketplaceAuthProvider)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.openMarketplaceAuthProvider,tostring(data.provider or "telegram"))
+        local ok,result,coreErr=callCore(ctx.openMarketplaceAuthProvider,tostring(data.provider or "telegram"))
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="ui.window.save" then
@@ -1398,69 +2118,87 @@ local function doAction(req)
         return jsonResponse(200,{ok=true,window=htmlWindowState})
     elseif action=="mods.set" then
         if not ctx or type(ctx.setModsValue)~="function" then return jsonResponse(400,{ok=false,error="mods_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.setModsValue,tostring(data.key or ""),data.value)
+        local ok,result,coreErr=callCore(ctx.setModsValue,tostring(data.key or ""),data.value)
         local success=ok and result~=false
-        fingerprints.mods=""
+        fingerprints.mods=""; fingerprints.settings=""; settingsSnapshotCache.at=0
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="mods.manual_purchased" then
         if not ctx or type(ctx.toggleManualPurchasedListing)~="function" then return jsonResponse(400,{ok=false,error="manual_purchased_unavailable"}) end
-        local ok,result,detail=pcall(ctx.toggleManualPurchasedListing)
+        local ok,result,detail=callCore(ctx.toggleManualPurchasedListing)
         local success=ok and result~=false
-        fingerprints.mods=""
+        fingerprints.mods=""; fingerprints.settings=""; settingsSnapshotCache.at=0
         return jsonResponse(success and 200 or 400,{ok=success,state=success and detail or nil,error=success and nil or (ok and detail or tostring(result))})
     elseif action=="mods.telegram" then
         if not ctx or type(ctx.openModsTelegram)~="function" then return jsonResponse(400,{ok=false,error="open_url_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.openModsTelegram)
+        local ok,result,coreErr=callCore(ctx.openModsTelegram)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.set" then
         if not ctx or type(ctx.setSettingsValue)~="function" then return jsonResponse(400,{ok=false,error="settings_unavailable"}) end
         local value=data.value
         if type(value)=="string" then value=fromUtf8(value) end
-        local ok,result,coreErr=pcall(ctx.setSettingsValue,tostring(data.key or ""),value)
+        local ok,result,coreErr=callCore(ctx.setSettingsValue,tostring(data.key or ""),value)
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.theme.select" then
         if not ctx or type(ctx.selectSettingsTheme)~="function" then return jsonResponse(400,{ok=false,error="theme_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.selectSettingsTheme,tostring(data.key or ""))
+        local ok,result,coreErr=callCore(ctx.selectSettingsTheme,tostring(data.key or ""))
+        local success=ok and result~=false
+        fingerprints.settings=""; settingsSnapshotCache.at=0
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
+    elseif action=="settings.global_palette.update" then
+        if not ctx or type(ctx.setSettingsGlobalPalette)~="function" then return jsonResponse(400,{ok=false,error="palette_unavailable"}) end
+        local payload={
+            enabled=data.enabled==true,
+            base=tostring(data.base or ""),
+            depth=tonumber(data.depth),
+            saturation=tonumber(data.saturation),
+            contrast=tonumber(data.contrast),
+            glow=tonumber(data.glow),
+            picker_hue=tonumber(data.picker_hue),
+            picker_saturation=tonumber(data.picker_saturation),
+            picker_value=tonumber(data.picker_value),
+            reset=data.reset==true
+        }
+        local ok,result,coreErr=callCore(ctx.setSettingsGlobalPalette,payload)
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.palette.enable" then
         if not ctx or type(ctx.setSettingsPaletteEnabled)~="function" then return jsonResponse(400,{ok=false,error="palette_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.setSettingsPaletteEnabled,data.value==true)
+        local ok,result,coreErr=callCore(ctx.setSettingsPaletteEnabled,data.value==true)
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.palette.color" then
         if not ctx or type(ctx.setSettingsPaletteColor)~="function" then return jsonResponse(400,{ok=false,error="palette_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.setSettingsPaletteColor,tostring(data.key or ""),tostring(data.hex or ""))
+        local ok,result,coreErr=callCore(ctx.setSettingsPaletteColor,tostring(data.key or ""),tostring(data.hex or ""))
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.palette.reset" then
         if not ctx or type(ctx.resetSettingsPalette)~="function" then return jsonResponse(400,{ok=false,error="palette_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.resetSettingsPalette,tostring(data.scope or "all"),tostring(data.key or ""))
+        local ok,result,coreErr=callCore(ctx.resetSettingsPalette,tostring(data.scope or "all"),tostring(data.key or ""))
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.scale.apply" then
         if not ctx or type(ctx.applySettingsMenuScale)~="function" then return jsonResponse(400,{ok=false,error="scale_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.applySettingsMenuScale,data.value)
+        local ok,result,coreErr=callCore(ctx.applySettingsMenuScale,data.value)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.config.create" then
         if not ctx or type(ctx.createSettingsTradeConfig)~="function" then return jsonResponse(400,{ok=false,error="config_unavailable"}) end
         local sideValue=data.side=="sell" and "sell" or "buy"
-        local ok,result,coreErr=pcall(ctx.createSettingsTradeConfig,sideValue,fromUtf8(data.name or ""))
+        local ok,result,coreErr=callCore(ctx.createSettingsTradeConfig,sideValue,fromUtf8(data.name or ""))
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0; fingerprints[sideValue]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.config.delete" then
         if not ctx or type(ctx.deleteSettingsTradeConfig)~="function" then return jsonResponse(400,{ok=false,error="config_unavailable"}) end
         local sideValue=data.side=="sell" and "sell" or "buy"
-        local ok,result,coreErr=pcall(ctx.deleteSettingsTradeConfig,sideValue,fromUtf8(data.name or ""))
+        local ok,result,coreErr=callCore(ctx.deleteSettingsTradeConfig,sideValue,fromUtf8(data.name or ""))
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0; fingerprints[sideValue]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
@@ -1468,20 +2206,20 @@ local function doAction(req)
         if not ctx or type(ctx.mergeSettingsBuyConfigs)~="function" then return jsonResponse(400,{ok=false,error="merge_unavailable"}) end
         local files={}
         if type(data.files)=="table" then for i=1,#data.files do files[i]=fromUtf8(data.files[i]) end end
-        local ok,result,coreErr=pcall(ctx.mergeSettingsBuyConfigs,fromUtf8(data.name or ""),files)
+        local ok,result,coreErr=callCore(ctx.mergeSettingsBuyConfigs,fromUtf8(data.name or ""),files)
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0; fingerprints.buy=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.config.convert" then
         if not ctx or type(ctx.convertSettingsLegacyConfig)~="function" then return jsonResponse(400,{ok=false,error="convert_unavailable"}) end
         local sideValue=data.side=="sell" and "sell" or "buy"
-        local ok,result,coreErr=pcall(ctx.convertSettingsLegacyConfig,sideValue,fromUtf8(data.name or ""))
+        local ok,result,coreErr=callCore(ctx.convertSettingsLegacyConfig,sideValue,fromUtf8(data.name or ""))
         local success=ok and result~=false
         fingerprints.settings=""; settingsSnapshotCache.at=0; fingerprints[sideValue]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.telegram.test" then
         if not ctx or type(ctx.testTelegramSettings)~="function" then return jsonResponse(400,{ok=false,error="telegram_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.testTelegramSettings)
+        local ok,result,coreErr=callCore(ctx.testTelegramSettings)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="storage.scan" then
@@ -1489,7 +2227,7 @@ local function doAction(req)
         if not finder then return jsonResponse(400,{ok=false,error="storage_unavailable"}) end
         local stateValue={}
         if type(finder.getState)=="function" then
-            local ok,value=pcall(finder.getState)
+            local ok,value=callCore(finder.getState)
             if ok and type(value)=="table" then stateValue=value end
         end
         if stateValue.player_inventory_visible==true then
@@ -1499,39 +2237,39 @@ local function doAction(req)
         if type(finder.requestExternalScan)~="function" then return jsonResponse(400,{ok=false,error="storage_scan_unavailable"}) end
         local kind=tostring(data.kind or "")
         if kind=="all" or kind=="player_inventory" then kind="" end
-        local ok,result=pcall(finder.requestExternalScan,kind~="" and kind or nil)
+        local ok,result=callCore(finder.requestExternalScan,kind~="" and kind or nil)
         storageRefreshRequested=true
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or "open_storage_first"})
     elseif action=="trade.currency.toggle" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.toggleTradeCurrency)~="function" then return jsonResponse(400,{ok=false,error="currency_unavailable"}) end
-        local ok,result=pcall(ctx.toggleTradeCurrency)
+        local ok,result=callCore(ctx.toggleTradeCurrency)
         fingerprints.buy=""; fingerprints.sell=""
         return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,currency=ok and result or nil,error=ok and result~=false and nil or tostring(result)})
     elseif action=="trade.scan.toggle" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.toggleTradeScan)~="function" then return jsonResponse(400,{ok=false,error="scan_unavailable"}) end
-        local ok,result=pcall(ctx.toggleTradeScan,side)
+        local ok,result=callCore(ctx.toggleTradeScan,side)
         sourceCache[side].at=0; fingerprints[side]=""
         return jsonResponse(ok and 200 or 400,{ok=ok,active=ok and result==true or false,error=ok and nil or tostring(result)})
     elseif action=="buy.source.refresh" then
         if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.refreshBuySource)~="function" then return jsonResponse(400,{ok=false,error="refresh_unavailable"}) end
-        local ok,result=pcall(ctx.refreshBuySource)
+        local ok,result=callCore(ctx.refreshBuySource)
         sourceCache.buy.at=0; fingerprints.buy=""
         return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,error=ok and result~=false and nil or tostring(result)})
     elseif action=="prices.lookup" then
         local rawName=fromUtf8(tostring(data.name or ""))
         if rawName=="" then return jsonResponse(400,{ok=false,error="item_name_missing"}) end
-        local ok,result=pcall(getAveragePriceDetails,rawName)
+        local ok,result=callCore(getAveragePriceDetails,rawName)
         if not ok then return jsonResponse(500,{ok=false,error=tostring(result)}) end
         return jsonResponse(200,{ok=true,data=result})
     elseif action=="prices.download" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.downloadAveragePrices)~="function" then return jsonResponse(400,{ok=false,error="prices_unavailable"}) end
-        local ok,result=pcall(ctx.downloadAveragePrices)
+        local ok,result=callCore(ctx.downloadAveragePrices)
         return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,error=ok and result~=false and nil or tostring(result)})
     elseif action=="prices.stats" then
         local item,_,findErr=findItem(side,data.identity)
@@ -1542,8 +2280,9 @@ local function doAction(req)
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.loadTradeConfig)~="function" then return jsonResponse(400,{ok=false,error="config_loader_unavailable"}) end
         local requestedName=fromUtf8(data.name or "")
-        local ok,result,err=pcall(ctx.loadTradeConfig,side,requestedName)
+        local ok,result,err=callCore(ctx.loadTradeConfig,side,requestedName)
         local success=ok and result~=false
+        if success then clearTradeDraft(side) end
         sourceCache[side].at=0
         fingerprints[side]=""
         fingerprints.settings=""; settingsSnapshotCache.at=0
@@ -1551,28 +2290,40 @@ local function doAction(req)
     elseif action=="trade.list.clear" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.clearTradeList)~="function" then return jsonResponse(400,{ok=false,error="clear_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.clearTradeList,side)
+        local ok,result,coreErr=callCore(ctx.clearTradeList,side)
         local success=ok and result~=false
+        if success and configName(side)=="" then
+            local buy,sell=lists()
+            local list=side=="buy" and buy or sell
+            local saved,saveErr=saveTradeDraft(side,list)
+            if not saved then return jsonResponse(500,{ok=false,error=saveErr}) end
+        end
         fingerprints[side]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="trade.item.undo" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.undoTradeDelete)~="function" then return jsonResponse(400,{ok=false,error="undo_unavailable"}) end
-        local ok,result,coreErr=pcall(ctx.undoTradeDelete,side)
+        local ok,result,coreErr=callCore(ctx.undoTradeDelete,side)
         local success=ok and result~=false
+        if success and configName(side)=="" then
+            local buy,sell=lists()
+            local list=side=="buy" and buy or sell
+            local saved,saveErr=saveTradeDraft(side,list)
+            if not saved then return jsonResponse(500,{ok=false,error=saveErr}) end
+        end
         fingerprints[side]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="buy.budget.preview" then
         if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
         if not ctx or type(ctx.previewBuyBudget)~="function" then return jsonResponse(400,{ok=false,error="budget_unavailable"}) end
-        local ok,result,dataOrErr=pcall(ctx.previewBuyBudget,data.budget)
+        local ok,result,dataOrErr=callCore(ctx.previewBuyBudget,data.budget)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,data=success and dataOrErr or nil,error=success and nil or (ok and dataOrErr or tostring(result))})
     elseif action=="buy.budget.apply" then
         if side~="buy" then return jsonResponse(400,{ok=false,error="buy_only"}) end
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.distributeBuyBudget)~="function" then return jsonResponse(400,{ok=false,error="budget_unavailable"}) end
-        local ok,result,dataOrErr=pcall(ctx.distributeBuyBudget,data.budget)
+        local ok,result,dataOrErr=callCore(ctx.distributeBuyBudget,data.budget)
         local success=ok and result~=false
         fingerprints.buy=""
         return jsonResponse(success and 200 or 400,{ok=success,data=success and dataOrErr or nil,error=success and nil or (ok and dataOrErr or tostring(result))})
@@ -1581,9 +2332,9 @@ local function doAction(req)
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if not ctx or type(ctx.setBuyContinueMode)~="function" or type(ctx.getBuyContinueMode)~="function" then return jsonResponse(400,{ok=false,error="continue_unavailable"}) end
         local current=false
-        local readOk,readValue=pcall(ctx.getBuyContinueMode)
+        local readOk,readValue=callCore(ctx.getBuyContinueMode)
         if readOk then current=readValue==true end
-        local ok,result=pcall(ctx.setBuyContinueMode,not current)
+        local ok,result=callCore(ctx.setBuyContinueMode,not current)
         fingerprints.buy=""
         return jsonResponse(ok and 200 or 400,{ok=ok,active=ok and result==true or false,error=ok and nil or tostring(result)})
     elseif action=="trade.item.update" then
@@ -1604,7 +2355,7 @@ local function doAction(req)
             return jsonResponse(400,{ok=false,error="filter_order_unavailable"})
         end
         local order=type(data.order)=="table" and data.order or nil
-        local ok,result,coreErr=pcall(ctx.setTradeFilterCategoryOrder,side,order)
+        local ok,result,coreErr=callCore(ctx.setTradeFilterCategoryOrder,side,order)
         local success=ok and result~=false
         fingerprints[side]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
@@ -1616,27 +2367,27 @@ local function doAction(req)
         local item,_,findErr=findItem(side,data.identity)
         if not item then return jsonResponse(findErr=="stale_state" and 409 or 400,{ok=false,error=findErr}) end
         local category=tostring(data.category or "auto")
-        local ok,result,coreErr=pcall(ctx.setTradeItemCategory,side,item,category)
+        local ok,result,coreErr=callCore(ctx.setTradeItemCategory,side,item,category)
         local success=ok and result~=false
         fingerprints[side]=""
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="buy.average.apply" then
         if tradeBusy() then return jsonResponse(409,{ok=false,error="trade_active"}) end
         if type(applyAveragePricesToBuyList)~="function" then return jsonResponse(400,{ok=false,error="average_unavailable"}) end
-        local ok,result=pcall(applyAveragePricesToBuyList)
+        local ok,result=callCore(applyAveragePricesToBuyList)
         fingerprints.buy=""
         return jsonResponse(ok and result~=false and 200 or 400,{ok=ok and result~=false,error=not ok and tostring(result) or (result==false and "average_failed" or nil)})
     elseif action=="trade.start" then
         local active=select(1,automationState(side))
         if active then
             if not ctx or type(ctx.cancelTrade)~="function" then return jsonResponse(400,{ok=false,error="cancel_unavailable"}) end
-            local ok,result=pcall(ctx.cancelTrade); fingerprints[side]=""
+            local ok,result=callCore(ctx.cancelTrade); fingerprints[side]=""
             local success=ok and result~=false
             return jsonResponse(success and 200 or 400,{ok=success,cancelled=success,error=success and nil or tostring(result)})
         end
         if tradeBusy() then return jsonResponse(409,{ok=false,error="other_trade_active"}) end
         if not ctx or type(ctx.startTrade)~="function" then return jsonResponse(400,{ok=false,error="start_unavailable"}) end
-        local ok,result=pcall(ctx.startTrade,side)
+        local ok,result=callCore(ctx.startTrade,side)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or tostring(result)})
     end
@@ -1663,9 +2414,26 @@ local function handle(req)
         if req.method~="GET" then return response(405,"method_not_allowed") end
         if not validToken(req) then return response(403,"forbidden") end
         local requested=req.query.page=="settings" and "settings" or req.query.page=="logs" and "logs" or req.query.page=="marketplace" and "marketplace" or req.query.page=="mods" and "mods" or req.query.page=="storage" and "storage" or req.query.page=="sell" and "sell" or "buy"
+        local cachedState=stateResponseCache[requested]
+        if not focusIsStable() then
+            if cachedState then
+                if tonumber(req.query.since)==tonumber(cachedState.revision) then return response(204,"","application/json; charset=utf-8") end
+                return response(200,cachedState.body,"application/json; charset=utf-8","no-store")
+            end
+            return response(204,"","application/json; charset=utf-8")
+        end
         local value=stateFor(requested)
+        value.common=type(value.common)=="table" and value.common or {}
+        value.common.htmlThemeKey=currentHtmlThemeKey()
+        value.common.htmlThemeProfile=currentHtmlThemeProfile()
+        if ctx and type(ctx.getAssistantSnapshot)=="function" then
+            local okAssistant,assistant=callCore(ctx.getAssistantSnapshot,requested,"html")
+            if okAssistant and type(assistant)=="table" then value.assistant=assistant end
+        end
+        local body=encode(value)
+        stateResponseCache[requested]={revision=tonumber(value.revision) or 0,body=body}
         if tonumber(req.query.since)==tonumber(value.revision) then return response(204,"","application/json; charset=utf-8") end
-        return jsonResponse(200,value)
+        return response(200,body,"application/json; charset=utf-8","no-store")
     end
     if req.path=="/api/action" then return doAction(req) end
     local size,id=req.path:match("^/api/icon/(%d+)/(%d+)%.webp$")
@@ -1674,17 +2442,30 @@ local function handle(req)
         if req.method~="GET" then return response(405,"method_not_allowed") end
         if not validToken(req) and tostring(req.query.token or "")~=token then return response(403,"forbidden") end
         if not itemIcons or type(itemIcons.getIcon)~="function" then return response(404,"icon_unavailable") end
-        local ok,dataOrErr,extra=pcall(itemIcons.getIcon,size,id)
+        local ok,dataOrErr,extra=callCore(itemIcons.getIcon,size,id)
         if not ok or not dataOrErr then return response(404,tostring(ok and extra or dataOrErr)) end
         return response(200,dataOrErr,"image/webp","private, max-age=86400")
     end
     return response(404,"not_found")
 end
 
-local function closeClient(entry) pcall(function() entry.socket:close() end); clients[entry]=nil end
-local function queueResponse(entry,out) entry.out,entry.outPos,entry.deadline=out,1,nowMs()+10000 end
+local function closeClient(entry)
+    if not entry then return end
+    if entry.socket then pcall(function() entry.socket:close() end) end
+    clients[entry]=nil
+end
+
+local function queueResponse(entry,out)
+    if not entry or not clients[entry] then return false end
+    entry.processing=false
+    entry.out=out
+    entry.outPos=1
+    entry.deadline=nowMs()+10000
+    return true
+end
+
 local function flushClient(entry)
-    if not entry.out then return false end
+    if not entry or not entry.out then return false end
     local sent,err,last=entry.socket:send(entry.out,entry.outPos)
     local endPos=sent or last
     if endPos and endPos>=entry.outPos then entry.outPos=endPos+1 end
@@ -1692,22 +2473,88 @@ local function flushClient(entry)
     if err and err~="timeout" then closeClient(entry); return true end
     return false
 end
-local function service()
-    if not server then return end
-    local count=0; for _ in pairs(clients) do count=count+1 end
-    while count<12 do
-        local client=server:accept(); if not client then break end
-        client:settimeout(0)
-        local entry={socket=client,buffer="",deadline=nowMs()+5000}
-        clients[entry]=true; count=count+1
+
+-- Network I/O and yieldable ArzMarket callbacks must not share the same
+-- MoonLoader coroutine. The network thread only accepts/reads/writes sockets.
+-- Requests are executed serially by a separate worker, where handle() is free
+-- to call callbacks that may yield to the MoonLoader scheduler.
+local function enqueueRequest(entry,req)
+    if not entry or not clients[entry] or entry.processing then return false end
+    entry.processing=true
+    entry.deadline=nowMs()+30000
+    requestQueue[#requestQueue+1]={entry=entry,req=req}
+    return true
+end
+
+local function requestWorker(generation)
+    while requestWorkerRunning and generation==serverGeneration do
+        local job=table.remove(requestQueue,1)
+        if job then
+            local entry=job.entry
+            if entry and clients[entry] then
+                -- Do not wrap handle() in pcall/xpcall: core callbacks may yield.
+                local out=handle(job.req)
+                if type(out)~="string" then out=response(500,"invalid_handler_response") end
+                if clients[entry] then queueResponse(entry,out) end
+            end
+            ctx.wait(0)
+        else
+            ctx.wait(0)
+        end
     end
-    local entries={}; for entry in pairs(clients) do entries[#entries+1]=entry end
+end
+
+local function markReady(list)
+    local set={}
+    if type(list)=="table" then
+        for _,sock in ipairs(list) do set[sock]=true end
+    end
+    return set
+end
+
+local function service()
+    if not server or not socketApi or type(socketApi.select)~="function" then return end
+
+    local count=0
+    local readSockets={server}
+    local writeSockets={}
+    for entry in pairs(clients) do
+        count=count+1
+        if entry.socket then
+            if entry.out then
+                writeSockets[#writeSockets+1]=entry.socket
+            elseif not entry.processing then
+                readSockets[#readSockets+1]=entry.socket
+            end
+        end
+    end
+
+    -- select(..., 0) is a pure non-blocking readiness probe. We never call
+    -- accept/receive/send unless the corresponding socket is ready, avoiding
+    -- coroutine transitions inside a would-block socket operation.
+    local readable,writable=socketApi.select(readSockets,writeSockets,0)
+    local canRead=markReady(readable)
+    local canWrite=markReady(writable)
+
+    if count<12 and canRead[server] then
+        local client=server:accept()
+        if client then
+            client:settimeout(0)
+            local entry={socket=client,buffer="",deadline=nowMs()+5000,processing=false}
+            clients[entry]=true
+            count=count+1
+        end
+    end
+
+    local entries={}
+    for entry in pairs(clients) do entries[#entries+1]=entry end
     for _,entry in ipairs(entries) do
         if clients[entry] then
+            local sock=entry.socket
             if entry.out then
-                flushClient(entry)
-            else
-                local chunk,err,partial=entry.socket:receive(4096)
+                if canWrite[sock] then flushClient(entry) end
+            elseif not entry.processing and canRead[sock] then
+                local chunk,err,partial=sock:receive(4096)
                 local data=chunk or partial
                 if data and #data>0 then entry.buffer=entry.buffer..data end
                 if #entry.buffer>81920 then
@@ -1715,22 +2562,50 @@ local function service()
                 else
                     local req,parseErr=parseRequest(entry.buffer)
                     if req then
-                        local ok,out=pcall(handle,req)
-                        if not ok then log("request failed: "..tostring(out)); out=response(500,"internal_error") end
-                        queueResponse(entry,out)
+                        enqueueRequest(entry,req)
                     elseif parseErr~="incomplete" then
                         queueResponse(entry,response(parseErr=="body_too_large" and 413 or 400,parseErr))
-                    elseif nowMs()>entry.deadline or err=="closed" then closeClient(entry) end
+                    elseif err=="closed" then
+                        closeClient(entry)
+                    end
                 end
             end
             if clients[entry] and nowMs()>entry.deadline then closeClient(entry) end
         end
     end
 end
+
+local function recoverServiceClients()
+    local entries={}
+    for entry in pairs(clients) do entries[#entries+1]=entry end
+    for _,entry in ipairs(entries) do closeClient(entry) end
+    requestQueue={}
+end
+
+local function safeService(generation)
+    if generation~=serverGeneration or not running then return false,"stale_generation" end
+    if serviceBusy then return true end
+    serviceBusy=true
+    -- service() must never yield. The pcall boundary is safe here because all
+    -- yield-capable ArzMarket callbacks are executed by requestWorker instead.
+    local ok,err=pcall(service)
+    serviceBusy=false
+    if ok then return true end
+
+    recoverServiceClients()
+    local now=nowMs()
+    if now-lastServiceErrorAt>=1000 then
+        lastServiceErrorAt=now
+        log("socket service recovered after error: "..tostring(err))
+    end
+    return false,tostring(err)
+end
+
 local function startServer()
     if running then return true end
     local ok,socket=pcall(require,"socket")
     if not ok or type(socket)~="table" then return false,"luasocket_missing" end
+    if type(socket.select)~="function" then return false,"luasocket_select_missing" end
     local ports={0}; for p=38460,38489 do ports[#ports+1]=p end
     for _,p in ipairs(ports) do
         local srv=socket.bind("127.0.0.1",p)
@@ -1742,20 +2617,55 @@ local function startServer()
         end
     end
     if not server then return false,"port_unavailable" end
-    if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create)~="function" then server:close(); server=nil; return false,"thread_unavailable" end
+    if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create)~="function" or type(ctx.wait)~="function" then
+        server:close(); server=nil; return false,"thread_unavailable"
+    end
+
+    socketApi=socket
+    requestQueue={}
+    stateResponseCache={}
+    lastForegroundState=nil
+    foregroundStableSince=nowMs()
+    serverGeneration=serverGeneration+1
+    local generation=serverGeneration
     running=true
+    requestWorkerRunning=true
+    serviceBusy=false
+
     ctx.lua_thread.create(function()
-        while running do service(); ensureIframe(); ctx.wait(0) end
+        requestWorker(generation)
+    end)
+    -- Keep the socket coroutine completely isolated from CEF/game callbacks.
+    -- Generation checks prevent an old bridge thread from surviving a stop/start
+    -- cycle and servicing the same sockets together with a newly-created thread.
+    ctx.lua_thread.create(function()
+        while running and generation==serverGeneration do
+            local ok=safeService(generation)
+            ctx.wait(ok and 0 or 25)
+        end
+    end)
+    ctx.lua_thread.create(function()
+        while running and generation==serverGeneration do
+            ensureIframe()
+            reclaimHtmlInputIfNeeded()
+            ctx.wait(0)
+        end
     end)
     log("bridge listening on 127.0.0.1:"..tostring(port))
     return true
 end
+
 local function stopServer()
+    serverGeneration=serverGeneration+1
     running=false
+    requestWorkerRunning=false
+    serviceBusy=false
+    requestQueue={}
     local entries={}; for entry in pairs(clients) do entries[#entries+1]=entry end
     for _,entry in ipairs(entries) do closeClient(entry) end
     if server then pcall(function() server:close() end) end
     server,port=nil,nil
+    socketApi=nil
 end
 local function loadCefAdapter()
     local ok,module=pcall(require,"arizona-events")
@@ -1803,15 +2713,15 @@ local function loadItemIcons()
     end
 end
 
-function M.open_html(page,settingsSection)
+function M.open_html(page,settingsSection,options)
     if page=="buy" or page=="sell" or page=="settings" or page=="logs" or page=="marketplace" or page=="mods" or page=="storage" then currentPage=page end
-    if currentPage=="settings" and settingsSection=="appearance" then currentSettingsSection="appearance" else currentSettingsSection=nil end
+    local validSettingsSection = settingsSection=="general" or settingsSection=="trade" or settingsSection=="automation"
+        or settingsSection=="telegram" or settingsSection=="appearance" or settingsSection=="configs"
+    if currentPage=="settings" and validSettingsSection then currentSettingsSection=settingsSection else currentSettingsSection=nil end
+    local temporary=type(options)=="table" and options.temporary==true
+    htmlTemporaryMode=temporary
     suppressAutoOpen=false
     if currentPage=="marketplace" and ctx and type(ctx.ensureMarketplaceLoaded)=="function" then pcall(ctx.ensureMarketplaceLoaded) end
-    if currentPage=="buy" and ctx and type(ctx.ensureHtmlTradeCurrency)=="function" then
-        pcall(ctx.ensureHtmlTradeCurrency,"SA")
-        fingerprints.buy=""
-    end
     if not running then
         local ok,err=startServer()
         if not ok then if ctx and ctx.notify then pcall(ctx.notify,"HTML интерфейс недоступен: "..tostring(err)) end; return false end
@@ -1824,24 +2734,41 @@ function M.open_html(page,settingsSection)
     if menuWasVisible then setMenuVisible(false) end
     local ok=injectIframe()
     if ok then
-        if ctx and type(ctx.setPreferredInterfaceMode)=="function" then pcall(ctx.setPreferredInterfaceMode,"html") end
+        if not temporary and ctx and type(ctx.setPreferredInterfaceMode)=="function" then pcall(ctx.setPreferredInterfaceMode,"html") end
     elseif menuWasVisible then
         setMenuVisible(true)
     end
+    if not ok then htmlTemporaryMode=false end
     if not ok and ctx and ctx.notify then pcall(ctx.notify,"Не удалось открыть CEF интерфейс. Используйте Lua режим.") end
     return ok
 end
 function M.is_open()
     return htmlOpen==true
 end
-function M.open_preview(bounds,page)
-    if page=="buy" or page=="sell" or page=="settings" or page=="logs" or page=="marketplace" or page=="mods" or page=="storage" then currentPage=page end
+function M.invalidate_trade_source(side)
+    side=side=="sell" and "sell" or "buy"
+    refreshSourceCache(side,true)
+    fingerprints[side]=""
+    stateResponseCache[side]=nil
+    revision[side]=(tonumber(revision[side]) or 0)+1
+    return true
+end
+
+function M.get_window_state()
+    local out={temporary=htmlTemporaryMode==true}
+    if type(htmlWindowState)=="table" then
+        for k,v in pairs(htmlWindowState) do out[k]=v end
+    end
+    return out
+end
+function M.open_preview(bounds,page,options)
+    if not previewOpen and (page=="buy" or page=="sell" or page=="settings" or page=="logs" or page=="marketplace" or page=="mods" or page=="storage") then currentPage=page end
     if not running then
         local ok,err=startServer()
         if not ok then return false,err end
     end
     if not acef or type(acef.eval)~="function" then return false,"cef_unavailable" end
-    return injectPreviewIframe(bounds)
+    return injectPreviewIframe(bounds,options)
 end
 function M.close_preview()
     removePreviewIframe()
@@ -1858,9 +2785,28 @@ function M.init(context)
     token=makeToken()
     htmlRoot=ctx.getWorkingDirectory().."\\ArzMarket\\html"
     htmlWindowStatePath=ctx.getWorkingDirectory().."\\ArzMarket\\html_window_state.json"
+    restoreTradeDraft("buy")
+    restoreTradeDraft("sell")
     loadWindowState()
     loadItemIcons()
+    -- Build trade sources before any HTTP coroutine exists. This keeps file I/O
+    -- and first-time icon/catalog work out of /api/state after Alt+Tab.
+    refreshSourceCache("buy",true)
+    refreshSourceCache("sell",true)
     acef=loadCefAdapter()
+
+    -- Arizona CEF can survive a MoonLoader Lua reload. Remove any iframe and
+    -- focus left by the previous script instance before opening a new UI.
+    recoverGameInputAfterReload()
+    if ctx and ctx.lua_thread and type(ctx.lua_thread.create)=="function" then
+        ctx.lua_thread.create(function()
+            wait(180)
+            if not htmlOpen and not previewOpen then recoverGameInputAfterReload() end
+            wait(420)
+            if not htmlOpen and not previewOpen then recoverGameInputAfterReload() end
+        end)
+    end
+
     local started,err=startServer()
     if not started then log("bridge disabled: "..tostring(err)) end
     startStorageSnapshotWorker()
@@ -1869,6 +2815,10 @@ end
 function M.render(context)
     ctx=context or ctx
     local imgui=ctx.imgui
+    if ctx.preview==true then
+        imgui.Text("HTML интерфейс открыт в правом окне предпросмотра.")
+        return
+    end
 
     -- The Lua menu item "HTML" is an action, not a real page.
     -- As soon as the user selects it, immediately hand control to CEF.
@@ -1902,10 +2852,14 @@ function M.render(context)
         imgui.TextWrapped("Повторная попытка выполняется автоматически.")
     end
 end
-function M.shutdown()
+function M.shutdown(context, quitGame)
     storageWorkerRunning=false
     removeIframe()
     removePreviewIframe()
+    removeStaleCefFrames()
+    if quitGame ~= true and not gameUiNeedsCursor() then
+        forceDisableCefCursor()
+    end
     stopServer()
     if itemIcons and type(itemIcons.shutdown)=="function" then pcall(itemIcons.shutdown) end
     return true

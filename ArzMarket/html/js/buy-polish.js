@@ -7,11 +7,10 @@
   const detailContent = document.getElementById('detailContent');
   const detailFields = document.getElementById('detailFields');
   const detailName = document.getElementById('detailName');
-  const detailStatus = document.getElementById('detailStatus');
   const detailTabs = detailContent ? detailContent.querySelector('.detail-tabs') : null;
   const startButton = document.getElementById('startButton');
 
-  if (!app || !tableRows || !tableCard || !detailContent || !detailFields || !detailName || !detailStatus || !detailTabs) return;
+  if (!app || !tableRows || !tableCard || !detailContent || !detailFields || !detailName || !detailTabs) return;
 
   let detailTab = 'main';
   let syncQueued = false;
@@ -23,71 +22,9 @@
     return app.dataset.page === 'buy';
   }
 
-  function ensureTableFooter() {
-    let footer = document.getElementById('buyTableFooter');
-    if (!footer) {
-      footer = document.createElement('div');
-      footer.id = 'buyTableFooter';
-      footer.className = 'buy-table-footer';
-      tableCard.appendChild(footer);
-    }
-    footer.classList.toggle('hidden', !isBuy());
-    return footer;
-  }
-
-  function numberFromCell(value) {
-    const cleaned = text(value).replace(/[^0-9-]/g, '');
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  function updateTableFooter() {
-    const footer = ensureTableFooter();
-    if (!isBuy()) return;
-
-    const rows = Array.from(tableRows.querySelectorAll('.trade-row.buy'));
-    const enabled = rows.filter(row => !row.classList.contains('disabled-row')).length;
-    const disabled = Math.max(0, rows.length - enabled);
-    const totalContinue = rows.reduce((sum, row) => {
-      const cells = row.children;
-      return sum + numberFromCell(cells[3]?.textContent || '0');
-    }, 0);
-
-    const signature = `${rows.length}|${enabled}|${disabled}|${totalContinue}`;
-    if (footer.dataset.signature === signature) return;
-    footer.dataset.signature = signature;
-    footer.replaceChildren();
-
-    const left = document.createElement('div');
-    left.className = 'buy-table-footer-left';
-    left.textContent = `Всего товаров: ${rows.length}`;
-
-    const right = document.createElement('div');
-    right.className = 'buy-table-footer-right';
-
-    const enabledNode = document.createElement('span');
-    enabledNode.append('Включено: ');
-    const enabledValue = document.createElement('span');
-    enabledValue.className = 'value-green';
-    enabledValue.textContent = String(enabled);
-    enabledNode.append(enabledValue);
-
-    const divider1 = document.createElement('span');
-    divider1.className = 'divider';
-
-    const disabledNode = document.createElement('span');
-    disabledNode.className = 'secondary-stat';
-    disabledNode.textContent = `Отключено: ${disabled}`;
-
-    const divider2 = document.createElement('span');
-    divider2.className = 'divider secondary-stat';
-
-    const remainNode = document.createElement('span');
-    remainNode.className = 'secondary-stat';
-    remainNode.textContent = `Общий остаток: ${totalContinue}`;
-
-    right.append(enabledNode, divider1, disabledNode, divider2, remainNode);
-    footer.append(left, right);
+  function removeLegacyTableFooter() {
+    const footer = document.getElementById('buyTableFooter');
+    if (footer) footer.remove();
   }
 
   function updateRowStatusLabels() {
@@ -204,7 +141,7 @@
     main.className = 'buy-main-fields';
     main.appendChild(createReadonlyNameField());
 
-    const orderedLabels = ['цена', 'цена sa$', 'кол-во', 'количество', 'цена vc$', 'осталось'];
+    const orderedLabels = ['цена', 'цена sa$', 'кол-во', 'количество', 'цена vc$', 'тип предмета'];
     const appended = new Set();
     for (const label of orderedLabels) {
       const field = byLabel.get(label);
@@ -249,20 +186,13 @@
     }
   }
 
-  function updateDetailStatus() {
-    if (!isBuy()) return;
-    if (detailStatus.textContent === 'Активен') detailStatus.textContent = 'Включен';
-    if (detailStatus.textContent === 'Отключен') detailStatus.textContent = 'Выключен';
-  }
-
   function updateStartButton() {
     if (!isBuy() || !startButton) return;
     if (startButton.textContent.trim() === 'Старт скупки') startButton.textContent = 'Старт';
   }
 
   function deactivateBuyPolish() {
-    const footer = document.getElementById('buyTableFooter');
-    if (footer) footer.classList.add('hidden');
+    removeLegacyTableFooter();
 
     const kind = detailName.parentElement?.querySelector('.detail-kind');
     if (kind) kind.classList.add('hidden');
@@ -276,7 +206,7 @@
 
   function sync() {
     syncQueued = false;
-    ensureTableFooter();
+    removeLegacyTableFooter();
 
     if (!isBuy()) {
       deactivateBuyPolish();
@@ -284,10 +214,8 @@
     }
 
     updateRowStatusLabels();
-    updateTableFooter();
     ensureDetailKind();
     ensureDetailTabs();
-    updateDetailStatus();
     updateStartButton();
 
     if (!detailContent.classList.contains('hidden')) classifyFields();
@@ -317,7 +245,6 @@
 
   const detailHeaderObserver = new MutationObserver(scheduleSync);
   detailHeaderObserver.observe(detailName, {childList: true, characterData: true, subtree: true});
-  detailHeaderObserver.observe(detailStatus, {childList: true, characterData: true, subtree: true});
 
   if (startButton) {
     const startObserver = new MutationObserver(scheduleSync);

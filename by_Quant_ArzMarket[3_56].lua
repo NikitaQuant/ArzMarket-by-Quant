@@ -753,12 +753,47 @@ local buyBudgetInput = {
 local var_0_81 = {}
 local buyScanMode = false
 local sellScanMode = false
+local sellScanResults = {}
+local arzHtmlPendingTradeScan = nil
+
+local function arzApplyHtmlTradeScan(side, enabled)
+	side = side == "sell" and "sell" or "buy"
+	enabled = enabled == true
+
+	if side == "buy" then
+		if buyScanMode == enabled then return buyScanMode end
+		buyScanMode = enabled
+		if buyScanMode then
+			if type(setGameKeyState) == "function" then pcall(setGameKeyState, 21, 255) end
+			if type(sampForceOnfootSync) == "function" then pcall(sampForceOnfootSync) end
+			if type(AFKMessage) == "function" then
+				AFKMessage(u8:decode("Откройте меню лавки [ALT], если скрипт автоматически не открыл и скрипт автоматически начнет сканирование"))
+			end
+		else
+			if type(AFKMessage) == "function" then AFKMessage(u8:decode("Сканирование было отменено.")) end
+		end
+		return buyScanMode
+	end
+
+	if sellScanMode == enabled then return sellScanMode end
+	sellScanMode = enabled
+	if sellScanMode then
+		sellScanResults = {}
+		-- Send /stats from the normal MoonLoader loop. Sending the RakNet RPC from
+		-- the local HTML HTTP service coroutine could silently do nothing on some builds.
+		if type(SendToServer) == "function" then SendToServer("/stats") end
+		if type(AFKMessage) == "function" then AFKMessage(u8:decode("Проходит сканирование инвентаря. Подождите...")) end
+	else
+		if type(AFKMessage) == "function" then AFKMessage(u8:decode("Сканирование было отменено.")) end
+	end
+	return sellScanMode
+end
 local itemPanelState = {}
 local uiFonts = {}
 local buyScanResults = {}
 local buyList = {}
 local sellList = {}
-local sellScanResults = {}
+sellScanResults = {}
 local configFileNames = {
 	sell = "",
 	buy = ""
@@ -923,6 +958,13 @@ function arzUiExtensionsCreateContext(extension)
 			return AFKMessage(message)
 		end
 	end
+	ctx.openUrl = function(url)
+		url = tostring(url or "")
+		if url == "" or type(openUrl) ~= "function" then return false, "open_url_unavailable" end
+		local ok, result = pcall(openUrl, url)
+		if not ok then return false, tostring(result) end
+		return result ~= false, result
+	end
 	ctx.moneySeparator = function(value)
 		if type(moneySeparator) == "function" then
 			local ok, formatted = pcall(moneySeparator, value)
@@ -938,6 +980,12 @@ function arzUiExtensionsCreateContext(extension)
 	end
 	ctx.getBuyList = function()
 		return buyList
+	end
+	ctx.getTradeSource = function(side)
+		if side == "sell" then
+			return type(json_vlads) == "table" and json_vlads or nil
+		end
+		return type(json_vlad) == "table" and json_vlad or nil
 	end
 	ctx.getLogsData = function()
 		return jsonLog
@@ -1184,12 +1232,27 @@ function arzUiExtensionsCreateContext(extension)
 		if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
 			ARZ_INTERFACE_CHOOSER.visible[0] = false
 		end
+		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.setInterface) == "function" then
+			pcall(ARZ_BARON_ASSISTANT.setInterface, mode)
+		end
 		if type(arzIniSave) == "function" then
 			pcall(arzIniSave)
 		elseif type(save_all) == "function" then
 			pcall(save_all)
 		end
 		return mode
+	end
+	ctx.getAssistantSnapshot = function(page, mode)
+		return arzBaronAssistantSnapshot(page, mode or "html")
+	end
+	ctx.assistantAction = function(action, payload)
+		return arzBaronAssistantAction(action, payload)
+	end
+	ctx.assistantPageChanged = function(page)
+		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.onPageChanged) == "function" then
+			return ARZ_BARON_ASSISTANT.onPageChanged(page) ~= false
+		end
+		return false
 	end
 	ctx.startTrade = function(side)
 		if type(sampProcessChatInput) ~= "function" then return false end
@@ -1203,10 +1266,16 @@ function arzUiExtensionsCreateContext(extension)
 		return true
 	end
 	ctx.getTradeUiState = function()
+		local buyScanState = buyScanMode == true
+		local sellScanState = sellScanMode == true
+		if type(arzHtmlPendingTradeScan) == "table" then
+			if arzHtmlPendingTradeScan.side == "buy" then buyScanState = arzHtmlPendingTradeScan.enabled == true end
+			if arzHtmlPendingTradeScan.side == "sell" then sellScanState = arzHtmlPendingTradeScan.enabled == true end
+		end
 		return {
 			currency = viceCityMode and "SA" or "VC",
-			buy_scan = buyScanMode == true,
-			sell_scan = sellScanMode == true
+			buy_scan = buyScanState,
+			sell_scan = sellScanState
 		}
 	end
 	ctx.toggleTradeCurrency = function()
@@ -1229,26 +1298,13 @@ function arzUiExtensionsCreateContext(extension)
 	end
 	ctx.toggleTradeScan = function(side)
 		side = side == "sell" and "sell" or "buy"
-		if side == "buy" then
-			buyScanMode = not buyScanMode
-			if buyScanMode then
-				if type(setGameKeyState) == "function" then pcall(setGameKeyState, 21, 255) end
-				if type(sampForceOnfootSync) == "function" then pcall(sampForceOnfootSync) end
-				if type(AFKMessage) == "function" then AFKMessage(u8:decode("Откройте меню лавки [ALT], если скрипт автоматически не открыл и скрипт автоматически начнет сканирование")) end
-			else
-				if type(AFKMessage) == "function" then AFKMessage(u8:decode("Сканирование было отменено.")) end
-			end
-			return buyScanMode
+		local current = side == "sell" and sellScanMode or buyScanMode
+		if type(arzHtmlPendingTradeScan) == "table" and arzHtmlPendingTradeScan.side == side then
+			current = arzHtmlPendingTradeScan.enabled == true
 		end
-		sellScanMode = not sellScanMode
-		if sellScanMode then
-			sellScanResults = {}
-			if type(SendToServer) == "function" then SendToServer("/stats") end
-			if type(AFKMessage) == "function" then AFKMessage(u8:decode("Проходит сканирование инвентаря. Подождите...")) end
-		else
-			if type(AFKMessage) == "function" then AFKMessage(u8:decode("Сканирование было отменено.")) end
-		end
-		return sellScanMode
+		local target = not current
+		arzHtmlPendingTradeScan = { side = side, enabled = target }
+		return target
 	end
 	ctx.refreshBuySource = function()
 		if type(get_buyList) ~= "function" then return false end
@@ -1411,7 +1467,7 @@ function arzUiExtensionsCreateContext(extension)
 		return ok and type(value) == "table" and value or {}
 	end
 	ctx.getMenuScalePercent = function()
-		return math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 100)))
+		return math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 120)))
 	end
 	ctx.setSettingsValue = function(key, value)
 		if type(arzHtmlSettingsSetValue) ~= "function" then return false, "settings_unavailable" end
@@ -1423,6 +1479,12 @@ function arzUiExtensionsCreateContext(extension)
 		if type(arzHtmlSettingsSelectTheme) ~= "function" then return false, "theme_unavailable" end
 		local ok, result = pcall(arzHtmlSettingsSelectTheme, themeKey)
 		return ok and result ~= false, ok and result ~= false and nil or tostring(result)
+	end
+	ctx.setSettingsGlobalPalette = function(payload)
+		if type(arzHtmlSettingsSetGlobalPalette) ~= "function" then return false, "palette_unavailable" end
+		local ok, result, err = pcall(arzHtmlSettingsSetGlobalPalette, payload)
+		if not ok then return false, tostring(result) end
+		return result ~= false, result == false and (err or "palette_failed") or nil
 	end
 	ctx.setSettingsPaletteEnabled = function(value)
 		if type(arzHtmlSettingsSetPaletteEnabled) ~= "function" then return false, "palette_unavailable" end
@@ -1859,7 +1921,7 @@ function arzUiExtensionsGetByPage(pageId)
 	return ARZ_UI_EXTENSIONS.by_page[tonumber(pageId) or -1]
 end
 
-function arzUiExtensionsOpenHtml(page, settingsSection)
+function arzUiExtensionsOpenHtml(page, settingsSection, options)
 	local extensions = ARZ_UI_EXTENSIONS
 	local extension = extensions and extensions.by_id and extensions.by_id["arz_html_ui"] or nil
 	if not extension or extension._disabled_runtime or type(extension.open_html) ~= "function" then
@@ -1876,10 +1938,11 @@ function arzUiExtensionsOpenHtml(page, settingsSection)
 		if type(resetIO) == "function" then pcall(resetIO) end
 	end
 
+	local temporary = type(options) == "table" and options.temporary == true
 	local ok, result = xpcall(function()
-		local targetPage = page == "sell" and "sell" or page == "settings" and "settings" or page == "logs" and "logs" or page == "marketplace" and "marketplace" or page == "storage" and "storage" or "buy"
+		local targetPage = page == "sell" and "sell" or page == "settings" and "settings" or page == "logs" and "logs" or page == "marketplace" and "marketplace" or page == "mods" and "mods" or page == "storage" and "storage" or "buy"
 		local targetSettingsSection = targetPage == "settings" and settingsSection or nil
-		return extension.open_html(targetPage, targetSettingsSection)
+		return extension.open_html(targetPage, targetSettingsSection, { temporary = temporary })
 	end, arzUiExtensionTraceback)
 	if not ok or result == false then
 		extension._last_error = not ok and tostring(result) or "open_html returned false"
@@ -1897,10 +1960,12 @@ function arzUiExtensionsOpenHtml(page, settingsSection)
 		return false
 	end
 
-	ini.cfg.interface_mode = "html"
-	ini.cfg.interface_choice_done = true
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
-	if type(arzIniSave) == "function" then pcall(arzIniSave) end
+	if not temporary then
+		ini.cfg.interface_mode = "html"
+		ini.cfg.interface_choice_done = true
+		if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+		if type(arzIniSave) == "function" then pcall(arzIniSave) end
+	end
 	return true
 end
 
@@ -1911,6 +1976,13 @@ function arzUiExtensionsIsHtmlOpen()
 	return ok and value == true
 end
 
+function arzUiExtensionsGetHtmlWindowState()
+	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	if not extension or type(extension.get_window_state) ~= "function" then return nil end
+	local ok, value = pcall(extension.get_window_state)
+	return ok and type(value) == "table" and value or nil
+end
+
 function arzUiExtensionsCloseHtml()
 	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
 	if not extension or type(extension.close_html) ~= "function" then return false end
@@ -1918,10 +1990,10 @@ function arzUiExtensionsCloseHtml()
 	return ok and value ~= false
 end
 
-function arzUiExtensionsOpenHtmlPreview(bounds, page)
+function arzUiExtensionsOpenHtmlPreview(bounds, page, options)
 	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
 	if not extension or type(extension.open_preview) ~= "function" then return false end
-	local ok, value = pcall(extension.open_preview, bounds, page)
+	local ok, value = pcall(extension.open_preview, bounds, page, options)
 	return ok and value ~= false
 end
 
@@ -1961,6 +2033,7 @@ function arzUiExtensionsRenderPage(pageId, rainbowColor)
 	ctx.sizeX = tonumber(sizeX) or 0
 	ctx.sizeY = tonumber(sizeY) or 0
 	ctx.menuVisible = menuVisible and menuVisible[0] == true or false
+	ctx.preview = ARZ_INTERFACE_LUA_PREVIEW and ARZ_INTERFACE_LUA_PREVIEW.active == true or false
 
 	local okRender, renderError = xpcall(function()
 		return extension.render(ctx)
@@ -3996,7 +4069,8 @@ ini = inicfg.load({
 		telegram_notification = false,
 		background_blure = false,
 		blur_strength = 2.0,
-		menu_scale_percent = 100,
+		menu_scale_percent = 120,
+		menu_scale_120_migration = false,
 		menu_opacity_percent = 100,
 		Telegram_Ad = false,
 		sell_vc = "1",
@@ -4112,10 +4186,632 @@ ini = inicfg.load({
 	}
 }, iniPath)
 
+-- v106: 120% is the new standard interface scale. Apply it once to both new
+-- and existing users, then preserve any later manual choice in Appearance.
+if ini and ini.cfg and ini.cfg.menu_scale_120_migration ~= true then
+	ini.cfg.menu_scale_percent = 120
+	ini.cfg.menu_scale_120_migration = true
+	pcall(inicfg.save, ini, iniPath)
+end
+
 ARZ_INTERFACE_CHOOSER = {
-	visible = imguiNew.bool(ini.cfg.interface_choice_done ~= true),
-	ready = false
+	-- The chooser is controlled only by Baron's explicit interface_choose step.
+	-- Never show its preview automatically during script startup/reload.
+	visible = imguiNew.bool(false),
+	ready = false,
+	selection = nil,
+	phase = "preview",
+	transition_started = 0,
+	fade_duration = 320,
+	loading_duration = 720,
+	finalizing = false
 }
+
+-- ============================================================
+-- Baron assistant. Isolated onboarding/tutorial module.
+-- State lives outside ArzMarket.ini so tutorial progress does not
+-- interfere with account/auth configuration write locking.
+-- ============================================================
+ARZ_BARON_ASSISTANT = nil
+ARZ_BARON_ASSISTANT_STATE_PATH = "moonloader/ArzMarket/baron_assistant.json"
+ARZ_BARON_LUA_ANCHORS = {}
+ARZ_BARON_LUA_ANCHOR_FRAME = 0
+ARZ_BARON_TRADE_FILTER_OPEN = { sell = true, buy = true }
+
+function arzBaronAnchorBeginFrame()
+    ARZ_BARON_LUA_ANCHOR_FRAME = (tonumber(ARZ_BARON_LUA_ANCHOR_FRAME) or 0) + 1
+    for _, anchor in pairs(ARZ_BARON_LUA_ANCHORS) do
+        if type(anchor) == "table" then anchor.visible = false end
+    end
+end
+
+function arzBaronAnchorRecordRect(name, x, y, w, h)
+    if type(name) ~= "string" or name == "" then return nil end
+    x, y, w, h = tonumber(x), tonumber(y), tonumber(w), tonumber(h)
+    if not x or not y or not w or not h or w <= 0 or h <= 0 then return nil end
+    local anchor = {
+        x = x, y = y, w = w, h = h,
+        visible = true,
+        frame_id = ARZ_BARON_LUA_ANCHOR_FRAME
+    }
+    ARZ_BARON_LUA_ANCHORS[name] = anchor
+    return anchor
+end
+
+function arzBaronAnchorRecordItem(name)
+    if not imgui or type(imgui.GetItemRectMin) ~= "function" or type(imgui.GetItemRectMax) ~= "function" then return nil end
+    local okMin, itemMin = pcall(imgui.GetItemRectMin)
+    local okMax, itemMax = pcall(imgui.GetItemRectMax)
+    if not okMin or not okMax or not itemMin or not itemMax then return nil end
+    return arzBaronAnchorRecordRect(name, itemMin.x, itemMin.y, itemMax.x - itemMin.x, itemMax.y - itemMin.y)
+end
+
+function arzBaronAnchorRecordWindow(name)
+    if not imgui or type(imgui.GetWindowPos) ~= "function" or type(imgui.GetWindowSize) ~= "function" then return nil end
+    local okPos, pos = pcall(imgui.GetWindowPos)
+    local okSize, size = pcall(imgui.GetWindowSize)
+    if not okPos or not okSize or not pos or not size then return nil end
+    return arzBaronAnchorRecordRect(name, pos.x, pos.y, size.x, size.y)
+end
+
+function arzBaronAnchorGet(name)
+    local anchor = ARZ_BARON_LUA_ANCHORS[tostring(name or "")]
+    if type(anchor) ~= "table" or anchor.visible ~= true then return nil end
+    if tonumber(anchor.frame_id) ~= tonumber(ARZ_BARON_LUA_ANCHOR_FRAME) then return nil end
+    return anchor
+end
+
+
+ARZ_BARON_SHOWCASE_MODE = ARZ_BARON_SHOWCASE_MODE or nil
+ARZ_BARON_PENDING_STAGE_SYNC = ARZ_BARON_PENDING_STAGE_SYNC or nil
+
+function arzBaronApplyOnboardingStage(moduleId, stepId)
+	if tostring(moduleId or "") ~= "onboarding" then return false end
+	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true then return false end
+	stepId = tostring(stepId or "")
+
+	local function hideChooser(resetSelection)
+		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+		if resetSelection then
+			ARZ_INTERFACE_CHOOSER.selection = nil
+			ARZ_INTERFACE_CHOOSER.phase = "preview"
+			ARZ_INTERFACE_CHOOSER.transition_started = 0
+			ARZ_INTERFACE_CHOOSER.finalizing = false
+		end
+		ARZ_INTERFACE_LUA_PREVIEW = nil
+		if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
+	end
+
+	if stepId == "welcome" or stepId == "interfaces_intro" then
+		ARZ_BARON_SHOWCASE_MODE = "intro"
+		hideChooser(true)
+		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+		menuOpen = false
+		if menuVisible then menuVisible[0] = false end
+		if type(resetIO) == "function" then pcall(resetIO) end
+		return true
+	end
+
+	if stepId == "lua_intro_1" or stepId == "lua_look" then
+		ARZ_BARON_SHOWCASE_MODE = "lua"
+		hideChooser(true)
+		if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() and type(arzUiExtensionsCloseHtml) == "function" then
+			pcall(arzUiExtensionsCloseHtml)
+		end
+		selectedMenuPage = 2
+		ini.cfg.lastCrrSelect = 2
+		if not (menuOpen == true and menuVisible and menuVisible[0] == true) then
+			menuOpen = true
+			if menuVisible then menuVisible[0] = true end
+			kifir = 1
+			onOpenMenu = true
+			zzztime = os.clock()
+		end
+		return true
+	end
+
+	if stepId == "html_intro_1" or stepId == "html_look" then
+		ARZ_BARON_SHOWCASE_MODE = "html"
+		hideChooser(true)
+		if menuVisible and menuVisible[0] == true then
+			menuOpen = false
+			menuVisible[0] = false
+			if type(resetIO) == "function" then pcall(resetIO) end
+		end
+		if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() then
+			return true
+		end
+		if type(arzUiExtensionsOpenHtml) == "function" then
+			local ok, opened = pcall(arzUiExtensionsOpenHtml, "buy", nil, { temporary = true })
+			return ok and opened ~= false
+		end
+		return false
+	end
+
+	if stepId == "interface_choose" or stepId == "interface_loading" then
+		ARZ_BARON_SHOWCASE_MODE = "compare"
+		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+		menuOpen = false
+		if menuVisible then menuVisible[0] = false end
+		if type(resetIO) == "function" then pcall(resetIO) end
+		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
+		if stepId == "interface_choose" then
+			ARZ_INTERFACE_CHOOSER.selection = nil
+			ARZ_INTERFACE_CHOOSER.phase = "preview"
+			ARZ_INTERFACE_CHOOSER.transition_started = 0
+			ARZ_INTERFACE_CHOOSER.finalizing = false
+		end
+		return true
+	end
+
+	if stepId == "lua_disabled_1" or stepId == "lua_disabled_1_more" or stepId == "lua_disabled_2" or stepId == "lua_disabled_3" or stepId == "lua_redirect_offer" then
+		ARZ_BARON_SHOWCASE_MODE = nil
+		hideChooser(true)
+		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+		menuOpen = true
+		if menuVisible then menuVisible[0] = true end
+		kifir = 1
+		onOpenMenu = true
+		zzztime = os.clock()
+		return true
+	end
+
+	if stepId == "tutorial_offer" then
+		ARZ_BARON_SHOWCASE_MODE = nil
+		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+		return true
+	end
+	return false
+end
+
+function arzBaronProcessPendingStageSync()
+    local pending = ARZ_BARON_PENDING_STAGE_SYNC
+    if type(pending) ~= "table" then return false end
+    ARZ_BARON_PENDING_STAGE_SYNC = nil
+    if type(arzBaronApplyOnboardingStage) ~= "function" then return false end
+    return arzBaronApplyOnboardingStage(pending.moduleId, pending.stepId)
+end
+
+function arzBaronResumeOnboardingShowcase()
+	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+	if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
+		local okVisible, visible = pcall(ARZ_BARON_ASSISTANT.isActive)
+		if not okVisible or visible ~= true then return false end
+	end
+	local ok, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
+	if not ok or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
+	if assistantState.current_module ~= "onboarding" then return false end
+	if tostring(assistantState.current_step or "") == "tutorial_offer" and type(arzBaronOpenSavedProgress) == "function" then
+		return arzBaronOpenSavedProgress()
+	end
+	return arzBaronApplyOnboardingStage(assistantState.current_module, assistantState.current_step)
+end
+
+function arzBaronOpenSavedProgress()
+	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+	if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
+		local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
+		if not okActive or active ~= true then return false end
+	end
+
+	local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
+	if not okState or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
+
+	local moduleId = tostring(assistantState.current_module or "")
+	local stepId = tostring(assistantState.current_step or "")
+	local pageMap = { sell = 1, buy = 2, settings = 3, logs = 4, marketplace = 5, mods = 7, storage = 8 }
+	local savedPage = tostring(assistantState.last_page or "")
+	if pageMap[savedPage] then
+		selectedMenuPage = pageMap[savedPage]
+		ini.cfg.lastCrrSelect = selectedMenuPage
+	end
+
+	if moduleId == "onboarding" then
+		local applied = arzBaronApplyOnboardingStage(moduleId, stepId) == true
+		-- tutorial_offer belongs to onboarding, but it must reopen the already
+		-- selected interface rather than falling back to Lua after ESC.
+		if stepId == "tutorial_offer" then
+			local mode = assistantState.interface == "html" and "html" or "lua"
+			if mode == "html" then
+				menuOpen = false
+				if menuVisible then menuVisible[0] = false end
+				if type(resetIO) == "function" then pcall(resetIO) end
+				local page = savedPage ~= "" and savedPage or arzBaronCurrentPageName()
+				if type(arzUiExtensionsOpenHtml) == "function" then pcall(arzUiExtensionsOpenHtml, page) end
+			else
+				if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+				menuOpen = true
+				if menuVisible then menuVisible[0] = true end
+				kifir = 1
+				onOpenMenu = true
+				zzztime = os.clock()
+			end
+			return true
+		end
+		return applied
+	end
+
+	if moduleId ~= "tutorial_html" and moduleId ~= "tutorial_lua" then return false end
+	local mode = assistantState.interface == "html" and "html" or "lua"
+	local snapshot = arzBaronAssistantSnapshot(nil, mode) or {}
+	local requestedPage = pageMap[savedPage] and savedPage or tostring(snapshot.requiredPage or snapshot.expectedPage or "")
+	if requestedPage == "" then requestedPage = arzBaronCurrentPageName() end
+	if pageMap[requestedPage] then
+		selectedMenuPage = pageMap[requestedPage]
+		ini.cfg.lastCrrSelect = selectedMenuPage
+	end
+	ARZ_BARON_SHOWCASE_MODE = nil
+	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+
+	if mode == "html" then
+		menuOpen = false
+		if menuVisible then menuVisible[0] = false end
+		if type(resetIO) == "function" then pcall(resetIO) end
+		local settingsSection = nil
+		if requestedPage == "settings" then
+			local savedSection = tostring(assistantState.last_settings_section or "")
+			if savedSection == "general" or savedSection == "trade" or savedSection == "automation"
+				or savedSection == "telegram" or savedSection == "appearance" or savedSection == "configs" then
+				settingsSection = savedSection
+			else
+				settingsSection = snapshot.requiredSettingsSection
+			end
+		end
+		if type(arzUiExtensionsOpenHtml) == "function" then
+			local okOpen, opened = pcall(arzUiExtensionsOpenHtml, requestedPage, settingsSection)
+			return okOpen and opened ~= false
+		end
+		return false
+	end
+
+	if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+	menuOpen = true
+	if menuVisible then menuVisible[0] = true end
+	kifir = 1
+	onOpenMenu = true
+	zzztime = os.clock()
+	return true
+end
+
+function arzBaronLoadAssistant()
+	local modulePath = getWorkingDirectory() .. "\\modules\\ArzMarketQuant\\baron_assistant.lua"
+	local loader, loadError = loadfile(modulePath)
+	if not loader then
+		print("[ArzMarket][Baron] module load failed: " .. tostring(loadError))
+		return false
+	end
+	local okModule, assistant = pcall(loader)
+	if not okModule or type(assistant) ~= "table" then
+		print("[ArzMarket][Baron] module init chunk failed: " .. tostring(assistant))
+		return false
+	end
+	local context = {
+		firstLaunch = ini.cfg.interface_choice_done ~= true,
+		interface = ini.cfg.interface_mode == "html" and "html" or "lua",
+		assetBasePath = getWorkingDirectory() .. "\\ArzMarket\\html\\assets\\baron",
+		moduleBasePath = getWorkingDirectory() .. "\\modules\\ArzMarketQuant",
+		nowMs = function()
+			if type(getGameTimer) == "function" then
+				local okTimer, value = pcall(getGameTimer)
+				if okTimer and tonumber(value) then return tonumber(value) end
+			end
+			return math.floor(os.clock() * 1000)
+		end,
+		isPlayerReady = function()
+			-- Start Baron's initial 90-second timer only after the character has
+			-- actually entered the server world. Script/SA-MP availability alone
+			-- is too early because authorization and loading may still be open.
+			if type(isSampAvailable) == "function" and not isSampAvailable() then return false end
+			if type(doesCharExist) == "function" and not doesCharExist(PLAYER_PED) then return false end
+			if type(sampIsLocalPlayerSpawned) == "function" then
+				local okSpawned, spawned = pcall(sampIsLocalPlayerSpawned)
+				if not okSpawned or spawned ~= true then return false end
+			end
+			return true
+		end,
+		loadState = function()
+			local target = ARZ_BARON_ASSISTANT_STATE_PATH
+			local backup = target .. ".bak"
+
+			local function readCandidate(path)
+				if not doesFileExist(path) then return nil, "missing" end
+				local file = io.open(path, "r")
+				if not file then return nil, "io_error" end
+				local raw = file:read("*a") or ""
+				file:close()
+				if raw == "" then return nil, "empty" end
+				local value = decodeJsonSafe(raw)
+				if type(value) ~= "table" then return nil, "invalid_json" end
+				local step = tostring(value.current_step or value.step or "")
+				if step == "" then return nil, "invalid_state" end
+				return value, "ok", raw
+			end
+
+			local value, status = readCandidate(target)
+			if type(value) == "table" then return value, "ok" end
+
+			local backupValue, backupStatus, backupRaw = readCandidate(backup)
+			if type(backupValue) == "table" then
+				-- Restore the last known-good state, but keep the backup too.
+				if type(backupRaw) == "string" and backupRaw ~= "" then
+					pcall(writeEncodedFile, target, backupRaw)
+				end
+				print("[ArzMarket][Baron] restored assistant state from .bak")
+				return backupValue, "recovered"
+			end
+
+			if status == "missing" and backupStatus == "missing" then
+				return nil, "missing"
+			end
+			return nil, "invalid"
+		end,
+		saveState = function(value)
+			local target = ARZ_BARON_ASSISTANT_STATE_PATH
+			local tmp = target .. ".tmp"
+			local backup = target .. ".bak"
+
+			local function readRawIfValid(path)
+				if not doesFileExist(path) then return nil end
+				local file = io.open(path, "r")
+				if not file then return nil end
+				local raw = file:read("*a") or ""
+				file:close()
+				if raw == "" then return nil end
+				local decoded = decodeJsonSafe(raw)
+				if type(decoded) ~= "table" then return nil end
+				local step = tostring(decoded.current_step or decoded.step or "")
+				if step == "" then return nil end
+				return raw
+			end
+
+			pcall(os.remove, tmp)
+			if writeJsonFile(value, tmp) ~= true then
+				pcall(os.remove, tmp)
+				return false
+			end
+			local verifyRaw = readRawIfValid(tmp)
+			if not verifyRaw then
+				pcall(os.remove, tmp)
+				return false
+			end
+
+			-- Keep one persistent last-known-good state. Do not delete it after
+			-- successful saves, otherwise a single bad reload destroys progress.
+			local previousRaw = readRawIfValid(target)
+			if previousRaw then
+				pcall(writeEncodedFile, backup, previousRaw)
+			end
+
+			pcall(os.remove, target)
+			local okRename = os.rename(tmp, target)
+			if not okRename then
+				pcall(os.remove, tmp)
+				local backupRaw = readRawIfValid(backup)
+				if backupRaw then pcall(writeEncodedFile, target, backupRaw) end
+				return false
+			end
+			return true
+		end,
+		beginInterfaceSelection = function(mode)
+			if type(arzInterfaceBeginSelection) ~= "function" then return false end
+			return arzInterfaceBeginSelection(mode)
+		end,
+		onStepChanged = function(moduleId, stepId)
+			-- Never open/close Lua/CEF surfaces from the HTTP request coroutine.
+			-- Queue the transition and apply it from the normal ImGui frame instead.
+			ARZ_BARON_PENDING_STAGE_SYNC = {
+				moduleId = tostring(moduleId or ""),
+				stepId = tostring(stepId or "")
+			}
+			return true
+		end,
+		notify = function(message)
+			pcall(sampAddChatMessage, tostring(message or ""), -1)
+			return true
+		end,
+		registerCommand = function(name, callback)
+			if type(sampRegisterChatCommand) ~= "function" or type(callback) ~= "function" then return false end
+			local ok = pcall(sampRegisterChatCommand, tostring(name or ""), callback)
+			return ok == true
+		end,
+		runtime = {
+			resetTransientUi = function(clearPending)
+				if clearPending == true then ARZ_BARON_PENDING_STAGE_SYNC = nil end
+				ARZ_BARON_SHOWCASE_MODE = nil
+				ARZ_INTERFACE_LUA_PREVIEW = nil
+				if type(arzUiExtensionsCloseHtmlPreview) == "function" then
+					pcall(arzUiExtensionsCloseHtmlPreview)
+				end
+				return true
+			end,
+			setChooserVisible = function(visible)
+				if not ARZ_INTERFACE_CHOOSER then return true end
+				if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = visible == true end
+				ARZ_INTERFACE_CHOOSER.selection = nil
+				ARZ_INTERFACE_CHOOSER.phase = "preview"
+				ARZ_INTERFACE_CHOOSER.transition_started = 0
+				ARZ_INTERFACE_CHOOSER.finalizing = false
+				return true
+			end,
+			setInterfaceConfig = function(mode, choiceDone)
+				if mode == "html" or mode == "lua" then ini.cfg.interface_mode = mode end
+				ini.cfg.interface_choice_done = choiceDone == true
+				return true
+			end,
+			showLuaInterface = function(visible)
+				if visible == true then
+					menuOpen = true
+					if menuVisible then menuVisible[0] = true end
+					kifir = 1
+					onOpenMenu = true
+					zzztime = os.clock()
+				else
+					menuOpen = false
+					if menuVisible then menuVisible[0] = false end
+					if type(resetIO) == "function" then pcall(resetIO) end
+				end
+				return true
+			end,
+			showHtmlInterface = function(visible, page)
+				if visible == true then
+					if type(arzUiExtensionsOpenHtml) ~= "function" then return false end
+					local requestedPage = type(page) == "string" and page ~= "" and page or arzBaronCurrentPageName()
+					local ok, result = pcall(arzUiExtensionsOpenHtml, requestedPage)
+					return ok and result ~= false
+				end
+				if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+				return true
+			end,
+			resetTutorialPanels = function()
+				ARZ_BARON_TRADE_FILTER_OPEN.sell = false
+				ARZ_BARON_TRADE_FILTER_OPEN.buy = false
+				if type(modificationState) == "table" then
+					modificationState.settingsInterfaceOpen = false
+				end
+				return true
+			end,
+			saveInterfaceConfig = function()
+				if type(arzIniSave) == "function" then
+					pcall(arzIniSave)
+				elseif type(save_all) == "function" then
+					pcall(save_all)
+				end
+				return true
+			end
+		},
+		getTutorialFacts = function(mode, stepId)
+			-- HTML renders the sell inventory from sell.json, while the tutorial used to
+			-- look only at json_vlads. After a reload those two sources can temporarily
+			-- disagree, which made Baron ask for a scan even though items were visible.
+			local source = type(json_vlads) == "table" and json_vlads or nil
+			local function inventoryCount(value)
+				if type(value) ~= "table" then return 0 end
+				local count = 0
+				for _, row in pairs(value) do
+					if type(row) == "table" then count = count + 1 end
+				end
+				return count
+			end
+
+			local sellInventoryCount = inventoryCount(source)
+			if sellInventoryCount == 0 and type(readJsonFile) == "function" and type(sellJsonPath) == "string" then
+				local okPersisted, persisted = pcall(readJsonFile, sellJsonPath)
+				if okPersisted and type(persisted) == "table" then
+					local persistedCount = inventoryCount(persisted)
+					if persistedCount > 0 then
+						source = persisted
+						sellInventoryCount = persistedCount
+					end
+				end
+			end
+
+			return {
+				interface = mode == "html" and "html" or "lua",
+				step = tostring(stepId or ""),
+				sell_inventory_empty = sellInventoryCount == 0,
+				sell_inventory_count = sellInventoryCount,
+				sell_scan_active = sellScanMode == true,
+				sell_items_empty = type(sellList) ~= "table" or next(sellList) == nil,
+				buy_items_empty = type(buyList) ~= "table" or next(buyList) == nil,
+				minimal_mode = false
+			}
+		end,
+		performTutorialAction = function(action, payload)
+			payload = type(payload) == "table" and payload or {}
+			if action == "open_page" then
+				local pageMap = { sell = 1, buy = 2, settings = 3, logs = 4, marketplace = 5, mods = 7, storage = 8 }
+				local pageId = pageMap[tostring(payload.page or "")]
+				if not pageId then return false end
+				selectedMenuPage = pageId
+				if UI_ANIM_BUTTON then
+					UI_ANIM_BUTTON.pending_menu = nil
+					UI_ANIM_BUTTON.time = 0
+				end
+				return true
+			elseif action == "open_filter" then
+				local side = tostring(payload.page or "") == "buy" and "buy" or "sell"
+				ARZ_BARON_TRADE_FILTER_OPEN[side] = true
+				return true
+			elseif action == "open_settings_appearance" then
+				selectedMenuPage = 3
+				if UI_ANIM_BUTTON then
+					UI_ANIM_BUTTON.pending_menu = nil
+					UI_ANIM_BUTTON.time = 0
+				end
+				if type(modificationState) == "table" then
+					modificationState.settingsInterfaceOpen = true
+				end
+				return true
+			end
+			return false
+		end,
+		onTutorialComplete = function()
+			ARZ_BARON_TRADE_FILTER_OPEN.sell = false
+			ARZ_BARON_TRADE_FILTER_OPEN.buy = false
+			return true
+		end
+	}
+	local okInit, initResult = pcall(assistant.init, context)
+	if not okInit or initResult == false then
+		print("[ArzMarket][Baron] init failed: " .. tostring(initResult))
+		return false
+	end
+	ARZ_BARON_ASSISTANT = assistant
+	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and type(assistant.needsChooser) == "function" then
+		local okChooser, needsChooser = pcall(assistant.needsChooser)
+		-- The chooser is part of Baron's onboarding and must not appear before
+		-- the post-login display gate. assistant.needsChooser() already includes it.
+		if okChooser then ARZ_INTERFACE_CHOOSER.visible[0] = needsChooser == true end
+	end
+	return true
+end
+
+function arzBaronCurrentPageName()
+	local pageMap = { [1] = "sell", [2] = "buy", [3] = "settings", [4] = "logs", [5] = "marketplace", [7] = "mods", [8] = "storage" }
+	return pageMap[tonumber(selectedMenuPage) or -1] or "buy"
+end
+
+function arzBaronAssistantSnapshot(page, mode)
+	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.snapshot) ~= "function" then
+		return { active = false }
+	end
+	local value = ARZ_BARON_ASSISTANT.snapshot(page or arzBaronCurrentPageName(), mode or (ini.cfg.interface_mode == "html" and "html" or "lua"))
+	return type(value) == "table" and value or { active = false }
+end
+
+function arzBaronAssistantAction(action, payload)
+	if not ARZ_BARON_ASSISTANT then return false, "assistant_unavailable" end
+	action = tostring(action or "")
+	local fn = nil
+	if action == "next" then fn = ARZ_BARON_ASSISTANT.next
+	elseif action == "skip" then fn = ARZ_BARON_ASSISTANT.skip
+	elseif action == "tutorial_accept" then fn = function() return ARZ_BARON_ASSISTANT.chooseTutorial(true) end
+	elseif action == "tutorial_decline" then fn = function() return ARZ_BARON_ASSISTANT.chooseTutorial(false) end
+	elseif action == "lua_redirect_yes" then fn = function() return ARZ_BARON_ASSISTANT.chooseLuaRedirect(true) end
+	elseif action == "lua_redirect_no" then fn = function() return ARZ_BARON_ASSISTANT.chooseLuaRedirect(false) end
+	elseif action == "future_details_yes" then fn = function() return ARZ_BARON_ASSISTANT.chooseFutureDetails(true) end
+	elseif action == "future_details_no" then fn = function() return ARZ_BARON_ASSISTANT.chooseFutureDetails(false) end
+	elseif action == "interface_select" then fn = function() return ARZ_BARON_ASSISTANT.selectInterface(payload and payload.mode) end
+	elseif action == "intro_skip" then fn = ARZ_BARON_ASSISTANT.skipIntro
+	elseif action == "event" then fn = function() return ARZ_BARON_ASSISTANT.event(payload and payload.name, payload) end
+	elseif action == "restart" then fn = function() return ARZ_BARON_ASSISTANT.restartTutorial(ini.cfg.interface_mode) end
+	elseif action == "reset" then fn = ARZ_BARON_ASSISTANT.resetOnboarding
+	elseif action == "open_url" then fn = function()
+		local url = tostring(payload and payload.url or "")
+		if url == "" or type(openUrl) ~= "function" then return false, "open_url_unavailable" end
+		local ok, result = pcall(openUrl, url)
+		if not ok then return false, tostring(result) end
+		return result ~= false, result
+	end
+	end
+	if type(fn) ~= "function" then return false, "unknown_assistant_action" end
+	local result, actionErr = fn()
+	if result == false then return false, actionErr end
+	return true
+end
+
+
+arzBaronLoadAssistant()
 
 -- Global INI write lock. Once account/auth data already exists, ArzMarket starts
 -- in read-only mode so the current account can never replace the saved profile.
@@ -5205,12 +5901,14 @@ function arzWatchdogReadKeyValueFile(path)
     local result = {}
     local file = io.open(path, "rb")
     if not file then return result end
-    for line in file:lines() do
+    local okRead, raw = pcall(file.read, file, "*a")
+    pcall(file.close, file)
+    if not okRead or type(raw) ~= "string" then return result end
+    for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
         line = tostring(line or ""):gsub("\r$", "")
         local key, value = line:match("^([%w_]+)=(.*)$")
         if key then result[key] = value end
     end
-    file:close()
     return result
 end
 
@@ -5226,7 +5924,8 @@ ARZ_WATCHDOG_CONFIG = {
 
 function arzWatchdogLoadConfig()
     arzWatchdogEnsureDirectory()
-    local loaded = arzWatchdogReadKeyValueFile(ARZ_WATCHDOG_CONFIG_PATH)
+    local okLoaded, loaded = pcall(arzWatchdogReadKeyValueFile, ARZ_WATCHDOG_CONFIG_PATH)
+    if not okLoaded or type(loaded) ~= "table" then loaded = {} end
     if next(loaded) ~= nil then
         if loaded.enabled ~= nil then ARZ_WATCHDOG_CONFIG.enabled = tostring(loaded.enabled) == "1" end
         if loaded.nick and loaded.nick ~= "" then ARZ_WATCHDOG_CONFIG.nick = loaded.nick end
@@ -5470,9 +6169,11 @@ function arzWatchdogStart()
     ARZ_WATCHDOG_RUNTIME.startedAt = os.time()
     lua_thread.create(function()
         while true do
-            arzWatchdogLoadConfig()
+            local okLoad, loadErr = pcall(arzWatchdogLoadConfig)
+            if not okLoad then print("[ArzMarket][Watchdog] config read skipped: " .. tostring(loadErr)) end
             ARZ_WATCHDOG_ENABLED_UI[0] = ARZ_WATCHDOG_CONFIG.enabled == true
-            arzWatchdogWriteState()
+            local okWrite, writeErr = pcall(arzWatchdogWriteState)
+            if not okWrite then print("[ArzMarket][Watchdog] state write skipped: " .. tostring(writeErr)) end
             wait(ARZ_WATCHDOG_WRITE_INTERVAL_MS)
         end
     end)
@@ -5501,6 +6202,8 @@ ARZ_ACCOUNT_BRIDGE_SYNC_PATH = "moonloader/config/ArzMarket/donor_auth_sync.json
 ARZ_ACCOUNT_BRIDGE_HEARTBEAT_PATH = "moonloader/config/ArzMarket/launcher_heartbeat.ini"
 ARZ_ACCOUNT_BRIDGE_RESTORE_STATE_PATH = "moonloader/config/ArzMarket/bridge_restore_state.ini"
 ARZ_ACCOUNT_BRIDGE_MAIN_AUTH_BACKUP_PATH = "moonloader/config/ArzMarket/main_auth_restore.json"
+ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH = "moonloader/config/ArzMarket/launcher_profile_auth.json"
+ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_TTL = 60
 ARZ_ACCOUNT_BRIDGE_ROLE_FLAG_PATH = "moonloader/config/ArzMarket/account_role.flag"
 ARZ_ACCOUNT_BRIDGE_HEARTBEAT_STALE_SECONDS = 8
 ARZ_ACCOUNT_BRIDGE_RUNTIME = {
@@ -5524,6 +6227,25 @@ ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_FIELDS = {
     "marketAuthKey", "marketAuthToken", "premiumToken", "premiumAuthToken",
     "userToken", "userAuthToken", "serverToken", "authKey"
 }
+ARZ_ACCOUNT_BRIDGE_CFG_AUTH_FIELDS = {
+    myServerToken = true, myServerId = true, premiumTokenAuth = true,
+    lastUpdatePremiumToken = true, realMoneyNow = true, myBalanceArz = true,
+    authNickname = true, authUid = true, authPremiumTokenAuth = true,
+    authUserTempKey = true, authRealNameMode1 = true, authRealNameMode2 = true,
+    authSelfInfoId = true, authSelfInfoUsername = true, authSelfInfoExp = true,
+    authSelfInfoOsTime = true, marketAuthKey = true
+}
+ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_SET = {}
+for _, field in ipairs(ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_FIELDS) do
+    ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_SET[field] = true
+end
+
+function arzAccountBridgeAuthFieldAllowed(sectionName, fieldName)
+    return type(sectionName) == "string" and type(fieldName) == "string"
+        and sectionName ~= "" and not sectionName:find("[%z\r\n%[%]]")
+        and (ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_SET[fieldName] == true
+            or (sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_AUTH_FIELDS[fieldName] == true))
+end
 
 function arzAccountBridgeReadText(path)
     local file = io.open(path, "rb")
@@ -5537,12 +6259,14 @@ function arzAccountBridgeReadKeyValue(path)
     local result = {}
     local file = io.open(path, "rb")
     if not file then return result end
-    for line in file:lines() do
+    local okRead, raw = pcall(file.read, file, "*a")
+    pcall(file.close, file)
+    if not okRead or type(raw) ~= "string" then return result end
+    for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
         line = tostring(line or ""):gsub("\r$", "")
         local key, value = line:match("^([%w_]+)=(.*)$")
         if key then result[key] = value end
     end
-    file:close()
     return result
 end
 
@@ -5676,33 +6400,41 @@ end
 
 function arzAccountBridgeApplySnapshot(snapshot)
     if type(snapshot) ~= "table" or type(snapshot.sections) ~= "table" then return false end
+    if tonumber(snapshot.protocol) ~= ARZ_ACCOUNT_BRIDGE_PROTOCOL
+        or type(snapshot.session) ~= "string" or snapshot.session == ""
+        or snapshot.session ~= ARZ_ACCOUNT_BRIDGE_RUNTIME.session
+        or not ARZ_ACCOUNT_BRIDGE_RUNTIME.active
+        or ARZ_ACCOUNT_BRIDGE_RUNTIME.effectiveRole ~= "MAIN" then return false end
     if type(ini) ~= "table" then return false end
-
+    local updated = arzIniDeepCopy(ini)
     for sectionName, values in pairs(snapshot.sections) do
         if type(values) == "table" then
-            if type(ini[sectionName]) ~= "table" then ini[sectionName] = {} end
             for fieldName, rawValue in pairs(values) do
-                local value = rawValue
-                if sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_NUMERIC[fieldName] then
-                    local numericValue = tonumber(rawValue)
-                    if numericValue ~= nil then value = numericValue end
-                else
-                    value = tostring(rawValue or "")
-                end
-                ini[sectionName][fieldName] = value
-
-                if type(ARZ_AUTH_FREEZE) == "table" then
-                    if sectionName == "cfg" then
-                        ARZ_AUTH_FREEZE["cfg:" .. tostring(fieldName)] = value
+                local profileField = sectionName == "cfg" and (fieldName == "authPremiumTokenAuth"
+                    or fieldName == "authUserTempKey" or fieldName == "premiumTokenAuth"
+                    or fieldName == "lastUpdatePremiumToken")
+                if arzAccountBridgeAuthFieldAllowed(sectionName, fieldName)
+                    and (type(rawValue) == "string" or type(rawValue) == "number")
+                    and not (profileField and ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthSession == snapshot.session) then
+                    local value = rawValue
+                    if sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_NUMERIC[fieldName] then
+                        value = tonumber(rawValue)
                     else
-                        ARZ_AUTH_FREEZE["ini:" .. tostring(sectionName) .. ":" .. tostring(fieldName)] = value
+                        value = tostring(rawValue or "")
+                    end
+                    if value ~= nil and not tostring(value):find("[%z\r\n]") then
+                        if type(updated[sectionName]) ~= "table" then updated[sectionName] = {} end
+                        updated[sectionName][fieldName] = value
                     end
                 end
             end
         end
     end
 
-    if inicfg.save(ini, iniPath) ~= true then return false end
+    if inicfg.save(updated, iniPath) ~= true then return false end
+    ini = updated
+    ARZ_AUTH_FREEZE = {}
+    pcall(arzAuthFreezeProtectIni)
     if ARZ_INI_WRITE_LOCKED then arzIniCaptureLockSnapshot() end
 
     if type(ini.cfg) == "table" and type(arzManualServerTokenBufferSet) == "function" then
@@ -5720,62 +6452,60 @@ function arzAccountBridgeLoadSnapshot()
     return decoded
 end
 
-function arzAccountBridgeRestoreMainAuthBackup()
+function arzAccountBridgeRestoreMainAuthBackup(expectedSession)
     local raw = arzAccountBridgeReadText(ARZ_ACCOUNT_BRIDGE_MAIN_AUTH_BACKUP_PATH)
     if not raw or raw == "" then return false end
     local ok, backup = pcall(decodeJson, raw)
     if not ok or type(backup) ~= "table" then return false end
+    if tonumber(backup.protocol) ~= ARZ_ACCOUNT_BRIDGE_PROTOCOL
+        or type(backup.session) ~= "string" or backup.session == ""
+        or backup.session ~= expectedSession then return false end
     if type(ini) ~= "table" then return false end
+    if type(backup.sections) ~= "table" or type(backup.missing) ~= "table" then return false end
+    local updated = arzIniDeepCopy(ini)
 
     if type(backup.sections) == "table" then
         for sectionName, values in pairs(backup.sections) do
             if type(values) == "table" then
-                if type(ini[sectionName]) ~= "table" then ini[sectionName] = {} end
                 for fieldName, rawValue in pairs(values) do
-                    local value = rawValue
-                    if sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_NUMERIC[fieldName] then
-                        local numericValue = tonumber(rawValue)
-                        if numericValue ~= nil then value = numericValue end
-                    else
-                        value = tostring(rawValue or "")
+                    if arzAccountBridgeAuthFieldAllowed(sectionName, fieldName)
+                        and (type(rawValue) == "string" or type(rawValue) == "number") then
+                        local value = rawValue
+                        if sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_NUMERIC[fieldName] then
+                            value = tonumber(rawValue)
+                        else
+                            value = tostring(rawValue or "")
+                        end
+                        if value == nil or tostring(value):find("[%z\r\n]") then return false end
+                        if value ~= nil then
+                            if type(updated[sectionName]) ~= "table" then updated[sectionName] = {} end
+                            updated[sectionName][fieldName] = value
+                        end
                     end
-                    ini[sectionName][fieldName] = value
                 end
             end
         end
     end
 
-    local representedSections = {}
-    if type(backup.sections) == "table" then
-        for sectionName in pairs(backup.sections) do representedSections[tostring(sectionName)] = true end
-    end
     if type(backup.missing) == "table" then
         for sectionName, values in pairs(backup.missing) do
-            representedSections[tostring(sectionName)] = true
-            if type(values) == "table" and type(ini[sectionName]) == "table" then
+            if type(values) == "table" and type(updated[sectionName]) == "table" then
                 for fieldName, isMissing in pairs(values) do
-                    if isMissing == true or tostring(isMissing) == "1" or tostring(isMissing) == "true" then
-                        ini[sectionName][fieldName] = nil
+                    if arzAccountBridgeAuthFieldAllowed(sectionName, fieldName) and isMissing == true then
+                        updated[sectionName][fieldName] = nil
                     end
                 end
             end
         end
     end
 
-    -- A donor snapshot can introduce an auth-only section that did not exist in MAIN.
-    -- Remove only known auth fields from such sections, leaving unrelated settings intact.
-    for sectionName, section in pairs(ini) do
-        if type(section) == "table" and not representedSections[tostring(sectionName)] then
-            for _, fieldName in ipairs(ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_FIELDS) do
-                if section[fieldName] ~= nil then section[fieldName] = nil end
-            end
-        end
-    end
-
-    if inicfg.save(ini, iniPath) ~= true then return false end
+    if inicfg.save(updated, iniPath) ~= true then return false end
+    ini = updated
+    ARZ_AUTH_FREEZE = {}
+    pcall(arzAuthFreezeProtectIni)
     if ARZ_INI_WRITE_LOCKED then arzIniCaptureLockSnapshot() end
-    pcall(os.remove, ARZ_ACCOUNT_BRIDGE_MAIN_AUTH_BACKUP_PATH)
     pcall(arzApplySavedAuthRuntime)
+    pcall(os.remove, ARZ_ACCOUNT_BRIDGE_MAIN_AUTH_BACKUP_PATH)
     return true
 end
 
@@ -5799,7 +6529,7 @@ function arzAccountBridgeRelease(previousRole, expectedSession, reason)
     end
     if expectedSession == "" then expectedSession = restoreSession end
 
-    local stateMatches = tostring(restore.captured or "") == "1"
+    local stateMatches = tostring(restore.captured or "") == "1" and restoreSession == expectedSession
     local offlineBefore = false
     local lockBefore = false
     if stateMatches then
@@ -5808,7 +6538,13 @@ function arzAccountBridgeRelease(previousRole, expectedSession, reason)
     end
 
     if previousRole == "MAIN" or restoreRole == "MAIN" then
-        pcall(arzAccountBridgeRestoreMainAuthBackup)
+        if doesFileExist(ARZ_ACCOUNT_BRIDGE_MAIN_AUTH_BACKUP_PATH) then
+            local restoredOk, restored = pcall(arzAccountBridgeRestoreMainAuthBackup, expectedSession)
+            if not restoredOk or not restored then return false end
+        end
+        -- An event observed during MAIN lock must not replace the restored baseline on unlock.
+        ARZ_LAST_SEEN_SERVER_TOKEN = nil
+        ARZ_LAST_SEEN_SERVER_ID = nil
     end
 
     -- Old builds had no restore-state file. In that migration case, recover to
@@ -5847,6 +6583,7 @@ function arzAccountBridgeRelease(previousRole, expectedSession, reason)
     ARZ_ACCOUNT_BRIDGE_RUNTIME.role = "NONE"
     ARZ_ACCOUNT_BRIDGE_RUNTIME.effectiveRole = "NONE"
     ARZ_ACCOUNT_BRIDGE_RUNTIME.lastVersion = ""
+    ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthSession = nil
     ARZ_ACCOUNT_BRIDGE_RUNTIME.session = ""
     ARZ_ACCOUNT_BRIDGE_RUNTIME.active = false
     ARZ_ACCOUNT_BRIDGE_RUNTIME.launcherPid = 0
@@ -5884,7 +6621,9 @@ function arzAccountBridgeTick()
             if launcherState.active and not protocolCompatible then reason = "bridge_protocol_mismatch" end
             if launcherState.active and protocolCompatible and not sessionsCompatible then reason = "launcher_session_mismatch" end
             if launcherState.active and protocolCompatible and sessionsCompatible and not roleValid then reason = "bridge_role_missing" end
-            arzAccountBridgeRelease(previousRole, cfgSession, reason)
+            local releaseSession = tostring(ARZ_ACCOUNT_BRIDGE_RUNTIME.session or "")
+            if releaseSession == "" then releaseSession = tostring(restore.session or cfgSession) end
+            arzAccountBridgeRelease(previousRole, releaseSession, reason)
         else
             ARZ_ACCOUNT_BRIDGE_RUNTIME.effectiveRole = "NONE"
             ARZ_ACCOUNT_BRIDGE_RUNTIME.active = false
@@ -5912,7 +6651,8 @@ function arzAccountBridgeTick()
         local snapshot = arzAccountBridgeLoadSnapshot()
         if type(snapshot) == "table" then
             local snapshotSession = tostring(snapshot.session or "")
-            local snapshotAllowed = snapshotSession == "" or cfgSession == "" or snapshotSession == cfgSession
+            local snapshotAllowed = tonumber(snapshot.protocol) == ARZ_ACCOUNT_BRIDGE_PROTOCOL
+                and snapshotSession ~= "" and snapshotSession == cfgSession
             if snapshotAllowed then
                 local version = tostring(snapshot.version or "")
                 if version ~= "" and version ~= ARZ_ACCOUNT_BRIDGE_RUNTIME.lastVersion then
@@ -5933,6 +6673,102 @@ function arzAccountBridgeTick()
         elseif type(arzApplyLastSeenServerToken) == "function" then
             pcall(arzApplyLastSeenServerToken)
         end
+    end
+end
+
+do
+    -- The setter is private to the consumed, API-validated handoff callback.
+    local function sessionIsMain(session)
+        local runtime = ARZ_ACCOUNT_BRIDGE_RUNTIME
+        local cfg = arzAccountBridgeReadKeyValue(ARZ_ACCOUNT_BRIDGE_CONFIG_PATH)
+        local launcher = arzAccountBridgeLauncherState()
+        return session ~= "" and runtime.active and runtime.effectiveRole == "MAIN"
+            and runtime.session == session and launcher.active and launcher.session == session
+            and tonumber(cfg.protocol) == ARZ_ACCOUNT_BRIDGE_PROTOCOL
+            and cfg.session == session and tostring(cfg.role or ""):upper() == "MAIN"
+    end
+
+    local function trustedSaveProfile(session, key, info)
+        if not sessionIsMain(session) or type(ini) ~= "table" or type(ini.cfg) ~= "table" then return false end
+        local updated = arzIniDeepCopy(ini)
+        local function setString(field, value)
+            if field ~= "authPremiumTokenAuth" and field ~= "authUserTempKey" then return false end
+            if type(value) ~= "string" then return false end
+            updated.cfg[field] = value
+            return true
+        end
+        setString("authPremiumTokenAuth", key)
+        if info.UserTempKey ~= nil then setString("authUserTempKey", info.UserTempKey) end
+        updated.cfg.premiumTokenAuth = info.userStatus ~= 0 and 1 or 2
+        updated.cfg.lastUpdatePremiumToken = info.userStatus ~= 0 and os.time() or -1
+        if inicfg.save(updated, iniPath) ~= true then return false end
+        ini = updated
+        for _, field in ipairs({"authPremiumTokenAuth", "authUserTempKey", "premiumTokenAuth", "lastUpdatePremiumToken"}) do
+            ARZ_AUTH_FREEZE["cfg:" .. field] = ini.cfg[field]
+        end
+        if ARZ_INI_WRITE_LOCKED then arzIniCaptureLockSnapshot() end
+        ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthSession = session
+        marketState.premiumUserInfo = info
+        if type(info.userName) == "string" then info.userName = u8:decode(info.userName) end
+        if info.isMenuActive ~= nil then marketState.isMenuActive = info.isMenuActive end
+        marketState.lastUpdatePremiumToken = ini.cfg.lastUpdatePremiumToken
+        marketState.isPremiumAuthedStatus = info.userStatus ~= 0
+        arzApplySavedAuthRuntime()
+        return true
+    end
+
+    function arzAccountBridgeConsumeProfileAuth()
+        if ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthStarted then return end
+        ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthStarted = true
+        lua_thread.create(function()
+            local raw = arzAccountBridgeReadText(ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
+            if not raw then return end
+            local ok, handoff = pcall(decodeJson, raw)
+            local structurallyValid = ok and type(handoff) == "table"
+                and tonumber(handoff.protocol) == ARZ_ACCOUNT_BRIDGE_PROTOCOL
+                and type(handoff.session) == "string" and handoff.session ~= ""
+                and type(handoff.createdAt) == "number" and type(handoff.key) == "string"
+            local key = structurallyValid and handoff.key:gsub("^%s*(.-)%s*$", "%1") or ""
+            local age = structurallyValid and os.time() - handoff.createdAt or math.huge
+            structurallyValid = structurallyValid and age >= -5 and age <= ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_TTL
+                and #key > 0 and #key <= 255 and not key:find("[%z\r\n]")
+            if not structurallyValid then
+                pcall(os.remove, ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
+                return
+            end
+            for attempt = 1, 20 do
+                if sessionIsMain(handoff.session) then break end
+                wait(250)
+            end
+            age = os.time() - handoff.createdAt
+            if not sessionIsMain(handoff.session) or age < -5 or age > ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_TTL then
+                pcall(os.remove, ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
+                return
+            end
+            -- Fail closed if consumption could not remove the plaintext key.
+            local removedOk, removed = pcall(os.remove, ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
+            if not removedOk or not removed then return end
+            local session = handoff.session
+            handoff = nil
+            local host = ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]
+            local function failed()
+                sendNotify(u8:decode("Не удалось авторизовать ключ профиля из launcher."))
+            end
+            -- The existing offline rejection logs its URL, so never pass a key while offline.
+            if ARZ_SCRIPT_OFFLINE then failed(); return end
+            -- Escape the path segment without changing the existing premium endpoint/transport.
+            local encodedKey = key:gsub("([^%w%-%._~])", function(c) return string.format("%%%02X", string.byte(c)) end)
+            asyncHttpRequest("POST", host .. "/api/checkKey/" .. encodedKey, {}, function(response)
+                if response.status_code ~= 201 then failed(); return end
+                local decodedOk, info = pcall(decodeJson, response.text)
+                if not decodedOk or type(info) ~= "table" or info.error
+                    or not info.endTime or type(info.userStatus) ~= "number"
+                    or (info.UserTempKey ~= nil and (type(info.UserTempKey) ~= "string"
+                        or info.UserTempKey:find("[%z\r\n]"))) then failed(); return end
+                if not trustedSaveProfile(session, key, info) then failed(); return end
+                sendNotify(u8:decode("Ключ профиля из launcher авторизован."))
+            end, failed)
+        end)
     end
 end
 
@@ -6323,16 +7159,17 @@ ARZ_THEME_ORDER = {
 	"high_contrast",
 	"premium_luxury"
 }
+-- Standard presets preserve neutral layer contrast; the theme hue is concentrated in accents.
 ARZ_THEME_PRESETS = {
 	arzmarket_default = { native = true, label = "ArzMarket", hint = u8:decode("Исходное оформление ArzMarket.") },
-	classic_blue = { label = u8:decode("Классика"), hint = u8:decode("Спокойная синяя классика с хорошей читаемостью и заметными кнопками."), bg = "#0D1524", panel = "#17253B", surface = "#111C2E", accent = "#4FA0FF", accent2 = "#8BC7FF", text = "#F2F7FF", text2 = "#A4B8D9", border_mix = 0.34, button_mix = 0.18 },
-	midnight_blue = { label = u8:decode("Полночь"), hint = u8:decode("Глубокая ночная тема с холодными акцентами и яркими активными состояниями."), bg = "#09111D", panel = "#131E31", surface = "#0E1727", accent = "#6A7CFF", accent2 = "#7AC7FF", text = "#EEF4FF", text2 = "#94A8C8", border_mix = 0.38, button_mix = 0.22 },
-	deep_ocean = { label = u8:decode("Океан"), hint = u8:decode("Морская палитра с выразительными панелями, полями ввода и скроллбаром."), bg = "#07151D", panel = "#0F2430", surface = "#0B1C25", accent = "#1AB6FF", accent2 = "#5AE6E3", text = "#ECFBFF", text2 = "#8FB9C2", border_mix = 0.36, button_mix = 0.20 },
-	cyberpunk_neon = { label = u8:decode("Киберпанк"), hint = u8:decode("Неоновый стиль с яркими акцентами, но без кислотной перегрузки."), bg = "#0C0F1B", panel = "#1A1D31", surface = "#121729", accent = "#00D4FF", accent2 = "#D55CFF", text = "#F5F8FF", text2 = "#9BB5E8", border_mix = 0.42, button_mix = 0.24 },
-	sunset_vibes = { label = u8:decode("Закат"), hint = u8:decode("Глубокий вечерний стиль: тёмный сливовый фон, коралловые кнопки и тёплое золото в акцентах."), bg = "#160F1F", panel = "#24162B", surface = "#2D1A2B", accent = "#FF6B4A", accent2 = "#FFC857", text = "#FFF6F0", text2 = "#D8B8B2", border_mix = 0.42, button_mix = 0.24 },
-	dark_forest = { label = u8:decode("Тёмный лес"), hint = u8:decode("Глубокая лесная тема: почти чёрно-зелёный фон, изумрудные кнопки и моховые светлые акценты."), bg = "#07110D", panel = "#0E2017", surface = "#10291D", accent = "#3CCB7F", accent2 = "#A6D96A", text = "#EDF8F1", text2 = "#A6C7B0", border_mix = 0.40, button_mix = 0.21 },
-	high_contrast = { label = u8:decode("Контраст"), hint = u8:decode("Максимально заметные кнопки, рамки и активные состояния."), bg = "#050608", panel = "#13161C", surface = "#0E1218", accent = "#FFE35A", accent2 = "#66D9FF", text = "#FFFFFF", text2 = "#B9D6E6", border_mix = 0.48, button_mix = 0.28 },
-	premium_luxury = { label = u8:decode("Премиум"), hint = u8:decode("Премиальная тема с дорогим видом, глубоким фоном и яркими акцентами."), bg = "#0F1017", panel = "#1A1D29", surface = "#141823", accent = "#2CE1D1", accent2 = "#B081FF", text = "#F7F7FA", text2 = "#B9BDD0", border_mix = 0.38, button_mix = 0.22 }
+	classic_blue = { label = u8:decode("Классика"), hint = u8:decode("Спокойная синяя классика с хорошей читаемостью и заметными кнопками."), bg = "#0B1621", panel = "#122131", surface = "#0E1C28", accent = "#4B8DFF", accent2 = "#7CB7FF", text = "#F3F7FF", text2 = "#9FB4D0", border_mix = 0.34, button_mix = 0.18 },
+	midnight_blue = { label = u8:decode("Полночь"), hint = u8:decode("Глубокая ночная тема с холодными акцентами и яркими активными состояниями."), bg = "#0B1620", panel = "#121E2C", surface = "#0E1A27", accent = "#7A78FF", accent2 = "#A795FF", text = "#F2F2FF", text2 = "#A7AAC7", border_mix = 0.38, button_mix = 0.22 },
+	deep_ocean = { label = u8:decode("Океан"), hint = u8:decode("Морская палитра с выразительными панелями, полями ввода и скроллбаром."), bg = "#0A1720", panel = "#0F222D", surface = "#0C1C27", accent = "#22B8F0", accent2 = "#4DD8C4", text = "#EEFBFF", text2 = "#90B9C1", border_mix = 0.36, button_mix = 0.20 },
+	cyberpunk_neon = { label = u8:decode("Киберпанк"), hint = u8:decode("Неоновый стиль с яркими акцентами, но без кислотной перегрузки."), bg = "#0B1620", panel = "#131F2D", surface = "#0E1A27", accent = "#2BD9FE", accent2 = "#B65CFF", text = "#F5F7FF", text2 = "#9EADE0", border_mix = 0.42, button_mix = 0.24 },
+	sunset_vibes = { label = u8:decode("Закат"), hint = u8:decode("Глубокий вечерний стиль: тёмный сливовый фон, коралловые кнопки и тёплое золото в акцентах."), bg = "#0D1620", panel = "#181D29", surface = "#121A25", accent = "#FF7A59", accent2 = "#F7B955", text = "#FFF7F2", text2 = "#D9B7B0", border_mix = 0.42, button_mix = 0.24 },
+	dark_forest = { label = u8:decode("Тёмный лес"), hint = u8:decode("Глубокая лесная тема: почти чёрно-зелёный фон, изумрудные кнопки и моховые светлые акценты."), bg = "#0A161E", panel = "#0F2025", surface = "#0D1C22", accent = "#45C987", accent2 = "#9ED66F", text = "#EFF8F2", text2 = "#A5C5AE", border_mix = 0.40, button_mix = 0.21 },
+	high_contrast = { label = u8:decode("Контраст"), hint = u8:decode("Максимально заметные кнопки, рамки и активные состояния."), bg = "#050608", panel = "#14171D", surface = "#0E1217", accent = "#FFD84D", accent2 = "#6CD6FF", text = "#FFFFFF", text2 = "#C4D7E3", border_mix = 0.48, button_mix = 0.28 },
+	premium_luxury = { label = u8:decode("Премиум"), hint = u8:decode("Премиальная тема с дорогим видом, глубоким фоном и яркими акцентами."), bg = "#0B161F", panel = "#141D25", surface = "#0F1A23", accent = "#D2A85E", accent2 = "#F0D394", text = "#FAF7F0", text2 = "#BDB6AA", border_mix = 0.38, button_mix = 0.22 }
 }
 
 function arzPaletteClamp(value)
@@ -6701,6 +7538,206 @@ function arzCustomPaletteHsvToRgb(h, s, v)
 	return v, p, q
 end
 
+-- Unified palette for both Lua and HTML. One base color generates the whole interface.
+function arzGlobalPaletteNormalizeHex(value)
+	local normalized = tostring(value or ""):gsub("%s+", ""):upper()
+	if not normalized:match("^#[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]$") then
+		return "#4B8DFF"
+	end
+	return normalized
+end
+
+function arzGlobalPalettePercent(value, fallback)
+	local numberValue = tonumber(value)
+	if numberValue == nil then numberValue = tonumber(fallback) or 0 end
+	if numberValue < 0 then numberValue = 0 end
+	if numberValue > 100 then numberValue = 100 end
+	return math.floor(numberValue + 0.5)
+end
+
+function arzGlobalPaletteEnsureStorage()
+	if type(menuThemeConfig.global_palette) ~= "table" then menuThemeConfig.global_palette = {} end
+	local palette = menuThemeConfig.global_palette
+	if palette.enabled == nil then palette.enabled = false end
+	palette.base = arzGlobalPaletteNormalizeHex(palette.base or "#4B8DFF")
+	palette.depth = arzGlobalPalettePercent(palette.depth, 72)
+	palette.saturation = arzGlobalPalettePercent(palette.saturation, 82)
+	palette.contrast = arzGlobalPalettePercent(palette.contrast, 72)
+	palette.glow = arzGlobalPalettePercent(palette.glow, 80)
+	local baseColor = arzPaletteHex(palette.base)
+	local baseHue, baseSaturation, baseValue = arzCustomPaletteRgbToHsv(baseColor[1], baseColor[2], baseColor[3])
+	local pickerHue = tonumber(palette.picker_hue)
+	local pickerSaturation = tonumber(palette.picker_saturation)
+	local pickerValue = tonumber(palette.picker_value)
+	palette.picker_hue = arzPaletteClamp(pickerHue ~= nil and pickerHue or baseHue)
+	palette.picker_saturation = arzPaletteClamp(pickerSaturation ~= nil and pickerSaturation or baseSaturation)
+	palette.picker_value = arzPaletteClamp(pickerValue ~= nil and pickerValue or baseValue)
+	return palette
+end
+
+function arzGlobalPaletteBuild()
+	local palette = arzGlobalPaletteEnsureStorage()
+	local base = arzPaletteHex(palette.base)
+	local hue, sourceSaturation, sourceBrightness = arzCustomPaletteRgbToHsv(base[1], base[2], base[3])
+	local saturationFactor = palette.saturation / 100
+	local contrastFactor = palette.contrast / 100
+	local depthFactor = palette.depth / 100
+	local grayscaleSource = sourceSaturation <= 0.02
+	local sourceValue = grayscaleSource and arzPaletteClamp(0.20 + sourceBrightness * 0.74) or arzPaletteClamp(math.max(sourceBrightness, 0.72 + contrastFactor * 0.24))
+	local targetSaturation = grayscaleSource and 0 or arzPaletteClamp(sourceSaturation * (0.45 + saturationFactor * 0.95) + saturationFactor * 0.12)
+	local accentR, accentG, accentB = arzCustomPaletteHsvToRgb(hue, targetSaturation, sourceValue)
+	local secondaryHue = (hue + 0.055 + contrastFactor * 0.018) % 1
+	local accent2R, accent2G, accent2B
+	if grayscaleSource then
+		accent2R, accent2G, accent2B = arzCustomPaletteHsvToRgb(hue, 0, arzPaletteClamp(math.min(1, sourceValue + 0.14)))
+	else
+		accent2R, accent2G, accent2B = arzCustomPaletteHsvToRgb(secondaryHue, arzPaletteClamp(targetSaturation * 0.76), math.min(1, sourceValue + 0.09))
+	end
+	local accent = { accentR, accentG, accentB, 1 }
+	local accent2 = { accent2R, accent2G, accent2B, 1 }
+	local black = { 0, 0, 0, 1 }
+	local white = { 1, 1, 1, 1 }
+
+	-- Сохраняем разделение фона и панелей как в стандартной теме ArzMarket.
+	-- Выбранный цвет лишь слегка тонирует тёмные поверхности и остаётся ярким на активных элементах.
+	local neutralBg = arzPaletteHex("#0B1721")
+	local neutralPanel = arzPaletteHex("#10202C")
+	local neutralSurface = arzPaletteHex("#0D1C27")
+	local neutralBorder = arzPaletteHex("#324B5D")
+	local tintStrength = grayscaleSource and 0.012 or (0.022 + saturationFactor * 0.038)
+	local bg = arzPaletteMix(neutralBg, accent, tintStrength * 0.50)
+	local panel = arzPaletteMix(neutralPanel, accent, tintStrength * 0.70)
+	local surface = arzPaletteMix(neutralSurface, accent, tintStrength * 0.60)
+
+	local depthDelta = depthFactor - 0.72
+	local function applyDepth(color)
+		if depthDelta > 0 then return arzPaletteMix(color, black, math.min(0.18, depthDelta * 0.34)) end
+		if depthDelta < 0 then return arzPaletteMix(color, white, math.min(0.12, (-depthDelta) * 0.16)) end
+		return color
+	end
+	bg = applyDepth(bg)
+	panel = applyDepth(panel)
+	surface = applyDepth(surface)
+
+	local contrastDelta = contrastFactor - 0.72
+	if contrastDelta > 0 then
+		bg = arzPaletteMix(bg, black, math.min(0.08, contrastDelta * 0.10))
+		panel = arzPaletteMix(panel, white, math.min(0.045, contrastDelta * 0.055))
+		surface = arzPaletteMix(surface, white, math.min(0.03, contrastDelta * 0.035))
+	elseif contrastDelta < 0 then
+		local low = -contrastDelta
+		panel = arzPaletteMix(panel, bg, math.min(0.20, low * 0.18))
+		surface = arzPaletteMix(surface, bg, math.min(0.15, low * 0.14))
+	end
+
+	local text = arzPaletteMix(white, accent2, grayscaleSource and 0.045 or (0.025 + saturationFactor * 0.020))
+	local muted = arzPaletteMix(text, panel, 0.44 + depthFactor * 0.12)
+	local border = arzPaletteMix(neutralBorder, accent2, grayscaleSource and (0.06 + contrastFactor * 0.10) or (0.08 + contrastFactor * 0.16))
+	return {
+		bg = bg,
+		panel = panel,
+		surface = surface,
+		accent = accent,
+		accent2 = accent2,
+		text = text,
+		muted = muted,
+		border = border
+	}
+end
+
+function arzGlobalPaletteHtmlTokens()
+	local colors = arzGlobalPaletteBuild()
+	return {
+		bg = arzCustomPaletteColorToHex(colors.bg, false),
+		panel = arzCustomPaletteColorToHex(colors.panel, false),
+		surface = arzCustomPaletteColorToHex(colors.surface, false),
+		accent = arzCustomPaletteColorToHex(colors.accent, false),
+		accent2 = arzCustomPaletteColorToHex(colors.accent2, false),
+		text = arzCustomPaletteColorToHex(colors.text, false),
+		muted = arzCustomPaletteColorToHex(colors.muted, false),
+		border = arzCustomPaletteColorToHex(colors.border, false)
+	}
+end
+
+function arzGlobalPaletteApplyConfig()
+	local palette = arzGlobalPaletteEnsureStorage()
+	local colors = arzGlobalPaletteBuild()
+	local glowFactor = palette.glow / 100
+	local contrastFactor = palette.contrast / 100
+	local button = arzPaletteMix(colors.surface, colors.accent, 0.10 + contrastFactor * 0.13)
+	local buttonHovered = arzPaletteMix(button, colors.accent, 0.30 + glowFactor * 0.16)
+	local buttonActive = arzPaletteMix(button, colors.accent, 0.50 + glowFactor * 0.20)
+	local frame = arzPaletteMix(colors.surface, colors.bg, 0.22)
+	local selector = arzPaletteMix(colors.surface, colors.accent, 0.48 + contrastFactor * 0.13)
+	local slider = arzPaletteMix(colors.surface, colors.accent, 0.28 + contrastFactor * 0.12)
+	local separator = arzPaletteMix(colors.border, colors.surface, 0.18)
+	menuThemeConfig.text = { colors.text[1], colors.text[2], colors.text[3], 1 }
+	menuThemeConfig.color_text_market = { colors.text[1], colors.text[2], colors.text[3] }
+	menuThemeConfig.rgb_window = { colors.accent[1], colors.accent[2], colors.accent[3], 0.22 + glowFactor * 0.46 }
+	menuThemeConfig.help_hint = { colors.accent2[1], colors.accent2[2], colors.accent2[3], 0.34 + glowFactor * 0.34 }
+	menuThemeConfig.window = { colors.bg[1], colors.bg[2], colors.bg[3], 0.94 }
+	menuThemeConfig.left_menu = { colors.panel[1], colors.panel[2], colors.panel[3], 0.96 }
+	menuThemeConfig.Border = { colors.border[1], colors.border[2], colors.border[3], 0.54 + contrastFactor * 0.34 }
+	menuThemeConfig.button = { button[1], button[2], button[3], 0.48 + contrastFactor * 0.18 }
+	menuThemeConfig.button_hovered = { buttonHovered[1], buttonHovered[2], buttonHovered[3], 0.78 + glowFactor * 0.18 }
+	menuThemeConfig.button_active = { buttonActive[1], buttonActive[2], buttonActive[3], 1 }
+	menuThemeConfig.input = { frame[1], frame[2], frame[3], 0.56 }
+	menuThemeConfig.separator = { separator[1], separator[2], separator[3], 0.66 }
+	menuThemeConfig.slider = { slider[1], slider[2], slider[3], 0.70 + glowFactor * 0.20 }
+	menuThemeConfig.active_selector_color = { selector[1], selector[2], selector[3], 0.60 + glowFactor * 0.18 }
+	menuThemeConfig.active_toggle_button = { colors.accent[1], colors.accent[2], colors.accent[3] }
+	menuThemeConfig.deactive_toggle_button = { frame[1], frame[2], frame[3] }
+	menuThemeConfig.scrollbar_bg = { colors.bg[1], colors.bg[2], colors.bg[3], 0.0 }
+	menuThemeConfig.scrollbar = { slider[1], slider[2], slider[3], 0.66 + glowFactor * 0.22 }
+	menuThemeConfig.scrollbar_hovered = { buttonHovered[1], buttonHovered[2], buttonHovered[3], 0.82 + glowFactor * 0.15 }
+	menuThemeConfig.scrollbar_active = { buttonActive[1], buttonActive[2], buttonActive[3], 1 }
+	return colors
+end
+
+function arzGlobalPaletteApplyRuntime()
+	arzGlobalPaletteApplyConfig()
+	if type(arzPaletteSyncRuntime) == "function" then arzPaletteSyncRuntime() end
+	if type(imgui.FrameTheme) == "function" then imgui.FrameTheme() end
+end
+
+function arzGlobalPaletteSet(payload)
+	local palette = arzGlobalPaletteEnsureStorage()
+	local data = type(payload) == "table" and payload or {}
+	if data.reset == true then
+		palette.base = "#4B8DFF"
+		palette.depth = 72
+		palette.saturation = 82
+		palette.contrast = 72
+		palette.glow = 80
+		local defaultColor = arzPaletteHex(palette.base)
+		palette.picker_hue, palette.picker_saturation, palette.picker_value = arzCustomPaletteRgbToHsv(defaultColor[1], defaultColor[2], defaultColor[3])
+		if data.enabled ~= nil then palette.enabled = data.enabled == true end
+	else
+		if data.enabled ~= nil then palette.enabled = data.enabled == true end
+		if data.base ~= nil then palette.base = arzGlobalPaletteNormalizeHex(data.base) end
+		if data.depth ~= nil then palette.depth = arzGlobalPalettePercent(data.depth, palette.depth) end
+		if data.saturation ~= nil then palette.saturation = arzGlobalPalettePercent(data.saturation, palette.saturation) end
+		if data.contrast ~= nil then palette.contrast = arzGlobalPalettePercent(data.contrast, palette.contrast) end
+		if data.glow ~= nil then palette.glow = arzGlobalPalettePercent(data.glow, palette.glow) end
+		if data.picker_hue ~= nil then palette.picker_hue = arzPaletteClamp(tonumber(data.picker_hue) or palette.picker_hue or 0) end
+		if data.picker_saturation ~= nil then palette.picker_saturation = arzPaletteClamp(tonumber(data.picker_saturation) or palette.picker_saturation or 0) end
+		if data.picker_value ~= nil then palette.picker_value = arzPaletteClamp(tonumber(data.picker_value) or palette.picker_value or 0) end
+		if data.base ~= nil and data.picker_hue == nil and data.picker_saturation == nil and data.picker_value == nil then
+			local currentColor = arzPaletteHex(palette.base)
+			palette.picker_hue, palette.picker_saturation, palette.picker_value = arzCustomPaletteRgbToHsv(currentColor[1], currentColor[2], currentColor[3])
+		end
+	end
+	if palette.enabled == true then
+		menuThemeConfig.custom_palette_enabled = false
+		arzGlobalPaletteApplyRuntime()
+	else
+		arzPaletteApplyConfig(menuThemeConfig.palette_key or "arzmarket_default")
+		if menuThemeConfig.custom_palette_enabled == true then arzCustomPaletteApplyOverrides() end
+		arzCustomPaletteRefreshStyle()
+	end
+	return writeJsonFile(menuThemeConfig, menuThemePath) == true
+end
+
 function arzCustomPaletteU32(r, g, b, alpha)
 	return imgui.GetColorU32Vec4(imgui.ImVec4(
 		arzCustomPaletteClamp(r),
@@ -6868,6 +7905,8 @@ end
 
 function arzCustomPaletteSetEnabled(enabled)
 	if enabled then
+		arzGlobalPaletteEnsureStorage().enabled = false
+		arzPaletteApplyConfig(menuThemeConfig.palette_key or "arzmarket_default")
 		arzCustomPaletteEnsureStorage(false)
 		menuThemeConfig.custom_palette_enabled = true
 		arzCustomPaletteApplyOverrides()
@@ -7058,7 +8097,11 @@ end
 -- Keep old configs compatible and restore custom overrides before runtime
 -- color buffers are created further below.
 arzCustomPaletteEnsureStorage(false)
-if menuThemeConfig.custom_palette_enabled == true then
+arzGlobalPaletteEnsureStorage()
+if menuThemeConfig.global_palette.enabled == true then
+	menuThemeConfig.custom_palette_enabled = false
+	arzGlobalPaletteApplyConfig()
+elseif menuThemeConfig.custom_palette_enabled == true then
 	arzCustomPaletteApplyOverrides()
 end
 
@@ -7615,7 +8658,7 @@ function drawAveragePriceSourceButtons()
 end
 
 local fpsUpSell = imguiNew.bool(ini.cfg.fps_up_sell)
-local menuScalePercent = imguiNew.int(math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 100))))
+local menuScalePercent = imguiNew.int(math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 120))))
 local menuOpacityPercent = imguiNew.int(math.max(20, math.min(100, math.floor(tonumber(ini.cfg.menu_opacity_percent) or 100))))
 
 getMenuUiScale = function()
@@ -7623,7 +8666,7 @@ getMenuUiScale = function()
 	if previewScale then
 		return math.max(0.55, math.min(1.0, previewScale))
 	end
-	return math.max(1.0, math.min(1.5, (tonumber(ini.cfg.menu_scale_percent) or 100) / 100))
+	return math.max(1.0, math.min(1.5, (tonumber(ini.cfg.menu_scale_percent) or 120) / 100))
 end
 
 local function getMenuOpacity()
@@ -10221,9 +11264,10 @@ function arzPaletteSyncRuntime()
 end
 
 function arzPaletteSelect(themeKey)
-	-- Selecting a predefined theme explicitly leaves custom-palette mode.
-	-- The custom colors stay saved and can be enabled again later.
+	-- Selecting a predefined theme leaves both generated and custom palette modes.
+	-- Saved palette values remain available and can be enabled again later.
 	menuThemeConfig.custom_palette_enabled = false
+	arzGlobalPaletteEnsureStorage().enabled = false
 	local key = arzPaletteApplyConfig(themeKey)
 	arzPaletteSyncRuntime()
 	writeJsonFile(menuThemeConfig, menuThemePath)
@@ -10350,7 +11394,7 @@ function arzHtmlSettingsGetSnapshot()
 			border_side = borderSideEnabled[0] == true,
 			rgb_window = rgbWindowEnabled[0] == true,
 			smooth_open = alphaMenuEnabled[0] == true,
-			menu_scale_percent = math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 100))),
+			menu_scale_percent = math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 120))),
 			menu_opacity_percent = math.max(20, math.min(100, math.floor(tonumber(ini.cfg.menu_opacity_percent) or 100))),
 			rainbow_speed = tonumber(rainbowSpeed[0]) or 2,
 			blur_strength = tonumber(blurStrength[0]) or tonumber(ini.cfg.blur_strength) or 2,
@@ -10381,6 +11425,18 @@ function arzHtmlSettingsGetSnapshot()
 		appearance = {
 			palette_key = tostring(menuThemeConfig.palette_key or "arzmarket_default"),
 			themes = themes,
+			global_palette = {
+				enabled = arzGlobalPaletteEnsureStorage().enabled == true,
+				base = tostring(arzGlobalPaletteEnsureStorage().base or "#4B8DFF"),
+				depth = tonumber(arzGlobalPaletteEnsureStorage().depth) or 72,
+				saturation = tonumber(arzGlobalPaletteEnsureStorage().saturation) or 82,
+				contrast = tonumber(arzGlobalPaletteEnsureStorage().contrast) or 72,
+				glow = tonumber(arzGlobalPaletteEnsureStorage().glow) or 80,
+				picker_hue = tonumber(arzGlobalPaletteEnsureStorage().picker_hue) or 0,
+				picker_saturation = tonumber(arzGlobalPaletteEnsureStorage().picker_saturation) or 0,
+				picker_value = tonumber(arzGlobalPaletteEnsureStorage().picker_value) or 0,
+				tokens = arzGlobalPaletteHtmlTokens()
+			},
 			custom_enabled = menuThemeConfig.custom_palette_enabled == true,
 			custom_groups = paletteGroups
 		},
@@ -10514,6 +11570,12 @@ function arzHtmlSettingsSelectTheme(themeKey)
 	return true
 end
 
+function arzHtmlSettingsSetGlobalPalette(payload)
+	if type(arzGlobalPaletteSet) ~= "function" then return false, "palette_unavailable" end
+	local ok = arzGlobalPaletteSet(type(payload) == "table" and payload or {})
+	return ok == true, ok == true and nil or "palette_write_failed"
+end
+
 function arzHtmlSettingsSetPaletteEnabled(value)
 	if type(arzCustomPaletteSetEnabled) ~= "function" then return false end
 	arzCustomPaletteSetEnabled(value == true)
@@ -10550,7 +11612,7 @@ function arzHtmlSettingsResetPalette(scope, key)
 end
 
 function arzHtmlSettingsApplyMenuScale(value)
-	local numberValue = math.max(100, math.min(150, math.floor(tonumber(value) or tonumber(ini.cfg.menu_scale_percent) or 100)))
+	local numberValue = math.max(100, math.min(150, math.floor(tonumber(value) or tonumber(ini.cfg.menu_scale_percent) or 120)))
 	menuScalePercent[0] = numberValue
 	ini.cfg.menu_scale_percent = numberValue
 	ini.cfg.lastCrrSelect = 3
@@ -13176,6 +14238,7 @@ function tradeFilterRenderPanel(side)
 	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(windowPadX, windowPadY))
 
 	imgui.Begin("TradeFilterAttached##" .. side, nil, flags)
+	arzBaronAnchorRecordWindow(side == "sell" and "sell_filter_panel" or "buy_filter_panel")
 	if imgui.GetScrollY() ~= 0 then
 		imgui.SetScrollY(0)
 	end
@@ -14710,6 +15773,14 @@ function main()
 		return
 	end
 
+	-- On a clean one-file installation the component bootstrap may have created
+	-- the assistant module only now. Retry loading it after components are ready.
+	if not ARZ_BARON_ASSISTANT then pcall(arzBaronLoadAssistant) end
+
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.registerCommands) == "function" then
+		ARZ_BARON_ASSISTANT.registerCommands()
+	end
+
 	ARZ_MODULES.bootstrap.module_status = {}
 	ARZ_MODULES.bootstrap.storage_ready, ARZ_MODULES.bootstrap.storage_error = arzModulesBootstrapStorageCore()
 	if not ARZ_MODULES.bootstrap.storage_ready then
@@ -14729,6 +15800,7 @@ function main()
 	end
 	arzAuthFreezeInitialize()
 	arzAccountBridgeStart()
+	arzAccountBridgeConsumeProfileAuth()
 	arzWatchdogStart()
 	arzReleaseNotesInit()
 
@@ -14757,6 +15829,9 @@ function main()
 	-- They append pages after all built-in pages, so existing numeric page ids stay unchanged.
 	pcall(arzUiExtensionsInitialize)
 	if ARZ_INTERFACE_CHOOSER then ARZ_INTERFACE_CHOOSER.ready = true end
+	pcall(arzBaronResumeOnboardingShowcase)
+	pcall(arzBaronResumePendingInterfaceSelection)
+	pcall(arzBaronResumeActiveTutorial)
 
 	-- Keep average-price tables warm for the HTML UI from a normal MoonLoader thread.
 	-- The HTTP bridge must never call lowPriceGuardRefreshPriceData() directly because
@@ -14930,17 +16005,52 @@ function main()
 		AFKMessage(u8:decode("Если у вас не выставляются товары/нет кнопки SCAN на лавках игрока и т.д - выполните следующий путь:"))
 		AFKMessage(u8:decode("/settings - Настройка инвентаря - Сбросить настройки"))
 	end)
+	sampRegisterChatCommand("baron", function()
+		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.restartTutorial) == "function" then
+			pcall(ARZ_BARON_ASSISTANT.restartTutorial, ini.cfg.interface_mode)
+			if ini.cfg.interface_mode == "html" then
+				pcall(arzUiExtensionsOpenHtml, arzBaronCurrentPageName())
+			else
+				menuOpen = true
+				menuVisible[0] = true
+			end
+		end
+	end)
+	sampRegisterChatCommand("baronreset", function()
+		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.resetOnboarding) == "function" then
+			pcall(ARZ_BARON_ASSISTANT.resetOnboarding)
+			ini.cfg.interface_choice_done = false
+			if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
+			menuOpen = false
+			menuVisible[0] = false
+			pcall(arzUiExtensionsCloseHtml)
+			if type(arzIniSave) == "function" then pcall(arzIniSave) end
+		end
+	end)
+
 	sampRegisterChatCommand("autolavka", function()
 		marketState.autoLavka = not marketState.autoLavka
 
 		sendNotify(u8:decode("Авто установка лавки ") .. (marketState.autoLavka and u8:decode("включено") or u8:decode("выключено")))
 	end)
 	sampRegisterChatCommand("crr", function()
-		if ini.cfg.interface_choice_done ~= true then
-			menuOpen = false
-			menuVisible[0] = false
-			if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
+		if type(arzBaronOpenSavedProgress) == "function" and arzBaronOpenSavedProgress() == true then
 			return
+		end
+		if ini.cfg.interface_choice_done ~= true then
+			local chooserNeeded = false
+			if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.needsChooser) == "function" then
+				local okNeed, value = pcall(ARZ_BARON_ASSISTANT.needsChooser)
+				chooserNeeded = okNeed and value == true
+			end
+			if chooserNeeded then
+				menuOpen = false
+				menuVisible[0] = false
+				if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
+				return
+			end
+			-- Before Baron reaches the interface chooser, /crr opens the current
+			-- interface normally instead of showing the preview shell.
 		end
 
 		if ini.cfg.interface_mode == "html" then
@@ -15196,6 +16306,16 @@ function main()
 
 	while true do
 		wait(0)
+
+		if arzHtmlPendingTradeScan ~= nil then
+			local request = arzHtmlPendingTradeScan
+			arzHtmlPendingTradeScan = nil
+			local okScan, scanErr = pcall(arzApplyHtmlTradeScan, request.side, request.enabled)
+			if not okScan then
+				print("[ArzMarket HTML] inventory scan start failed: " .. tostring(scanErr))
+			end
+		end
+
 		updateLrendPoints()
 		renderLrendPoints()
 		modificationState.updateAutoFps()
@@ -16971,11 +18091,6 @@ function arzInterfacePersistMode(mode)
 	mode = mode == "html" and "html" or "lua"
 	ini.cfg.interface_choice_done = true
 	ini.cfg.interface_mode = mode
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
-		ARZ_INTERFACE_CHOOSER.visible[0] = false
-	end
-	if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
-	ARZ_INTERFACE_LUA_PREVIEW = nil
 	if type(arzIniSave) == "function" then
 		pcall(arzIniSave)
 	elseif type(save_all) == "function" then
@@ -16984,62 +18099,263 @@ function arzInterfacePersistMode(mode)
 	return mode
 end
 
-function arzInterfaceSelectMode(mode)
-	mode = arzInterfacePersistMode(mode)
-	if mode == "html" then
+function arzInterfaceBeginSelection(mode)
+	mode = mode == "html" and "html" or "lua"
+	if not ARZ_INTERFACE_CHOOSER or not ARZ_INTERFACE_CHOOSER.visible or ARZ_INTERFACE_CHOOSER.visible[0] ~= true then return false end
+	if ARZ_INTERFACE_CHOOSER.selection ~= nil or ARZ_INTERFACE_CHOOSER.finalizing == true then return false end
+	ARZ_INTERFACE_CHOOSER.selection = mode
+	ARZ_INTERFACE_CHOOSER.phase = "fading"
+	ARZ_INTERFACE_CHOOSER.transition_started = getGameTimer()
+	ARZ_INTERFACE_CHOOSER.finalizing = false
+	return true
+end
+
+function arzInterfaceCurrentPageForModeSwitch()
+	return selectedMenuPage == 1 and "sell"
+		or selectedMenuPage == 3 and "settings"
+		or selectedMenuPage == 4 and "logs"
+		or selectedMenuPage == 5 and "marketplace"
+		or selectedMenuPage == 7 and "mods"
+		or selectedMenuPage == 8 and "storage"
+		or "buy"
+end
+
+function arzInterfaceFinalizeSelection()
+	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.finalizing == true then return false end
+	local requestedMode = ARZ_INTERFACE_CHOOSER.selection
+	if requestedMode ~= "html" and requestedMode ~= "lua" then return false end
+	ARZ_INTERFACE_CHOOSER.finalizing = true
+
+	if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
+	ARZ_INTERFACE_LUA_PREVIEW = nil
+	ARZ_BARON_SHOWCASE_MODE = nil
+
+	local actualMode = requestedMode
+	if requestedMode == "html" then
 		menuOpen = false
-		menuVisible[0] = false
+		if menuVisible then menuVisible[0] = false end
 		if type(resetIO) == "function" then pcall(resetIO) end
-		if not arzUiExtensionsOpenHtml(selectedMenuPage == 1 and "sell" or selectedMenuPage == 3 and "settings" or selectedMenuPage == 4 and "logs" or selectedMenuPage == 5 and "marketplace" or selectedMenuPage == 8 and "storage" or "buy") then
-			ini.cfg.interface_mode = "lua"
-			if type(arzIniSave) == "function" then pcall(arzIniSave) end
+		local opened = type(arzUiExtensionsOpenHtml) == "function" and arzUiExtensionsOpenHtml(arzInterfaceCurrentPageForModeSwitch()) == true
+		if not opened then
+			actualMode = "lua"
+			if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
 			menuOpen = true
-			menuVisible[0] = true
+			if menuVisible then menuVisible[0] = true end
 			kifir = 1
 			onOpenMenu = true
 			zzztime = os.clock()
 		end
-		return
+	else
+		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+		menuOpen = true
+		if menuVisible then menuVisible[0] = true end
+		kifir = 1
+		onOpenMenu = true
+		zzztime = os.clock()
+	end
+
+	arzInterfacePersistMode(actualMode)
+	if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.completeInterfaceLoading) == "function" then
+		local okComplete, completed = pcall(ARZ_BARON_ASSISTANT.completeInterfaceLoading, actualMode)
+		if not okComplete or completed == false then
+			print("[ArzMarket][Baron] interface loading completion failed")
+		end
+	end
+
+	ARZ_INTERFACE_CHOOSER.selection = nil
+	ARZ_INTERFACE_CHOOSER.phase = "preview"
+	ARZ_INTERFACE_CHOOSER.transition_started = 0
+	ARZ_INTERFACE_CHOOSER.finalizing = false
+	return true
+end
+
+function arzInterfaceSelectMode(mode)
+	mode = mode == "html" and "html" or "lua"
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.selectInterface) == "function" then
+		local ok, selected = pcall(ARZ_BARON_ASSISTANT.selectInterface, mode)
+		return ok and selected ~= false
+	end
+	return arzInterfaceBeginSelection(mode)
+end
+
+function arzBaronResumePendingInterfaceSelection()
+	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true then return false end
+	local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
+	if not okState or type(assistantState) ~= "table" then return false end
+	if assistantState.current_module ~= "onboarding" or assistantState.current_step ~= "interface_loading" then return false end
+	local pendingMode = assistantState.pending_interface
+	if pendingMode ~= "html" and pendingMode ~= "lua" then return false end
+
+	-- A Lua reload can happen while the chooser is already fading into the
+	-- selected interface. Do not replay the preview after reload. Finalize the
+	-- saved selection immediately and open only the real interface.
+	if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
+	ARZ_INTERFACE_LUA_PREVIEW = nil
+	ARZ_BARON_SHOWCASE_MODE = nil
+	if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+	ARZ_INTERFACE_CHOOSER.selection = pendingMode
+	ARZ_INTERFACE_CHOOSER.phase = "loading"
+	ARZ_INTERFACE_CHOOSER.transition_started = 0
+	ARZ_INTERFACE_CHOOSER.finalizing = false
+	return arzInterfaceFinalizeSelection()
+end
+
+function arzBaronResumeActiveTutorial()
+	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+	local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
+	if not okState or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
+	if assistantState.current_module ~= "tutorial_lua" and assistantState.current_module ~= "tutorial_html" then return false end
+
+	local mode = assistantState.interface == "html" and "html" or "lua"
+	local snapshot = arzBaronAssistantSnapshot(nil, mode) or {}
+	local pageMap = { sell = 1, buy = 2, settings = 3, logs = 4, marketplace = 5, mods = 7, storage = 8 }
+
+	-- Restore the page the player was actually on. This is important for steps
+	-- that wait for a page click: opening the required destination page here
+	-- would complete the action for the player and skip the saved moment.
+	local savedPage = tostring(assistantState.last_page or "")
+	local requiredPage = tostring(snapshot.requiredPage or snapshot.expectedPage or "")
+	local restorePage = pageMap[savedPage] and savedPage or (pageMap[requiredPage] and requiredPage or arzBaronCurrentPageName())
+	local pageId = pageMap[restorePage]
+	if pageId then
+		selectedMenuPage = pageId
+		ini.cfg.lastCrrSelect = pageId
+		if UI_ANIM_BUTTON then
+			UI_ANIM_BUTTON.pending_menu = nil
+			UI_ANIM_BUTTON.time = 0
+		end
+	end
+
+	local settingsSection = nil
+	if restorePage == "settings" then
+		local savedSection = tostring(assistantState.last_settings_section or "")
+		local validSection = savedSection == "general" or savedSection == "trade" or savedSection == "automation"
+			or savedSection == "telegram" or savedSection == "appearance" or savedSection == "configs"
+		if validSection then
+			settingsSection = savedSection
+		else
+			local requiredSection = tostring(snapshot.requiredSettingsSection or "")
+			if requiredSection == "general" or requiredSection == "trade" or requiredSection == "automation"
+				or requiredSection == "telegram" or requiredSection == "appearance" or requiredSection == "configs" then
+				settingsSection = requiredSection
+			end
+		end
+	end
+
+	ARZ_BARON_SHOWCASE_MODE = nil
+	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+
+	if mode == "html" then
+		menuOpen = false
+		if menuVisible then menuVisible[0] = false end
+		if type(resetIO) == "function" then pcall(resetIO) end
+		if type(arzUiExtensionsOpenHtml) == "function" then
+			local okOpen, opened = pcall(arzUiExtensionsOpenHtml, restorePage, settingsSection)
+			return okOpen and opened ~= false
+		end
+		return false
 	end
 
 	if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
 	menuOpen = true
-	menuVisible[0] = true
+	if menuVisible then menuVisible[0] = true end
 	kifir = 1
 	onOpenMenu = true
 	zzztime = os.clock()
+	if restorePage == "settings" and type(modificationState) == "table" then
+		modificationState.settingsInterfaceOpen = settingsSection == "appearance"
+	end
+	return true
+end
+
+function arzRenderInterfaceLoadingModal(screenWidth, screenHeight)
+	local width, height = 390, 145
+	local x = math.floor((screenWidth - width) * 0.5)
+	local y = math.floor((screenHeight - height) * 0.5)
+	imgui.SetNextWindowPos(imgui.ImVec2(x, y), imgui.Cond.Always)
+	imgui.SetNextWindowSize(imgui.ImVec2(width, height), imgui.Cond.Always)
+	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
+	imgui.PushStyleVarFloat(imgui.StyleVar.WindowRounding, 14)
+	imgui.PushStyleVarFloat(imgui.StyleVar.WindowBorderSize, 1)
+	imgui.PushStyleColor(imgui.Col.WindowBg, imgui.ImVec4(0.035, 0.075, 0.105, 0.985))
+	imgui.PushStyleColor(imgui.Col.Border, imgui.ImVec4(0.20, 0.47, 0.66, 0.95))
+	imgui.Begin("##ArzMarketInterfaceLoading", nil,
+		imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoTitleBar +
+		imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse +
+		imgui.WindowFlags.NoSavedSettings + imgui.WindowFlags.NoInputs)
+	local title = "Загрузка интерфейса"
+	imgui.SetCursorPosY(34)
+	imgui.PushFont(fonts[13])
+	imgui.SetCursorPosX((width - imgui.CalcTextSize(title).x) * 0.5)
+	imgui.Text(title)
+	imgui.PopFont()
+	local dotCount = math.floor(getGameTimer() / 220) % 3 + 1
+	local dots = string.rep("●", dotCount) .. string.rep("○", 3 - dotCount)
+	imgui.SetCursorPosY(88)
+	imgui.SetCursorPosX((width - imgui.CalcTextSize(dots).x) * 0.5)
+	imgui.TextColored(imgui.ImVec4(0.30, 0.72, 0.96, 1), dots)
+	imgui.End()
+	imgui.PopStyleColor(2)
+	imgui.PopStyleVar(3)
 end
 
 function arzRenderInterfaceChooser(frame)
-	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true or not ARZ_INTERFACE_CHOOSER.visible or not ARZ_INTERFACE_CHOOSER.visible[0] then
+	local chooserNeeded = false
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.needsChooser) == "function" then
+		local okNeed, needValue = pcall(ARZ_BARON_ASSISTANT.needsChooser)
+		chooserNeeded = okNeed and needValue == true
+	end
+	if not chooserNeeded or not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true or not ARZ_INTERFACE_CHOOSER.visible or not ARZ_INTERFACE_CHOOSER.visible[0] then
 		ARZ_INTERFACE_LUA_PREVIEW = nil
-		if type(arzUiExtensionsCloseHtmlPreview) == "function" then
-			pcall(arzUiExtensionsCloseHtmlPreview)
-		end
+		if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
 		return
 	end
 
 	frame.HideCursor = false
 	local screenWidth, screenHeight = getScreenResolution()
-	local chooserWidth, chooserHeight = 230, 154
-	local previewGap = math.max(12, math.floor(screenWidth * 0.012))
-	local sideMargin = math.max(14, math.floor(screenWidth * 0.025))
+	local chooserWidth, chooserHeight = 0, 0
+	local previewGap = math.max(10, math.floor(screenWidth * 0.009))
+	local sideMargin = math.max(10, math.floor(screenWidth * 0.022))
 	local topGap = math.max(10, math.floor(screenHeight * 0.015))
 	local maxSideWidth = math.floor((screenWidth - previewGap - sideMargin * 2) / 2)
-	local targetSideWidth = math.floor(screenWidth * 0.42)
-	local previewWidth = math.max(500, math.min(900, targetSideWidth, maxSideWidth))
-	local availablePreviewHeight = screenHeight - chooserHeight - topGap * 3
-	local targetPreviewHeight = math.floor(screenHeight * 0.62)
-	local previewHeight = math.max(410, math.min(690, targetPreviewHeight, availablePreviewHeight))
+	local targetSideWidth = math.floor(screenWidth * 0.41)
+	local previewWidth = math.max(560, math.min(900, targetSideWidth, maxSideWidth))
+	local availablePreviewHeight = screenHeight - topGap * 2
+	local targetPreviewHeight = math.floor(screenHeight * 0.72)
+	local previewHeight = math.max(470, math.min(780, targetPreviewHeight, availablePreviewHeight))
 	local totalPreviewWidth = previewWidth * 2 + previewGap
 	local startX = math.max(sideMargin, math.floor((screenWidth - totalPreviewWidth) / 2))
-	local chooserX = math.floor((screenWidth - chooserWidth) / 2)
-	local chooserY = topGap
-	local previewY = math.max(chooserY + chooserHeight + topGap, math.floor((screenHeight - previewHeight + chooserHeight) / 2))
-	local luaPreviewScale = math.max(0.58, math.min(1.0, math.min(previewWidth / 830, previewHeight / 550)))
+	local chooserX = 0
+	local chooserY = 0
+	local previewY = math.max(topGap, math.floor((screenHeight - previewHeight) / 2))
+	local luaPreviewScale = math.max(0.66, math.min(1.08, math.min(previewWidth / 820, previewHeight / 520)))
+	local htmlX = startX + previewWidth + previewGap
 
-	-- Left side is the actual Lua/mimgui ArzMarket window. The normal renderer
-	-- below reads this state and draws the real Buy page in a fixed preview slot.
+	local previewInteractive = false
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isPreviewInteractive) == "function" then
+		local okInteractive, value = pcall(ARZ_BARON_ASSISTANT.isPreviewInteractive)
+		previewInteractive = okInteractive and value == true
+	end
+
+	local luaAlpha, htmlAlpha = 1.0, 1.0
+	local selection = ARZ_INTERFACE_CHOOSER.selection
+	if selection then
+		previewInteractive = false
+		local elapsed = math.max(0, getGameTimer() - (tonumber(ARZ_INTERFACE_CHOOSER.transition_started) or getGameTimer()))
+		local fadeDuration = math.max(1, tonumber(ARZ_INTERFACE_CHOOSER.fade_duration) or 320)
+		local fadeProgress = math.min(1, elapsed / fadeDuration)
+		local eased = fadeProgress * fadeProgress * (3 - 2 * fadeProgress)
+		if selection == "lua" then htmlAlpha = 1 - eased else luaAlpha = 1 - eased end
+		if elapsed >= fadeDuration then ARZ_INTERFACE_CHOOSER.phase = "loading" end
+		if elapsed >= fadeDuration + (tonumber(ARZ_INTERFACE_CHOOSER.loading_duration) or 720) then
+			arzInterfaceFinalizeSelection()
+			return
+		end
+	end
+
+	local previousPage = ARZ_INTERFACE_LUA_PREVIEW and tonumber(ARZ_INTERFACE_LUA_PREVIEW.selectedPage) or 2
 	ARZ_INTERFACE_LUA_PREVIEW = {
 		active = true,
 		x = startX,
@@ -17047,77 +18363,150 @@ function arzRenderInterfaceChooser(frame)
 		w = previewWidth,
 		h = previewHeight,
 		scale = luaPreviewScale,
-		selectedPage = 2
+		selectedPage = previousPage,
+		interactive = previewInteractive,
+		alpha = luaAlpha
 	}
 
-	-- Right side is the actual HTML/CEF interface in its own iframe, not a screenshot.
 	if type(arzUiExtensionsOpenHtmlPreview) == "function" then
 		pcall(arzUiExtensionsOpenHtmlPreview, {
-			x = startX + previewWidth + previewGap,
+			x = htmlX,
 			y = previewY,
 			w = previewWidth,
 			h = previewHeight
-		}, "buy")
+		}, "buy", { interactive = previewInteractive, alpha = htmlAlpha })
 	end
 
 	local borderColor = imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], math.max(0.78, menuThemeConfig.Border[4]))
 	local windowColor = imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], 0.97)
 	local accentColor = imgui.ImVec4(menuThemeConfig.active_selector_color[1], menuThemeConfig.active_selector_color[2], menuThemeConfig.active_selector_color[3], 0.95)
-	local accentSoft = imgui.ImVec4(menuThemeConfig.active_selector_color[1], menuThemeConfig.active_selector_color[2], menuThemeConfig.active_selector_color[3], 0.18)
 	local whiteMuted = imgui.ImVec4(1, 1, 1, 0.72)
+	local oldColor = imgui.ImVec4(0.96, 0.48, 0.40, 1)
+	local newColor = imgui.ImVec4(0.35, 0.86, 0.58, 1)
 
-	imgui.PushStyleColor(imgui.Col.WindowBg, windowColor)
-	imgui.PushStyleColor(imgui.Col.Border, borderColor)
-	imgui.PushStyleColor(imgui.Col.Button, accentSoft)
-	imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.40))
-	imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.55))
-	imgui.SetNextWindowPos(imgui.ImVec2(chooserX, chooserY), imgui.Cond.Always)
-	imgui.SetNextWindowSize(imgui.ImVec2(chooserWidth, chooserHeight), imgui.Cond.Always)
-	imgui.Begin("##ArzMarketInterfaceChooser", ARZ_INTERFACE_CHOOSER.visible,
-		imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoTitleBar +
-		imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse +
-		imgui.WindowFlags.NoSavedSettings)
+	ARZ_INTERFACE_CHOOSER.lua_bounds = { x = startX, y = previewY, w = previewWidth, h = previewHeight }
+	ARZ_INTERFACE_CHOOSER.html_bounds = { x = htmlX, y = previewY, w = previewWidth, h = previewHeight }
 
-	local dl = imgui.GetWindowDrawList()
-	local wp = imgui.GetWindowPos()
-	local sz = imgui.GetWindowSize()
-	dl:AddRectFilled(wp, imgui.ImVec2(wp.x + sz.x, wp.y + sz.y), imgui.GetColorU32Vec4(windowColor), 10, 0)
-	dl:AddRect(wp, imgui.ImVec2(wp.x + sz.x, wp.y + sz.y), imgui.GetColorU32Vec4(borderColor), 10, 0, 2)
-	dl:AddRectFilled(wp, imgui.ImVec2(wp.x + sz.x, wp.y + 4), imgui.GetColorU32Vec4(accentColor), 10, 1)
-
-	imgui.SetCursorPosY(18)
-	imgui.PushFont(fonts[13])
-	imgui.SetCursorPosX((chooserWidth - imgui.CalcTextSize("ArzMarket").x) / 2)
-	imgui.Text("ArzMarket")
-	imgui.PopFont()
-	imgui.SetCursorPosY(52)
-	imgui.SetCursorPosX((chooserWidth - imgui.CalcTextSize("Выбери интерфейс").x) / 2)
-	imgui.Text("Выбери интерфейс")
-	imgui.SetCursorPosY(76)
-	imgui.SetCursorPosX(26)
-	imgui.TextColored(whiteMuted, "Слева Lua, справа HTML")
-	imgui.SetCursorPosY(100)
-	imgui.SetCursorPosX(18)
-	if imgui.Button("Lua##interface_lua", imgui.ImVec2(90, 28)) then
-		arzInterfaceSelectMode("lua")
+	if ARZ_INTERFACE_CHOOSER.phase == "loading" then
+		arzRenderInterfaceLoadingModal(screenWidth, screenHeight)
 	end
-	imgui.SameLine(0, 18)
-	if imgui.Button("HTML##interface_html", imgui.ImVec2(110, 28)) then
-		arzInterfaceSelectMode("html")
+end
+
+ARZ_INPUT_CURSOR_GUARD = ARZ_INPUT_CURSOR_GUARD or { last_reclaim = 0 }
+
+function ARZ_INPUT_CURSOR_GUARD.backgroundInterference()
+	local dialogActive = false
+	if type(sampIsDialogActive) == "function" then
+		local ok, value = pcall(sampIsDialogActive)
+		dialogActive = ok and value == true
 	end
-	imgui.SetCursorPosY(138)
-	imgui.SetCursorPosX(22)
-	imgui.TextColored(whiteMuted, "Откроется выбранный режим")
-	imgui.End()
-	imgui.PopStyleColor(5)
+	return dialogActive or (marketState and marketState.isEnableCursor == true)
+end
+
+function ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
+	if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true then return end
+	local baronUsesLua = ini.cfg.interface_mode ~= "html"
+	if ARZ_BARON_SHOWCASE_MODE ~= nil then baronUsesLua = ARZ_BARON_SHOWCASE_MODE ~= "html" end
+	local baronLuaActive = ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
+	local chooserActive = ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]
+	local luaUiActive = (menuVisible and menuVisible[0] == true) or baronLuaActive or chooserActive
+	if not luaUiActive or not ARZ_INPUT_CURSOR_GUARD.backgroundInterference() then return end
+
+	local now = type(getGameTimer) == "function" and getGameTimer() or math.floor(os.clock() * 1000)
+	if now - (tonumber(ARZ_INPUT_CURSOR_GUARD.last_reclaim) or 0) < 75 then return end
+	ARZ_INPUT_CURSOR_GUARD.last_reclaim = now
+
+	pcall(function()
+		local bs = raknetNewBitStream()
+		raknetBitStreamWriteInt8(bs, 25)
+		raknetBitStreamWriteInt32(bs, 0)
+		raknetBitStreamWriteInt8(bs, 128)
+		raknetBitStreamWriteInt16(bs, 0)
+		raknetEmulPacketReceiveBitStream(220, bs)
+		raknetDeleteBitStream(bs)
+	end)
+	pcall(function() if sampSetCursorMode then sampSetCursorMode(1) end end)
+	pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
 end
 
 mainUiFrame = imgui.OnFrame(function()
-	return (ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]) or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
+	local baronUsesLua = ini.cfg.interface_mode ~= "html"
+	if ARZ_BARON_SHOWCASE_MODE ~= nil then
+		baronUsesLua = ARZ_BARON_SHOWCASE_MODE ~= "html"
+	end
+	local baronLuaActive = ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
+	local htmlUiActive = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true
+	local baronStageSyncPending = ARZ_BARON_PENDING_STAGE_SYNC ~= nil
+	return baronStageSyncPending or (ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]) or baronLuaActive or htmlUiActive or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
 end, function(frame)
+	ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
+	if ARZ_BARON_PENDING_STAGE_SYNC ~= nil then
+		arzBaronProcessPendingStageSync()
+	end
 	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] then
 		arzRenderInterfaceChooser(frame)
 	end
+
+	local htmlUiBlurOnly = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true
+		and not menuVisible[0] and not (arzPreviewMenuState and arzPreviewMenuState.active)
+	if htmlUiBlurOnly and backgroundBlurEnabled[0] and imguiBlur then
+		local screenWidth, screenHeight = getScreenResolution()
+		local margin = 12
+		local rect = nil
+		if ARZ_BARON_SHOWCASE_MODE == "html" then
+			local w = math.min(1380, screenWidth - margin * 2)
+			local h = math.min(820, screenHeight - margin * 2)
+			rect = { x = math.max(margin, (screenWidth - w) * 0.5), y = math.max(margin, (screenHeight - h) * 0.5), w = w, h = h }
+		else
+			local state = type(arzUiExtensionsGetHtmlWindowState) == "function" and arzUiExtensionsGetHtmlWindowState() or nil
+			if type(state) == "table" and tonumber(state.width) and tonumber(state.height) then
+				local useBase = tonumber(state.scalePercent) and tonumber(state.scalePercent) > 100
+					and tonumber(state.baseX) and tonumber(state.baseY) and tonumber(state.baseWidth) and tonumber(state.baseHeight)
+				local x = useBase and tonumber(state.baseX) or tonumber(state.x)
+				local y = useBase and tonumber(state.baseY) or tonumber(state.y)
+				local w = useBase and tonumber(state.baseWidth) or tonumber(state.width)
+				local h = useBase and tonumber(state.baseHeight) or tonumber(state.height)
+				local savedW, savedH = tonumber(state.viewportWidth), tonumber(state.viewportHeight)
+				if savedW and savedH and savedW > 0 and savedH > 0 and (math.abs(savedW - screenWidth) > 2 or math.abs(savedH - screenHeight) > 2) then
+					local sx, sy = screenWidth / savedW, screenHeight / savedH
+					x, y, w, h = x * sx, y * sy, w * sx, h * sy
+				end
+				w = math.max(math.min(760, math.max(560, screenWidth - margin * 2)), math.min(w, screenWidth - margin * 2))
+				h = math.max(math.min(500, math.max(380, screenHeight - margin * 2)), math.min(h, screenHeight - margin * 2))
+				x = math.max(margin, math.min(x, screenWidth - w - margin))
+				y = math.max(margin, math.min(y, screenHeight - h - margin))
+				rect = { x = x, y = y, w = w, h = h }
+			end
+		end
+		if not rect then
+			local w = math.min(1600, screenWidth - margin * 2, math.max(760, screenWidth * 0.88))
+			local h = math.min(900, screenHeight - margin * 2, math.max(500, screenHeight * 0.84))
+			rect = { x = math.max(margin, (screenWidth - w) * 0.5), y = math.max(margin, (screenHeight - h) * 0.5), w = w, h = h }
+		end
+
+		local drawList = imgui.GetBackgroundDrawList()
+		if drawList and type(drawList.PushClipRect) == "function" and type(drawList.PopClipRect) == "function" then
+			local strength = math.max(0.5, math.min(4.0, tonumber(blurStrength[0]) or 2.0))
+			local x1 = math.max(0, rect.x - 2)
+			local y1 = math.max(0, rect.y - 2)
+			local x2 = math.min(screenWidth, rect.x + rect.w + 2)
+			local y2 = math.min(screenHeight, rect.y + rect.h + 2)
+			local regions = {
+				{0, 0, screenWidth, y1},
+				{0, y2, screenWidth, screenHeight},
+				{0, y1, x1, y2},
+				{x2, y1, screenWidth, y2}
+			}
+			for _, r in ipairs(regions) do
+				if r[3] - r[1] > 1 and r[4] - r[2] > 1 then
+					drawList:PushClipRect(imgui.ImVec2(r[1], r[2]), imgui.ImVec2(r[3], r[4]), false)
+					imguiBlur.apply(drawList, strength)
+					drawList:PopClipRect()
+				end
+			end
+		end
+	end
+
 	if traderChatVisible[0] and not menuVisible[0] then
 		local screenWidth, screenHeight = getScreenResolution()
 		local cursorScreenPos = imgui.GetCursorScreenPos()
@@ -17682,7 +19071,8 @@ end, function(frame)
 		end
 
 		local menuOpacity = getMenuOpacity()
-		imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, alpha_z * menuOpacity)
+		local previewAlpha = isChooserPreviewMenu and math.max(0, math.min(1, tonumber(arzPreviewMenuState.alpha) or 1)) or 1
+		imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, alpha_z * menuOpacity * previewAlpha)
 
 		local screenWidth, screenHeight = getScreenResolution()
 		local savedMainWindowSize = type(windowThemeConfig.mainWindowSize) == "table" and windowThemeConfig.mainWindowSize or nil
@@ -17692,15 +19082,25 @@ end, function(frame)
 			imgui.SetNextWindowPos(imgui.ImVec2(arzPreviewMenuState.x, arzPreviewMenuState.y), imgui.Cond.Always)
 			imgui.SetNextWindowSize(imgui.ImVec2(sizeX, sizeY), imgui.Cond.Always)
 		else
-			sizeX = math.max(830, math.min(10000, tonumber(savedMainWindowSize and savedMainWindowSize.x) or 830))
-			sizeY = math.max(550, math.min(10000, tonumber(savedMainWindowSize and savedMainWindowSize.y) or 550))
-
-			imgui.SetNextWindowPos(imgui.ImVec2(screenWidth / 2, screenHeight / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
-
-			if modificationState.uiApplySavedWindowSize then
-				-- Restore the saved OUTER window size only once after reload.
-				-- The interface-percent slider never changes this value.
+			local baronLuaShowcase = ARZ_BARON_SHOWCASE_MODE == "lua"
+			if baronLuaShowcase then
+				-- Onboarding shows the stock Lua interface at the new standard 120%
+				-- perimeter. This is temporary and never overwrites mainWindowSize.
+				sizeX = 996
+				sizeY = 660
+				imgui.SetNextWindowPos(imgui.ImVec2(screenWidth / 2, screenHeight / 2), imgui.Cond.Always, imgui.ImVec2(0.5, 0.5))
 				imgui.SetNextWindowSize(imgui.ImVec2(sizeX, sizeY), imgui.Cond.Always)
+			else
+				sizeX = math.max(830, math.min(10000, tonumber(savedMainWindowSize and savedMainWindowSize.x) or 830))
+				sizeY = math.max(550, math.min(10000, tonumber(savedMainWindowSize and savedMainWindowSize.y) or 550))
+
+				imgui.SetNextWindowPos(imgui.ImVec2(screenWidth / 2, screenHeight / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
+
+				if modificationState.uiApplySavedWindowSize then
+					-- Restore the saved OUTER window size only once after reload.
+					-- The interface-percent slider never changes this value.
+					imgui.SetNextWindowSize(imgui.ImVec2(sizeX, sizeY), imgui.Cond.Always)
+				end
 			end
 
 			imgui.SetNextWindowSizeConstraints(imgui.ImVec2(830, 550), imgui.ImVec2(10000, 10000))
@@ -17781,6 +19181,9 @@ end, function(frame)
 		local previousHeight = modificationState.uiLastWindowHeight
 		if previousWidth ~= nil and previousHeight ~= nil then
 			if math.abs(sizeX - previousWidth) > 0.5 or math.abs(sizeY - previousHeight) > 0.5 then
+				if (not isChooserPreviewMenu) and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.event) == "function" then
+					pcall(ARZ_BARON_ASSISTANT.event, "resize_changed", { width = sizeX, height = sizeY })
+				end
 				-- Suspend the fullscreen blur while the native resize grip is moving.
 				-- Save only after resizing settles so disk IO never runs every frame.
 				modificationState.uiResizeSuspendBlurUntil = uiNowMs + 120
@@ -17803,6 +19206,9 @@ end, function(frame)
 		dl = imgui.GetWindowDrawList()
 		p = imgui.GetCursorScreenPos()
 		menuWP = imgui.GetWindowPos()
+		if not isChooserPreviewMenu then
+			arzBaronAnchorBeginFrame()
+		end
 
 		imgui.BeginChild("left", imgui.ImVec2(leftPanelWidth, 0))
 
@@ -17833,6 +19239,9 @@ end, function(frame)
 		local rightChildFlags = selectedMenuPage == 4 and (imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse) or 0
 		if rightChildFlags == 0 and type(arzUiExtensionsGetRightChildFlags) == "function" then
 			rightChildFlags = arzUiExtensionsGetRightChildFlags(selectedMenuPage)
+		end
+		if isChooserPreviewMenu then
+			rightChildFlags = rightChildFlags + imgui.WindowFlags.NoInputs
 		end
 		imgui.BeginChild("right", imgui.ImVec2(0, 0), false, rightChildFlags)
 
@@ -18003,7 +19412,9 @@ end, function(frame)
 				imgui.TextDisabled("Страница модуля недоступна.")
 			end
 		end
-		handleListDeleteUndoHotkey()
+		if not isChooserPreviewMenu then
+			handleListDeleteUndoHotkey()
+		end
 
 		imgui.PopFont()
 		imgui.PopStyleVar(2)
@@ -18218,6 +19629,11 @@ end, function(frame)
 		end
 
 
+		-- Baron anchor for dragging the whole ArzMarket window by its upper strip.
+		if not isChooserPreviewMenu then
+			arzBaronAnchorRecordRect("window_drag", menuWP.x + 18, menuWP.y + 4, math.max(180, sizeX - 36), math.max(34, 46 * getMenuUiScale()))
+		end
+
 		-- Always-visible resize grip.
 		local gripDrawList = imgui.GetWindowDrawList()
 		if not isChooserPreviewMenu then
@@ -18231,6 +19647,7 @@ end, function(frame)
 		)
 		local gripX = menuWP.x + sizeX - 8
 		local gripY = menuWP.y + sizeY - 8
+		arzBaronAnchorRecordRect("resize_handle", gripX - 22, gripY - 22, 24, 24)
 
 		gripDrawList:AddLine(
 			imgui.ImVec2(gripX - 8, gripY),
@@ -18253,9 +19670,9 @@ end, function(frame)
 		end
 
 		if not isChooserPreviewMenu then
-			if selectedMenuPage == 1 then
+			if selectedMenuPage == 1 and ARZ_BARON_TRADE_FILTER_OPEN.sell ~= false then
 				tradeFilterRenderPanel("sell")
-			elseif selectedMenuPage == 2 then
+			elseif selectedMenuPage == 2 and ARZ_BARON_TRADE_FILTER_OPEN.buy ~= false then
 				tradeFilterRenderPanel("buy")
 			end
 		end
@@ -18267,6 +19684,67 @@ end, function(frame)
 		imgui.PopStyleVar()
 		_G.ARZ_INTERFACE_PREVIEW_UI_SCALE = nil
 	end
+
+	local baronChooserVisible = ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] == true
+	local baronCanRenderInLua = ini.cfg.interface_mode ~= "html"
+	if ARZ_BARON_SHOWCASE_MODE ~= nil then baronCanRenderInLua = ARZ_BARON_SHOWCASE_MODE ~= "html" end
+	if baronChooserVisible then baronCanRenderInLua = true end
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.render) == "function" and ARZ_BARON_ASSISTANT.isActive and ARZ_BARON_ASSISTANT.isActive() and baronCanRenderInLua then
+		local screenWidth, screenHeight = getScreenResolution()
+		local snapshot = arzBaronAssistantSnapshot(arzBaronCurrentPageName(), "lua")
+		local anchor = snapshot.target and arzBaronAnchorGet(snapshot.target) or nil
+		if (not anchor) and snapshot.target == "resize_handle" and menuWP and sizeX and sizeY then
+			anchor = { x = menuWP.x + sizeX - 26, y = menuWP.y + sizeY - 26, w = 24, h = 24 }
+		elseif (not anchor) and snapshot.target and snapshot.target:find("^nav_") and menuWP then
+			local navPage = { nav_sell = 1, nav_buy = 2, nav_settings = 3, nav_logs = 4, nav_marketplace = 5, nav_mods = 7, nav_storage = 8 }
+			local pageId = navPage[snapshot.target]
+			local scale = getMenuUiScale()
+			local navY = 0
+			local navIndex = 0
+			local foundY = nil
+			for sectionIndex, section in ipairs(mainMenu) do
+				if sectionIndex == 4 then navY = navY + 95 * scale end
+				navY = navY + (13 + 5) * scale
+				for _ = 1, #section.list do
+					navIndex = navIndex + 1
+					if navIndex == pageId then foundY = navY; break end
+					navY = navY + (17 + 10 + 5) * scale
+				end
+				if foundY then break end
+			end
+			local baseY = tonumber(SelectMenuVertical) or (menuWP.y + 60 * scale)
+			local leftWidth = math.max(150 * scale, math.min(220 * scale, (sizeX or 830) * 0.18))
+			anchor = { x = menuWP.x + 25 * scale, y = baseY + (foundY or 0), w = math.max(90, leftWidth - 30 * scale), h = (17 * scale) + imgui.GetStyle().FramePadding.y * 2 }
+		elseif (not anchor) and snapshot.target == "page_content" and menuWP then
+			anchor = { x = menuWP.x + (sizeX or 830) * 0.55, y = menuWP.y + 90 * getMenuUiScale(), w = 80, h = 44 }
+		elseif (not anchor) and (snapshot.target == "start_button" or snapshot.target == "add_button" or snapshot.target == "sell_scan") and menuWP then
+			anchor = { x = menuWP.x + (sizeX or 830) - 150 * getMenuUiScale(), y = menuWP.y + 75 * getMenuUiScale(), w = 120 * getMenuUiScale(), h = 34 * getMenuUiScale() }
+		end
+		local chooserBounds = nil
+		local luaPreviewBounds = nil
+		local htmlPreviewBounds = nil
+		if baronChooserVisible and ARZ_INTERFACE_CHOOSER then
+			luaPreviewBounds = ARZ_INTERFACE_CHOOSER.lua_bounds
+			htmlPreviewBounds = ARZ_INTERFACE_CHOOSER.html_bounds
+		end
+		local baronFont = fonts and (fonts.baron or fonts[18]) or nil
+		if baronFont then imgui.PushFont(baronFont) end
+		local scriptBounds = nil
+		if menuWP and sizeX and sizeY then
+			scriptBounds = { x = menuWP.x, y = menuWP.y, w = sizeX, h = sizeY }
+		end
+		local okBaronRender, baronRenderError = pcall(ARZ_BARON_ASSISTANT.render, imgui, {
+			screenWidth = screenWidth, screenHeight = screenHeight, anchor = anchor,
+			chooser = baronChooserVisible, chooserBounds = chooserBounds,
+			luaPreviewBounds = luaPreviewBounds, htmlPreviewBounds = htmlPreviewBounds,
+			scriptBounds = scriptBounds
+		})
+		if baronFont then imgui.PopFont() end
+		if not okBaronRender then
+			print("[ArzMarket][Baron] render failed: " .. tostring(baronRenderError))
+		end
+	end
+
 	if ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true then
 		frame.HideCursor = false
 		if imgui.SetNextWindowFocus then
@@ -20557,6 +22035,11 @@ function imgui.CreateLeftMenu(menuSections, selectedSection, currentMenuIndex, a
 	local cursorScreenPos = imgui.GetCursorScreenPos()
 
 	SelectMenuVertical = cursorScreenPos.y
+	local isBaronInterfacePreview = ARZ_INTERFACE_LUA_PREVIEW and ARZ_INTERFACE_LUA_PREVIEW.active == true
+	local baronNavAnchors = {
+		[1] = "nav_sell", [2] = "nav_buy", [3] = "nav_settings", [4] = "nav_logs",
+		[5] = "nav_marketplace", [7] = "nav_mods", [8] = "nav_storage"
+	}
 
 	if UI_ANIM_BUTTON == nil then
 		UI_ANIM_BUTTON = {
@@ -20587,6 +22070,7 @@ function imgui.CreateLeftMenu(menuSections, selectedSection, currentMenuIndex, a
 		hovered = imgui.ImVec4(0.08, 0.09, 0.19, 0)
 	}
 
+	if not isBaronInterfacePreview then
 	if marketState.autoUpdateCheck[1] then
 		marketState.autoUpdateCheck[1] = false
 		marketState.autoUpdateCheck[2] = true
@@ -20637,6 +22121,7 @@ function imgui.CreateLeftMenu(menuSections, selectedSection, currentMenuIndex, a
 		save_all()
 		sputnik_Manager()
 	end
+	end
 
 	local function var_146_7(fromValue, toValue, startTime, duration)
 		local var_149_0 = os.clock() - startTime
@@ -20654,6 +22139,9 @@ function imgui.CreateLeftMenu(menuSections, selectedSection, currentMenuIndex, a
 	if UI_ANIM_BUTTON.pending_menu and os.clock() >= UI_ANIM_BUTTON.menu_change_time then
 		selectedMenuPage = UI_ANIM_BUTTON.pending_menu
 		UI_ANIM_BUTTON.pending_menu = nil
+		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.onPageChanged) == "function" then
+			pcall(ARZ_BARON_ASSISTANT.onPageChanged, arzBaronCurrentPageName())
+		end
 	end
 
 	for sectionIndex, section in ipairs(menuSections) do
@@ -20668,34 +22156,63 @@ function imgui.CreateLeftMenu(menuSections, selectedSection, currentMenuIndex, a
 
 			local cursorX, cursorY = getCursorPos()
 			local var_146_10 = cursorX >= cursorScreenPos.x and cursorX <= cursorScreenPos.x + selectedSection.x + selectorExtraWidth and cursorY >= cursorScreenPos.y + var_146_0 and cursorY <= cursorScreenPos.y + var_146_0 + var_146_2
+			if not isBaronInterfacePreview and baronNavAnchors[var_146_1] then
+				arzBaronAnchorRecordRect(
+					baronNavAnchors[var_146_1],
+					cursorScreenPos.x,
+					cursorScreenPos.y + var_146_0,
+					selectedSection.x + selectorExtraWidth,
+					var_146_2
+				)
+			end
 
 			local sameMenuSubpage = var_146_1 == selectedMenuPage and modificationState.isMenuSubpageActive(var_146_1)
 
-			if var_146_10 and imgui.IsMouseClicked(0) and (var_146_1 ~= selectedMenuPage or sameMenuSubpage) and not marketState.isPopupActive then
-				resetIO()
-
-				buyBudgetWindowVisible[0] = false
-				sellFilterWindowVisible[0] = false
-				marketState.custom_add_item[0] = false
-				selectedListItem = {
-					imguiNew.int(333),
-					333,
-					false
-				}
-
-				modificationState.returnToMenuRoot(var_146_1)
-
-				if var_146_1 ~= selectedMenuPage then
-					UI_ANIM_BUTTON.label = itemLabel
-					UI_ANIM_BUTTON.time = os.clock()
-					UI_ANIM_BUTTON.pos.last = UI_ANIM_BUTTON.pos.current
-					UI_ANIM_BUTTON.pos.next = cursorScreenPos.y + var_146_0
-					UI_ANIM_BUTTON.menu_change_time = os.clock() + UI_ANIM_BUTTON.duration / 2
-					ini.cfg.lastCrrSelect = var_146_1
-					UI_ANIM_BUTTON.pending_menu = var_146_1
+			if not isBaronInterfacePreview and var_146_10 and imgui.IsMouseClicked(0) and var_146_1 == selectedMenuPage and not marketState.isPopupActive then
+				if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.onPageChanged) == "function" then
+					pcall(ARZ_BARON_ASSISTANT.onPageChanged, arzBaronCurrentPageName())
 				end
+			end
 
-				save_all()
+			if var_146_10 and imgui.IsMouseClicked(0) and (var_146_1 ~= selectedMenuPage or sameMenuSubpage) and not marketState.isPopupActive then
+				local previewState = ARZ_INTERFACE_LUA_PREVIEW
+				if previewState and previewState.active == true then
+					if previewState.interactive == true then
+						previewState.selectedPage = var_146_1
+						selectedMenuPage = var_146_1
+						UI_ANIM_BUTTON.label = itemLabel
+						UI_ANIM_BUTTON.time = os.clock()
+						UI_ANIM_BUTTON.pos.current = cursorScreenPos.y + var_146_0
+						UI_ANIM_BUTTON.pos.last = UI_ANIM_BUTTON.pos.current
+						UI_ANIM_BUTTON.pos.next = UI_ANIM_BUTTON.pos.current
+						UI_ANIM_BUTTON.pending_menu = nil
+					end
+				else
+					resetIO()
+
+					buyBudgetWindowVisible[0] = false
+					sellFilterWindowVisible[0] = false
+					marketState.custom_add_item[0] = false
+					selectedListItem = {
+						imguiNew.int(333),
+						333,
+						false
+					}
+
+					modificationState.returnToMenuRoot(var_146_1)
+
+					if var_146_1 ~= selectedMenuPage then
+						UI_ANIM_BUTTON.label = itemLabel
+						UI_ANIM_BUTTON.time = os.clock()
+						UI_ANIM_BUTTON.pos.last = UI_ANIM_BUTTON.pos.current
+						UI_ANIM_BUTTON.pos.next = cursorScreenPos.y + var_146_0
+						UI_ANIM_BUTTON.menu_change_time = os.clock() + UI_ANIM_BUTTON.duration / 2
+						ini.cfg.lastCrrSelect = var_146_1
+						UI_ANIM_BUTTON.pending_menu = var_146_1
+					end
+
+					save_all()
+				end
 			end
 
 			local isSelectedItem = var_146_1 == selectedMenuPage
@@ -21088,6 +22605,15 @@ function imgui.ToggleButton(label, value, size)
 	return clicked
 end
 
+
+function arzBaronTutorialLocksInterface()
+	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+	local ok, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
+	if not ok or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
+	local moduleId = tostring(assistantState.current_module or "")
+	return moduleId == "tutorial_lua" or moduleId == "tutorial_html"
+end
+
 function onWindowMessage(message, wparam, lparam)
 	-- HTML/CEF fallback: close ArzMarket on Escape even if the browser-side
 	-- key handler fails. Handle both keydown and keyup, but close only on keyup.
@@ -21153,6 +22679,17 @@ end
 function onScriptTerminate(script, quitGame)
 	if script == thisScript() then
 		if type(arzUiExtensionsShutdown) == "function" then pcall(arzUiExtensionsShutdown, quitGame == true) end
+		if quitGame ~= true then
+			local pauseOwnsCursor = type(isPauseMenuActive) == "function" and isPauseMenuActive()
+			local chatOwnsCursor = type(sampIsChatInputActive) == "function" and sampIsChatInputActive()
+			local dialogOwnsCursor = type(sampIsDialogActive) == "function" and sampIsDialogActive()
+			if not pauseOwnsCursor and not chatOwnsCursor and not dialogOwnsCursor then
+				pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
+				pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
+				pcall(function() if sampShowCursor then sampShowCursor(false) end end)
+				pcall(function() if showCursor then showCursor(false) end end)
+			end
+		end
 		-- Cancel every in-flight network worker before AutoReboot or MoonLoader unloads this Lua state.
 		if type(telegramOriginalCleanup) == "function" then pcall(telegramOriginalCleanup) end
 		if type(arzScriptOfflineCancelInFlight) == "function" then pcall(arzScriptOfflineCancelInFlight) end
@@ -21574,6 +23111,16 @@ function loadFonts(fontSizes, rasterScale)
 	fontConfig[18] = addMarketFont(18)
 	imgui.GetIO().Fonts:AddFontFromMemoryCompressedBase85TTF(fa.get_font_data_base85(), 16 * scale, iconRanges, var_171_2)
 
+	-- Baron uses a fixed font independent from the user's interface scale so every
+	-- assistant replica has the same typography in Lua and HTML.
+	local windowsDir = os.getenv("WINDIR") or "C:\\Windows"
+	local baronFontPath = windowsDir .. "\\Fonts\\arialbd.ttf"
+	if not doesFileExist(baronFontPath) then baronFontPath = windowsDir .. "\\Fonts\\arial.ttf" end
+	if doesFileExist(baronFontPath) then
+		fontConfig.baron = imgui.GetIO().Fonts:AddFontFromFileTTF(baronFontPath, 18, nil, imgui.GetIO().Fonts:GetGlyphRangesCyrillic())
+	end
+	fontConfig.baron = fontConfig.baron or fontConfig[18]
+
 	return fontConfig
 end
 
@@ -21956,6 +23503,11 @@ end
 
 function cfg_menu(linkTextColor)
 	imgui.PushFont(fonts[18])
+	if ARZ_BARON_ASSISTANT and type(arzBaronAnchorRecordRect) == "function" then
+		local settingsPos = imgui.GetCursorScreenPos()
+		local settingsAvail = imgui.GetContentRegionAvail()
+		arzBaronAnchorRecordRect("settings_main", settingsPos.x, settingsPos.y, math.max(120, settingsAvail.x), math.max(120, settingsAvail.y))
+	end
 	local settingsToolbarButtonWidth = 35
 	local settingsToolbarGap = imgui.GetStyle().ItemSpacing.x
 	local settingsToolbarWidth = settingsToolbarButtonWidth * 3 + settingsToolbarGap * 2
@@ -21989,6 +23541,9 @@ function cfg_menu(linkTextColor)
 	local appearanceButtonSize = imgui.ImVec2(math.min(360 * appearanceUiScale, imgui.GetContentRegionAvail().x), 40)
 	imgui.PushFont(fonts[20])
 	local appearanceClicked = imgui.Button("Оформление", appearanceButtonSize)
+	if ARZ_BARON_ASSISTANT and type(arzBaronAnchorRecordItem) == "function" then
+		arzBaronAnchorRecordItem("settings_appearance_tab")
+	end
 	imgui.PopFont()
 	-- Use the actual rendered item rectangle. imgui.Button is wrapped by the UI-scale
 	-- layer, so the final button may be larger than the requested ImVec2.
@@ -22004,6 +23559,9 @@ function cfg_menu(linkTextColor)
 	)
 	if appearanceClicked then
 		modificationState.settingsInterfaceOpen = true
+		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.event) == "function" then
+			pcall(ARZ_BARON_ASSISTANT.event, "settings_section_changed", { section = "appearance" })
+		end
 		imgui.PopFont()
 		return
 	end
@@ -23608,6 +25166,72 @@ function SaveInput(inputText)
 	setClipboardText(inputText)
 end
 
+function baronTradeConfigFiles(side)
+	local folder = side == "sell" and "sell-cfg" or "buy-cfg"
+	local path = getWorkingDirectory() .. "\\ArzMarket\\" .. folder
+	local files = {}
+	local ok, iter, dirObj = pcall(lfs.dir, path)
+	if not ok or type(iter) ~= "function" then
+		return files
+	end
+	for fileName in iter, dirObj do
+		if type(fileName) == "string" and fileName:lower():match("%.json$") then
+			files[#files + 1] = fileName
+		end
+	end
+	table.sort(files, function(a, b) return a:lower() < b:lower() end)
+	return files
+end
+
+function baronLoadTradeConfig(side, fileName)
+	if type(fileName) ~= "string" or fileName == "" then
+		return false
+	end
+	local folder = side == "sell" and "sell-cfg" or "buy-cfg"
+	local loaded = loadConfig("moonloader/ArzMarket/" .. folder .. "/" .. fileName)
+	if type(loaded) ~= "table" then
+		return false
+	end
+	marketFinishAllItemEditors()
+	if side == "sell" then
+		if tradeAutomation.sell then return false end
+		sellList = loaded
+		loadedSellConfig = fileName
+		configFileNames.sell = fileName
+		ini.cfg.load_config_sell = fileName
+	else
+		if tradeAutomation.buy then return false end
+		buyList = loaded
+		loadedBuyConfig = fileName
+		configFileNames.buy = fileName
+		ini.cfg.load_config_buy = fileName
+	end
+	save_all()
+	return true
+end
+
+function baronRenderTradeConfigSelector(side)
+	local active = side == "sell" and loadedSellConfig or loadedBuyConfig
+	local preview = active ~= "" and active:gsub("%.json$", "") or u8:decode("Не выбран")
+	imgui.PushFont(fonts[18])
+	imgui.Text(u8(u8:decode("Конфиг:")))
+	imgui.SameLine()
+	imgui.PushItemWidth(math.max(150, 190 * getMenuUiScale()))
+	local opened = imgui.BeginCombo("##baron_trade_config_" .. side, u8(preview))
+	arzBaronAnchorRecordItem(side == "sell" and "sell_config" or "buy_config")
+	if opened then
+		for _, fileName in ipairs(baronTradeConfigFiles(side)) do
+			local selected = fileName == active
+			if imgui.Selectable(u8(fileName:gsub("%.json$", "")), selected) then
+				baronLoadTradeConfig(side, fileName)
+			end
+		end
+		imgui.EndCombo()
+	end
+	imgui.PopItemWidth()
+	imgui.PopFont()
+end
+
 function buy(frame)
 	if timers[1] + 2 <= os.time() or json_vlad == nil then
 		timers[1] = os.time()
@@ -23656,7 +25280,9 @@ function buy(frame)
 	imgui.Hint("ARROWS_ROTATE1", "Моментально обновит список предметов на скупку.\nНе нужно бежать к своей лавке, все происходит удалённо!", false)
 	imgui.SameLine()
 
-	if imgui.CustomOnlyBorderButton(fa("EQUALS") .. "##apply_avg_buy", imgui.ImVec2(30, 27)) then
+	local baronBuyAutoPricesClicked = imgui.CustomOnlyBorderButton(fa("EQUALS") .. "##apply_avg_buy", imgui.ImVec2(30, 27))
+	arzBaronAnchorRecordItem("buy_auto_prices")
+	if baronBuyAutoPricesClicked then
 		applyAveragePricesToBuyList()
 	end
 
@@ -23684,6 +25310,7 @@ function buy(frame)
 	imgui.PushItemWidth(255)
 	imgui.PopFont()
 	imgui.NewInput("Поиск предметов", logSearchBuffer, 255, "search_buy")
+	arzBaronAnchorRecordItem("buy_search")
 	imgui.PopItemWidth()
 	imgui.PushFont(fonts[18])
 	imgui.Hint("search_sell", "Данная функция ведет поиск в двух столбцах, в правом и левом.\nВы можете найти какой-то товар, добавить.\nТак же не забывайте что вы можете найти товар, затем выбрать для переноса, очистить поиск и перетащить куда вам нужно.", false)
@@ -26112,7 +27739,9 @@ function sell(frame)
 	imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
 	imgui.PushFont(fonts[18])
 
-	if imgui.CustomOnlyBorderButton(sellScanMode and fa("MAGNIFYING_GLASS_LOCATION") or fa("magnifying_glass"), imgui.ImVec2(30, 27)) then
+	local baronSellScanClicked = imgui.CustomOnlyBorderButton(sellScanMode and fa("MAGNIFYING_GLASS_LOCATION") or fa("magnifying_glass"), imgui.ImVec2(30, 27))
+	arzBaronAnchorRecordItem("sell_scan")
+	if baronSellScanClicked then
 		sellScanMode = not sellScanMode
 
 		if sellScanMode then
@@ -26136,6 +27765,26 @@ function sell(frame)
 	end
 
 	imgui.Hint("ARROW_UP_SHORT_WIDE", "Функция заполнения предметов в правый столбец.\n Если стрелка кнопки смотрит вниз то при добавлении предмета, он будет добавлен вниз.", false)
+	imgui.SameLine()
+
+	if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.isActive and ARZ_BARON_ASSISTANT.isActive() then
+		local baronFilterSnapshot = arzBaronAssistantSnapshot("sell", "lua")
+		if baronFilterSnapshot then
+			local baronFilterStep = tostring(baronFilterSnapshot.step or "")
+			if baronFilterStep == "sell_filter_prompt" or baronFilterStep == "sell_currency" or baronFilterStep == "sell_config" or baronFilterStep == "go_buy" then
+				ARZ_BARON_TRADE_FILTER_OPEN.sell = false
+			end
+		end
+	end
+
+	local baronSellFilterClicked = imgui.CustomOnlyBorderButton(u8(u8:decode("Фильтр")) .. "##baron_sell_filter", imgui.ImVec2(72, 27))
+	arzBaronAnchorRecordItem("sell_filter_button")
+	if baronSellFilterClicked then
+		ARZ_BARON_TRADE_FILTER_OPEN.sell = not ARZ_BARON_TRADE_FILTER_OPEN.sell
+		if ARZ_BARON_TRADE_FILTER_OPEN.sell and ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
+			ARZ_BARON_ASSISTANT.event("filter_opened", { side = "sell" })
+		end
+	end
 	imgui.SameLine()
 
 	if imgui.CustomOnlyBorderButton(fa("PLUS"), imgui.ImVec2(30, 27)) then
@@ -26177,7 +27826,9 @@ function sell(frame)
 	imgui.Hint("search_sell", "Данная функция ведет поиск в двух столбцах, в правом и левом.\nВы можете найти какой-то товар, добавить.\nТак же не забывайте что вы можете найти товар, затем выбрать для переноса, очистить поиск и перетащить куда вам нужно.", false)
 	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 285, 4))
 
-	if imgui.CustomOnlyBorderButton(viceCityMode and "SA$" or "VC$", imgui.ImVec2(35, 27)) then
+	local baronSellCurrencyClicked = imgui.CustomOnlyBorderButton(viceCityMode and "SA$" or "VC$", imgui.ImVec2(35, 27))
+	arzBaronAnchorRecordItem("sell_currency")
+	if baronSellCurrencyClicked then
 		viceCityMode = not viceCityMode
 		ini.cfg.vice_city_mode = viceCityMode
 
@@ -26236,6 +27887,7 @@ function sell(frame)
 
 	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
 	imgui.PopFont()
+	baronRenderTradeConfigSelector("sell")
 
 	if json_vlads ~= nil and #json_vlads ~= 0 then
 		local sellListsAvail = imgui.GetContentRegionAvail()
@@ -26246,6 +27898,7 @@ function sell(frame)
 		local sellListsHeight = math.max(120, sellListsAvail.y - sellFooterHeight)
 		local sellLeftListHeight = math.max(120, sellListsAvail.y)
 		imgui.CustomInvisibleChild("sellLeftList", imgui.ImVec2(sellLeftWidth, sellLeftListHeight), true, imgui.WindowFlags.NoScrollWithMouse)
+		arzBaronAnchorRecordWindow("sell_inventory")
 
 		if json_vlads ~= nil then
 			imgui.Scroller("sellLeftList", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
@@ -26295,6 +27948,10 @@ function sell(frame)
 
 								addToData(var_269_1, sellList, sortMode and 1 or nil)
 								tradeFilterMarkNewItem("sell", var_269_1)
+								ARZ_BARON_LAST_SELL_ITEM_NAME = tostring(itemData.item or "")
+								if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
+									ARZ_BARON_ASSISTANT.event("sell_item_selected", { name = itemData.item })
+								end
 
 								if marketState.filter_five[0] then
 									marketState.applyScrollMax = true
@@ -26331,6 +27988,7 @@ function sell(frame)
 		local var_269_2 = 0
 
 		imgui.CustomInvisibleChild("sellRightList", imgui.ImVec2(sellRightWidth, sellListsHeight), true, imgui.WindowFlags.NoScrollWithMouse)
+		arzBaronAnchorRecordWindow("sell_selected_items")
 
 		local var_269_3 = {}
 		local var_269_4 = {}
@@ -26460,9 +28118,19 @@ function sell(frame)
 							if var_269_5[visibleItemIndex + 1].enabled == true then
 								if imgui.CustomOnlyBorderButton(fa("TOGGLE_ON") .. "##sell_toggle_" .. sellRowUiKey, imgui.ImVec2(50)) then
 									sellRowItem.enabled = false
+									if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
+										ARZ_BARON_ASSISTANT.event("sell_status_toggled", { name = sellRowItem.name, enabled = false })
+									end
 								end
 							elseif imgui.CustomOnlyBorderButton(fa("TOGGLE_OFF") .. "##sell_toggle_" .. sellRowUiKey, imgui.ImVec2(50)) then
 								sellRowItem.enabled = true
+								if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
+									ARZ_BARON_ASSISTANT.event("sell_status_toggled", { name = sellRowItem.name, enabled = true })
+								end
+							end
+
+							if tostring(sellRowItem.name or "") == tostring(ARZ_BARON_LAST_SELL_ITEM_NAME or "") then
+								arzBaronAnchorRecordItem("sell_status_toggle")
 							end
 
 							imgui.SameLine()
@@ -26833,6 +28501,9 @@ function sell(frame)
 			imgui.EndCustomInvisibleChild()
 		end
 	else
+		local baronEmptyInventoryPos = imgui.GetCursorScreenPos()
+		local baronEmptyInventoryAvail = imgui.GetContentRegionAvail()
+		arzBaronAnchorRecordRect("sell_inventory", baronEmptyInventoryPos.x, baronEmptyInventoryPos.y, math.max(120, baronEmptyInventoryAvail.x), math.max(100, baronEmptyInventoryAvail.y))
 		imgui.PushFont(fonts[18])
 		imgui.SetCursorPosY(imgui.GetWindowHeight() * 0.45)
 		imgui.CenterText("Для продолжения отсканируйте инвентарь")
@@ -27887,6 +29558,19 @@ function renderArzPaletteSettings()
 	local buttonWidth = math.max(120, (available - gap) / 2)
 	local currentKey = tostring(menuThemeConfig.palette_key or "arzmarket_default")
 
+	local globalPalette = arzGlobalPaletteEnsureStorage()
+	ARZ_GLOBAL_GLOW_UI = ARZ_GLOBAL_GLOW_UI or imguiNew.int(tonumber(globalPalette.glow) or 80)
+	ARZ_GLOBAL_GLOW_UI[0] = tonumber(globalPalette.glow) or 80
+	imgui.Text("Свечение")
+	imgui.PushItemWidth(math.max(180, math.min(360, available * 0.72)))
+	if imgui.SliderInt("##arz_global_glow", ARZ_GLOBAL_GLOW_UI, 0, 100, "%d%%") then
+		arzGlobalPaletteSet({ glow = tonumber(ARZ_GLOBAL_GLOW_UI[0]) or 100 })
+	end
+	imgui.PopItemWidth()
+	if ARZ_BARON_ASSISTANT then arzBaronAnchorRecordItem("settings_glow") end
+	imgui.SetCursorPosY(imgui.GetCursorPos().y + 7)
+
+	local themesAnchorStart = imgui.GetCursorScreenPos()
 	for index, themeKey in ipairs(ARZ_THEME_ORDER) do
 		local preset = ARZ_THEME_PRESETS[themeKey]
 		local selected = currentKey == themeKey
@@ -27910,6 +29594,11 @@ function renderArzPaletteSettings()
 		end
 	end
 
+	local themesAnchorEnd = imgui.GetCursorScreenPos()
+	if ARZ_BARON_ASSISTANT then
+		arzBaronAnchorRecordRect("settings_themes", themesAnchorStart.x, themesAnchorStart.y, math.max(120, available), math.max(40, themesAnchorEnd.y - themesAnchorStart.y))
+	end
+
 	local activePreset = ARZ_THEME_PRESETS[currentKey] or ARZ_THEME_PRESETS.arzmarket_default
 	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
 	imgui.TextDisabled(u8(activePreset.hint))
@@ -27923,6 +29612,9 @@ end
 
 function menu_settings()
 	imgui.CustomInvisibleChild("menu_settings", imgui.ImVec2(-1, -1), true, imgui.WindowFlags.NoScrollWithMouse)
+	if ARZ_BARON_ASSISTANT and type(arzBaronAnchorRecordWindow) == "function" then
+		arzBaronAnchorRecordWindow("settings_appearance_panel")
+	end
 	imgui.Scroller("menu_settings1", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
 
 	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
@@ -27986,7 +29678,7 @@ function menu_settings()
 
 	imgui.Text("Размер интерфейса")
 	imgui.TextDisabled("Текст, кнопки и элементы. Размер окна - мышью за правый нижний угол.")
-	local appliedMenuScalePercent = math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 100)))
+	local appliedMenuScalePercent = math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 120)))
 	local menuScaleApplyWidth = 115
 	local menuScaleGap = imgui.GetStyle().ItemSpacing.x
 	local menuScaleAvailable = imgui.GetContentRegionAvail().x
@@ -28010,7 +29702,7 @@ function menu_settings()
 			pcall(writeJsonFile, windowThemeConfig, windowThemePath)
 
 			ini.cfg.lastCrrSelect = 3
-			ini.cfg.menu_scale_percent = math.max(100, math.min(150, math.floor(tonumber(menuScalePercent[0]) or 100)))
+			ini.cfg.menu_scale_percent = math.max(100, math.min(150, math.floor(tonumber(menuScalePercent[0]) or 120)))
 			if modificationState and modificationState.persistMainWindowSize then
 				pcall(modificationState.persistMainWindowSize, true)
 			end
@@ -29755,6 +31447,14 @@ function sampev.onShowDialog(dialogId, style, title, button1, button2, text)
 
 			sellScanMode = false
 
+			local htmlExtension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+			if htmlExtension and type(htmlExtension.invalidate_trade_source) == "function" then
+				pcall(htmlExtension.invalidate_trade_source, "sell")
+			end
+			if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.event) == "function" then
+				ARZ_BARON_ASSISTANT.event("sell_scan_completed", { side = "sell" })
+			end
+
 			AFKMessage(u8:decode("Сканирование инвентаря завершено."))
 			sampSendDialogResponsed(dialogId, 0, 0)
 
@@ -30151,7 +31851,14 @@ function sampev.onSendCommand(command)
 		return false
 	end
 
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.handleOutgoingCommand) == "function" then
+		if ARZ_BARON_ASSISTANT.handleOutgoingCommand(command) == true then return false end
+	end
+
 	if command == "/crr" then
+		if type(arzBaronOpenSavedProgress) == "function" and arzBaronOpenSavedProgress() == true then
+			return false
+		end
 		deAFKMessage(debug.getinfo(1, "l"), "open menu [onSendCommand]")
 
 		kifir = 1
@@ -33342,7 +35049,7 @@ end
 -- ============================================================
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
-ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
+ARZ_COMPONENTS.bootstrap.manifest_url = "__ARZMARKET_COMPONENTS_MANIFEST_RAW_URL__"
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"
@@ -33351,6 +35058,25 @@ ARZ_COMPONENTS.bootstrap.manifest_download_path = getWorkingDirectory() .. "\\Ar
 ARZ_COMPONENTS.bootstrap.required_local = {
 	"ArzMarket/html/assets/arizona-cactus.webp",
 	"ArzMarket/html/assets/arizona-logo.webp",
+	"ArzMarket/html/assets/baron/approval.png",
+	"ArzMarket/html/assets/baron/caution.png",
+	"ArzMarket/html/assets/baron/celebration.png",
+	"ArzMarket/html/assets/baron/neutral.png",
+	"ArzMarket/html/assets/baron/point_down_right.png",
+	"ArzMarket/html/assets/baron/point_left.png",
+	"ArzMarket/html/assets/baron/point_right.png",
+	"ArzMarket/html/assets/baron/presenting.png",
+	"ArzMarket/html/assets/baron/point_up_left.png",
+	"ArzMarket/html/assets/baron/point_up_right.png",
+	"ArzMarket/html/assets/baron/question.png",
+	"ArzMarket/html/assets/baron/sad.png",
+	"ArzMarket/html/assets/baron/talking.png",
+	"ArzMarket/html/assets/baron/thinking.png",
+	"ArzMarket/html/assets/baron/thinking_question.png",
+	"ArzMarket/html/assets/baron/waving.png",
+	"ArzMarket/html/assets/baron/bubble_welcome_upper_left.png",
+	"ArzMarket/html/assets/baron/bubble_welcome_upper_right.png",
+	"ArzMarket/html/css/assistant-v78.css",
 	"ArzMarket/html/css/average-prices-v56.css",
 	"ArzMarket/html/css/buy-polish.css",
 	"ArzMarket/html/css/buy-v13.css",
@@ -33388,8 +35114,13 @@ ARZ_COMPONENTS.bootstrap.required_local = {
 	"ArzMarket/html/css/windowing.css",
 	"ArzMarket/html/index.html",
 	"ArzMarket/html/js/app.js",
+	"ArzMarket/html/js/assistant-v78.js",
 	"ArzMarket/html/js/buy-polish.js",
 	"ArzMarket/lua/arz_item_icons.lua",
+	"modules/ArzMarketQuant/baron_assistant.lua",
+	"modules/ArzMarketQuant/baron_onboarding.lua",
+	"modules/ArzMarketQuant/baron_tutorial_lua.lua",
+	"modules/ArzMarketQuant/baron_tutorial_html.lua",
 	"modules/ArzMarketQuant/buyroute_core.lua",
 	"modules/ArzMarketQuant/storage_core.lua",
 	"modules/arz_html_ui.lua",

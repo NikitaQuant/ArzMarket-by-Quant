@@ -140,3 +140,39 @@
 #app[data-page="settings"] .settings-content[data-section="appearance"] .settings-card-body {
   height: auto !important;
 }
+
+
+/* v87: Settings uses only the section buttons at the top. */
+#app[data-page="settings"] .page-header {
+  display: none !important;
+}
+#app[data-page="settings"] .content {
+  grid-template-rows: auto minmax(0,1fr) !important;
+}
+
+/* v87: remove explanatory gray copy from Settings, keep only actionable labels/data. */
+#app[data-page="settings"] .settings-card-head p,
+#app[data-page="settings"] .settings-row-copy small,
+#app[data-page="settings"] .settings-theme small {
+  display: none !important;
+}
+
+
+/* Settings: straighten the Storage nav button and separate it from the footer card. */
+#app[data-page="settings"] .nav-item[data-page="storage"] {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  width: 100% !important;
+  min-height: calc(60px * var(--ui-scale)) !important;
+  margin: 0 0 calc(8px * var(--ui-scale)) 0 !important;
+  box-sizing: border-box !important;
+}
+#app[data-page="settings"] .nav-item[data-page="storage"] .nav-icon,
+#app[data-page="settings"] .nav-item[data-page="storage"] > span:last-child {
+  position: relative !important;
+  top: 0 !important;
+}
+#app[data-page="settings"] .sidebar-footer {
+  margin-top: calc(6px * var(--ui-scale)) !important;
+}

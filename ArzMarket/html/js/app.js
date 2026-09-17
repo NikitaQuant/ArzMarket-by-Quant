@@ -4,6 +4,7 @@
   const token = document.body.dataset.token || '';
   const urlParams = new URLSearchParams(window.location.search);
   const previewMode = urlParams.get('preview') === '1';
+  const temporaryMode = urlParams.get('temporary') === '1';
   const requestedInitialPage = urlParams.get('page');
   const initialPage = ['sell','settings','logs','marketplace','mods','storage'].includes(requestedInitialPage) ? requestedInitialPage : 'buy';
   const requestedSettingsSection = urlParams.get('section');
@@ -29,6 +30,7 @@
     sortDirection: 0,
     searchFocused: false,
     sellInventorySearch: '',
+    sellStatusFilter: 'all',
     sellMarketStats: new Map(),
     sellMarketPending: new Set(),
     averagePrices: {cache:new Map(),pending:new Map(),tooltip:null,hoverTimer:0,hideTimer:0,activeKey:null,storageKey:null},
@@ -37,14 +39,218 @@
       page: 1, perPage: 10, selectedId: null
     },
     storage: {search:'', type:'all', place:'all', selectedKey:null, tab:'distribution'},
-    settings: {section:initialSettingsSection, mergeSelected:new Set(), pendingScale:null},
+    settings: {section:initialSettingsSection, mergeSelected:new Set(), pendingScale:null, paletteDragging:false},
+    modsSection: 'scripts',
     marketplace: {search:'', selectedShopKey:null},
     interfaceScalePercent: 100,
     minimalMode: false,
     minimalModeHydrated: false
   };
 
+  // Non-native presets keep the ArzMarket layer hierarchy: neutral dark base,
+  // clearly separated panels/surfaces, and theme identity mainly in accents.
+  const HTML_THEME_PRESETS = {
+    arzmarket_default:{bg:'#0b1721',panel:'#10202c',surface:'#0d1c27',accent:'#42dca0',accent2:'#67efb4',text:'#e7f0f6',muted:'#8195a7',border:'#324b5d'},
+    classic_blue:{bg:'#0b1621',panel:'#122131',surface:'#0e1c28',accent:'#4b8dff',accent2:'#7cb7ff',text:'#f3f7ff',muted:'#9fb4d0',border:'#3e5c77'},
+    midnight_blue:{bg:'#0b1620',panel:'#121e2c',surface:'#0e1a27',accent:'#7a78ff',accent2:'#a795ff',text:'#f2f2ff',muted:'#a7aac7',border:'#455777'},
+    deep_ocean:{bg:'#0a1720',panel:'#0f222d',surface:'#0c1c27',accent:'#22b8f0',accent2:'#4dd8c4',text:'#eefbff',muted:'#90b9c1',border:'#36626d'},
+    cyberpunk_neon:{bg:'#0b1620',panel:'#131f2d',surface:'#0e1a27',accent:'#2bd9fe',accent2:'#b65cff',text:'#f5f7ff',muted:'#9eade0',border:'#474e77'},
+    sunset_vibes:{bg:'#0d1620',panel:'#181d29',surface:'#121a25',accent:'#ff7a59',accent2:'#f7b955',text:'#fff7f2',muted:'#d9b7b0',border:'#525d5c'},
+    dark_forest:{bg:'#0a161e',panel:'#0f2025',surface:'#0d1c22',accent:'#45c987',accent2:'#9ed66f',text:'#eff8f2',muted:'#a5c5ae',border:'#436160'},
+    high_contrast:{bg:'#050608',panel:'#14171d',surface:'#0e1217',accent:'#ffd84d',accent2:'#6cd6ff',text:'#ffffff',muted:'#c4d7e3',border:'#747b84'},
+    premium_luxury:{bg:'#0b161f',panel:'#141d25',surface:'#0f1a23',accent:'#d2a85e',accent2:'#f0d394',text:'#faf7f0',muted:'#bdb6aa',border:'#506166'}
+  };
+
+  function themeHexRgb(hex) {
+    const clean = String(hex || '').replace('#','').trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(clean)) return {r:0,g:0,b:0};
+    return {r:parseInt(clean.slice(0,2),16),g:parseInt(clean.slice(2,4),16),b:parseInt(clean.slice(4,6),16)};
+  }
+
+  function themeRgbHex(rgb) {
+    const channel = value => Math.max(0,Math.min(255,Math.round(Number(value) || 0))).toString(16).padStart(2,'0');
+    return `#${channel(rgb.r)}${channel(rgb.g)}${channel(rgb.b)}`;
+  }
+
+  function themeMix(first, second, amount) {
+    const a=themeHexRgb(first), b=themeHexRgb(second), t=Math.max(0,Math.min(1,Number(amount)||0));
+    return themeRgbHex({r:a.r+(b.r-a.r)*t,g:a.g+(b.g-a.g)*t,b:a.b+(b.b-a.b)*t});
+  }
+
+  function themeRgba(hex, alpha) {
+    const rgb=themeHexRgb(hex);
+    return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0,Math.min(1,Number(alpha)||0)).toFixed(3)})`;
+  }
+
+  function themeClamp01(value) {
+    return Math.max(0, Math.min(1, Number(value) || 0));
+  }
+
+  function themeNormalizeHex(value, fallback = '#4B8DFF') {
+    const raw = String(value || '').trim().toUpperCase();
+    return /^#[0-9A-F]{6}$/.test(raw) ? raw : fallback;
+  }
+
+  function themeRgbToHsv(rgb) {
+    const r=themeClamp01((Number(rgb?.r)||0)/255), g=themeClamp01((Number(rgb?.g)||0)/255), b=themeClamp01((Number(rgb?.b)||0)/255);
+    const max=Math.max(r,g,b), min=Math.min(r,g,b), delta=max-min;
+    let h=0;
+    if (delta > 0.00001) {
+      if (max === r) h=((g-b)/delta)%6;
+      else if (max === g) h=((b-r)/delta)+2;
+      else h=((r-g)/delta)+4;
+      h/=6;
+      if (h < 0) h+=1;
+    }
+    return {h:themeClamp01(h),s:max>0?themeClamp01(delta/max):0,v:themeClamp01(max)};
+  }
+
+  function themeHsvToRgb(h, s, v) {
+    h=themeClamp01(h); s=themeClamp01(s); v=themeClamp01(v);
+    if (s <= 0.00001) {
+      const mono=Math.round(v*255);
+      return {r:mono,g:mono,b:mono};
+    }
+    const hh=(h%1)*6, i=Math.floor(hh), f=hh-i;
+    const p=v*(1-s), q=v*(1-s*f), t=v*(1-s*(1-f));
+    let r=v,g=t,b=p;
+    if (i===1) {r=q;g=v;b=p;}
+    else if (i===2) {r=p;g=v;b=t;}
+    else if (i===3) {r=p;g=q;b=v;}
+    else if (i===4) {r=t;g=p;b=v;}
+    else if (i>=5) {r=v;g=p;b=q;}
+    return {r:Math.round(r*255),g:Math.round(g*255),b:Math.round(b*255)};
+  }
+
+  function buildGlobalPaletteTokens(profile) {
+    const safe=Object.assign({base:'#4B8DFF',depth:72,saturation:82,contrast:72,glow:80},profile||{});
+    const baseHex=themeNormalizeHex(safe.base);
+    const base=themeHexRgb(baseHex);
+    const hsv=themeRgbToHsv(base);
+    const saturationFactor=Math.max(0,Math.min(100,Number(safe.saturation)||0))/100;
+    const contrastFactor=Math.max(0,Math.min(100,Number(safe.contrast)||0))/100;
+    const depthFactor=Math.max(0,Math.min(100,Number(safe.depth)||0))/100;
+    const grayscaleSource=hsv.s<=0.02;
+    const sourceValue=grayscaleSource ? themeClamp01(.20+hsv.v*.74) : themeClamp01(Math.max(hsv.v,.72+contrastFactor*.24));
+    const targetSaturation=grayscaleSource ? 0 : themeClamp01(hsv.s*(.45+saturationFactor*.95)+saturationFactor*.12);
+    const accent=themeRgbHex(themeHsvToRgb(hsv.h,targetSaturation,sourceValue));
+    const secondaryHue=(hsv.h+.055+contrastFactor*.018)%1;
+    const accent2=grayscaleSource
+      ? themeRgbHex(themeHsvToRgb(hsv.h,0,themeClamp01(Math.min(1,sourceValue+.14))))
+      : themeRgbHex(themeHsvToRgb(secondaryHue,themeClamp01(targetSaturation*.76),Math.min(1,sourceValue+.09)));
+
+    // Сохраняем разделение фона и панелей как в стандартной теме ArzMarket.
+    // Выбранный цвет лишь слегка тонирует тёмные поверхности и остаётся ярким на активных элементах.
+    const neutral=HTML_THEME_PRESETS.arzmarket_default;
+    const tintStrength=grayscaleSource ? .012 : (.022+saturationFactor*.038);
+    let bg=themeMix(neutral.bg,accent,tintStrength*.50);
+    let panel=themeMix(neutral.panel,accent,tintStrength*.70);
+    let surface=themeMix(neutral.surface,accent,tintStrength*.60);
+
+    const depthDelta=depthFactor-.72;
+    const applyDepth=color=>{
+      if (depthDelta>0) return themeMix(color,'#000000',Math.min(.18,depthDelta*.34));
+      if (depthDelta<0) return themeMix(color,'#FFFFFF',Math.min(.12,(-depthDelta)*.16));
+      return color;
+    };
+    bg=applyDepth(bg);
+    panel=applyDepth(panel);
+    surface=applyDepth(surface);
+
+    const contrastDelta=contrastFactor-.72;
+    if (contrastDelta>0) {
+      bg=themeMix(bg,'#000000',Math.min(.08,contrastDelta*.10));
+      panel=themeMix(panel,'#FFFFFF',Math.min(.045,contrastDelta*.055));
+      surface=themeMix(surface,'#FFFFFF',Math.min(.03,contrastDelta*.035));
+    } else if (contrastDelta<0) {
+      const low=-contrastDelta;
+      panel=themeMix(panel,bg,Math.min(.20,low*.18));
+      surface=themeMix(surface,bg,Math.min(.15,low*.14));
+    }
+
+    const text=themeMix('#FFFFFF',accent2,grayscaleSource?0.045:(.025+saturationFactor*.020));
+    const muted=themeMix(text,panel,.44+depthFactor*.12);
+    const border=themeMix(neutral.border,accent2,grayscaleSource?(.06+contrastFactor*.10):(.08+contrastFactor*.16));
+    return {bg,panel,surface,accent,accent2,text,muted,border};
+  }
+
+  function applyThemeVariables(app, theme, glowPercent = 80) {
+    const safe = Object.assign({}, HTML_THEME_PRESETS.arzmarket_default, theme || {});
+    for (const [name,value] of Object.entries(safe)) {
+      app.style.setProperty(`--html-theme-${name}`, value);
+      document.body?.style.setProperty(`--html-theme-${name}`, value);
+    }
+    const glow=Math.max(0,Math.min(100,Number(glowPercent)||0))/100;
+    const vars={
+      '--am-bg':safe.bg,
+      '--am-bg-deep':themeMix(safe.bg,'#000000',.20),
+      '--am-panel':safe.panel,
+      '--am-panel-soft':themeMix(safe.panel,safe.bg,.34),
+      '--am-surface':safe.surface,
+      '--am-surface-2':themeMix(safe.surface,safe.panel,.34),
+      '--am-surface-hover':themeMix(safe.surface,safe.accent,.10),
+      '--am-surface-active':themeMix(safe.surface,safe.accent,.20),
+      '--am-text':safe.text,
+      '--am-text-soft':themeMix(safe.text,safe.muted,.30),
+      '--am-muted':safe.muted,
+      '--am-border':safe.border,
+      '--am-border-soft':themeRgba(safe.border,.48),
+      '--am-border-faint':themeRgba(safe.border,.24),
+      '--am-border-strong':themeMix(safe.border,safe.accent2,.18),
+      '--am-accent':safe.accent,
+      '--am-accent-dark':themeMix(safe.accent,'#000000',.22),
+      '--am-accent-2':safe.accent2,
+      '--am-accent-soft':themeRgba(safe.accent,.105),
+      '--am-accent-medium':themeRgba(safe.accent,.235),
+      '--am-accent-strong':themeRgba(safe.accent,.56),
+      '--am-accent-glow':themeRgba(safe.accent,glow*.58),
+      '--am-accent-alpha-35':themeRgba(safe.accent,glow*.35),
+      '--am-accent2-soft':themeRgba(safe.accent2,.12),
+      '--am-accent2-medium':themeRgba(safe.accent2,.30),
+      '--am-shadow':`rgba(0,0,0,${(.24+glow*.16).toFixed(3)})`,
+      '--am-white-faint':'rgba(255,255,255,.028)',
+      '--am-white-soft':'rgba(255,255,255,.055)',
+      '--am-success':'#4de5a2',
+      '--am-success-soft':'rgba(77,229,162,.13)',
+      '--am-danger':'#ef6072',
+      '--am-danger-soft':'rgba(239,96,114,.13)',
+      '--am-warning':'#f0bd65',
+      '--am-warning-soft':'rgba(240,189,101,.13)'
+    };
+    for (const [name,value] of Object.entries(vars)) {
+      app.style.setProperty(name,value);
+      document.body?.style.setProperty(name,value);
+    }
+  }
+
+  function readStoredGlobalTheme() {
+    try {
+      const parsed=JSON.parse(localStorage.getItem('arzmarket-html-global-palette') || 'null');
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) { return null; }
+  }
+
+  function applyHtmlTheme(themeKey, globalProfile = null) {
+    const app = document.getElementById('app');
+    if (!app) return;
+    const profile = globalProfile && typeof globalProfile === 'object' ? globalProfile : (themeKey === 'global_palette' ? readStoredGlobalTheme() : null);
+    const globalEnabled = themeKey === 'global_palette' && profile?.enabled === true;
+    const key = globalEnabled ? 'global_palette' : (HTML_THEME_PRESETS[themeKey] ? themeKey : 'arzmarket_default');
+    const hasPaletteSource=globalEnabled && /^#[0-9A-Fa-f]{6}$/.test(String(profile?.base||''));
+    const savedTokens=profile?.tokens && typeof profile.tokens === 'object' ? profile.tokens : null;
+    const rebuiltTokens=globalEnabled ? (hasPaletteSource ? buildGlobalPaletteTokens(profile) : (savedTokens || buildGlobalPaletteTokens(profile))) : null;
+    const theme = globalEnabled ? Object.assign({}, HTML_THEME_PRESETS.arzmarket_default, rebuiltTokens) : HTML_THEME_PRESETS[key];
+    app.dataset.htmlTheme = key;
+    const profileGlow=Number(profile?.glow);
+    applyThemeVariables(app, theme, Number.isFinite(profileGlow) ? profileGlow : 80);
+    try {
+      localStorage.setItem('arzmarket-html-theme', key);
+      if (globalEnabled) localStorage.setItem('arzmarket-html-global-palette', JSON.stringify(Object.assign({},profile,{tokens:rebuiltTokens,palette_model:2})));
+    } catch (_) {}
+  }
+
   const el = id => document.getElementById(id);
+  const asArray = value => Array.isArray(value) ? value : [];
   const refs = {
     app: el('app'), runtimeText: el('runtimeText'), minimalModeButton: el('minimalModeButton'), minimalModeFullButton: el('minimalModeFullButton'), pageHeaderIcon: el('pageHeaderIcon'),
     pageTitle: el('pageTitle'), pageSubtitle: el('pageSubtitle'), configSelect: el('configSelect'),
@@ -57,7 +263,7 @@
     tableHead: el('tableHead'), tableRows: el('tableRows'), emptyState: el('emptyState'),
     mainWorkspace: document.querySelector('.workspace'),
     detailEmpty: el('detailEmpty'), detailContent: el('detailContent'), detailIcon: el('detailIcon'),
-    detailName: el('detailName'), detailStatus: el('detailStatus'), detailFields: el('detailFields'),
+    detailName: el('detailName'), detailFields: el('detailFields'),
     pickerBackdrop: el('pickerBackdrop'), pickerTitle: el('pickerTitle'), pickerSearch: el('pickerSearch'),
     pickerRows: el('pickerRows'), budgetBackdrop: el('budgetBackdrop'), budgetInput: el('budgetInput'),
     budgetEligible: el('budgetEligible'), budgetSpent: el('budgetSpent'), budgetRemaining: el('budgetRemaining'),
@@ -67,7 +273,7 @@
     sellActiveCount: el('sellActiveCount'), sellToolsButton: el('sellToolsButton'), sellToolsPanel: el('sellToolsPanel'),
     sellConfigButton: el('sellConfigButton'), sellConfigName: el('sellConfigName'), sellScanState: el('sellScanState'), sellCurrencyState: el('sellCurrencyState'),
     sellSaleRows: el('sellSaleRows'), sellSaleEmpty: el('sellSaleEmpty'), sellTotalItems: el('sellTotalItems'),
-    sellTotalCount: el('sellTotalCount'), sellEnabledItems: el('sellEnabledItems'), sellDisabledItems: el('sellDisabledItems'), sellExpectedIncome: el('sellExpectedIncome'), sellInfoEmpty: el('sellInfoEmpty'),
+    sellEnabledItems: el('sellEnabledItems'), sellDisabledItems: el('sellDisabledItems'), sellExpectedIncome: el('sellExpectedIncome'), sellInfoEmpty: el('sellInfoEmpty'),
     sellInfoContent: el('sellInfoContent'), sellInfoIcon: el('sellInfoIcon'), sellInfoName: el('sellInfoName'), sellInfoKind: el('sellInfoKind'),
     sellStockInventory: el('sellStockInventory'), sellStockSelling: el('sellStockSelling'), sellStockFree: el('sellStockFree'),
     sellInfoPrice: el('sellInfoPrice'), sellPricePrefix: el('sellPricePrefix'), sellInfoCount: el('sellInfoCount'), sellInfoMax: el('sellInfoMax'),
@@ -89,14 +295,14 @@
     storageInfoType: el('storageInfoType'), storageInfoId: el('storageInfoId'), storageInfoUpdated: el('storageInfoUpdated'), storageAveragePrices: el('storageAveragePrices'),
     settingsHeaderMeta: el('settingsHeaderMeta'), settingsToolbar: el('settingsToolbar'), settingsWorkspace: el('settingsWorkspace'), settingsContent: el('settingsContent'),
     modsHeaderMeta: el('modsHeaderMeta'), modsWorkspace: el('modsWorkspace'),
-    modsRemovePlayers: el('modsRemovePlayers'), modsRemoveVehicles: el('modsRemoveVehicles'),
-    modsAutoCycle: el('modsAutoCycle'), modsManualCount: el('modsManualCount'), modsPendingSell: el('modsPendingSell'), modsPendingRebuy: el('modsPendingRebuy'), modsCycleStatus: el('modsCycleStatus'), modsManualPurchasedButton: el('modsManualPurchasedButton'), modsTelegramButton: el('modsTelegramButton'),
     marketplaceHeaderMeta: el('marketplaceHeaderMeta'), marketplaceToolbar: el('marketplaceToolbar'), marketplaceRefreshButton: el('marketplaceRefreshButton'),
     marketplaceShopCount: el('marketplaceShopCount'), marketplaceSearchInput: el('marketplaceSearchInput'), marketplaceServerButton: el('marketplaceServerButton'), marketplaceSortButton: el('marketplaceSortButton'),
     marketplaceWorkspace: el('marketplaceWorkspace'), marketplaceStatus: el('marketplaceStatus'), marketplaceBrowse: el('marketplaceBrowse'), marketplaceCards: el('marketplaceCards'), marketplaceBrowseEmpty: el('marketplaceBrowseEmpty'),
     marketplaceSearchView: el('marketplaceSearchView'), marketplaceBuyCount: el('marketplaceBuyCount'), marketplaceSellCount: el('marketplaceSellCount'), marketplaceBuyResults: el('marketplaceBuyResults'), marketplaceSellResults: el('marketplaceSellResults'), marketplaceBuyEmpty: el('marketplaceBuyEmpty'), marketplaceSellEmpty: el('marketplaceSellEmpty'),
     marketplaceShopView: el('marketplaceShopView'), marketplaceBackButton: el('marketplaceBackButton'), marketplaceShopOwner: el('marketplaceShopOwner'), marketplaceShopUid: el('marketplaceShopUid'), marketplaceShopServer: el('marketplaceShopServer'), marketplaceShopItemsTotal: el('marketplaceShopItemsTotal'), marketplaceFindShopButton: el('marketplaceFindShopButton'), marketplaceShopBuyCount: el('marketplaceShopBuyCount'), marketplaceShopSellCount: el('marketplaceShopSellCount'), marketplaceShopBuyRows: el('marketplaceShopBuyRows'), marketplaceShopSellRows: el('marketplaceShopSellRows')
   };
+
+  try { const storedKey=localStorage.getItem('arzmarket-html-theme') || 'arzmarket_default'; applyHtmlTheme(storedKey, storedKey === 'global_palette' ? readStoredGlobalTheme() : null); } catch (_) { applyHtmlTheme('arzmarket_default'); }
 
   let activePopupSelect = null;
 
@@ -193,12 +399,14 @@
   configSelectButton.className = 'select custom-select-trigger config-select-trigger';
   configSelectButton.setAttribute('aria-haspopup', 'listbox');
   configSelectButton.setAttribute('aria-expanded', 'false');
+  configSelectButton.setAttribute('data-baron-anchor', 'sell_config');
   const configSelectText = document.createElement('span');
   configSelectText.className = 'custom-select-value';
   const configSelectChevron = document.createElement('span');
   configSelectChevron.className = 'custom-select-chevron';
   configSelectButton.append(configSelectText, configSelectChevron);
   refs.configSelect.classList.add('native-select-hidden');
+  refs.configSelect.removeAttribute('data-baron-anchor');
   refs.configSelect.setAttribute('aria-hidden', 'true');
   refs.configSelect.tabIndex = -1;
   refs.configSelect.insertAdjacentElement('afterend', configSelectButton);
@@ -322,6 +530,16 @@
     return `<svg ${attrs}>${paths[name] || paths.buy}</svg>`;
   };
 
+  function hydrateSidebarIcons() {
+    const map={sell:'sell',buy:'buy',settings:'settings',logs:'logs',marketplace:'market',mods:'mods',storage:'storage'};
+    document.querySelectorAll('.nav-item[data-page]').forEach(button=>{
+      const host=button.querySelector('.nav-icon');
+      const key=map[String(button.dataset.page||'')];
+      if (host && key) host.innerHTML=iconSvg(key);
+    });
+  }
+  hydrateSidebarIcons();
+
 
   function setIcon(img, item, size) {
     const id = getItemId(item);
@@ -365,6 +583,8 @@
     method: 'POST',
     body: JSON.stringify({action: name, payload, revision: state.revision})
   });
+
+  let baronAssistantUi = null;
 
   const averagePriceKey = name => catalogName(name || '');
 
@@ -634,6 +854,7 @@
       const handle = document.createElement('div');
       handle.className = `window-resize-handle resize-${dir}`;
       handle.dataset.resize = dir;
+      if (dir === 'se') handle.dataset.baronAnchor = 'resize_handle';
       handle.setAttribute('aria-hidden', 'true');
       win.append(handle);
       handles[dir] = handle;
@@ -679,8 +900,12 @@
     function initialize() {
       if (initialized) return;
       const vp = viewportBounds();
-      const width = Math.min(1600, vp.width - SAFE_MARGIN * 2, Math.max(MIN_WIDTH, vp.width * 0.88));
-      const height = Math.min(900, vp.height - SAFE_MARGIN * 2, Math.max(MIN_HEIGHT, vp.height * 0.84));
+      const width = temporaryMode
+        ? Math.min(1380, vp.width - SAFE_MARGIN * 2)
+        : Math.min(1600, vp.width - SAFE_MARGIN * 2, Math.max(MIN_WIDTH, vp.width * 0.88));
+      const height = temporaryMode
+        ? Math.min(820, vp.height - SAFE_MARGIN * 2)
+        : Math.min(900, vp.height - SAFE_MARGIN * 2, Math.max(MIN_HEIGHT, vp.height * 0.84));
       const defaultRect = {
         x: Math.max(SAFE_MARGIN, (vp.width - width) / 2),
         y: Math.max(SAFE_MARGIN, (vp.height - height) / 2),
@@ -694,6 +919,7 @@
     }
 
     function scheduleSave() {
+      if (temporaryMode) return;
       clearTimeout(saveTimer);
       saveTimer = window.setTimeout(() => {
         const rect = sanitize(readRect());
@@ -708,10 +934,12 @@
 
     function finishOperation() {
       if (!operation) return;
+      const finished = operation;
       operation = null;
       document.documentElement.classList.remove('window-is-moving');
       document.documentElement.classList.remove('window-is-resizing');
       scheduleSave();
+      if (finished.type === 'resize' && baronAssistantUi) baronAssistantUi.resized();
     }
 
     function beginDrag(event) {
@@ -863,6 +1091,7 @@
 
     return {
       applyRemote(layout) {
+        if (temporaryMode) return;
         if (remoteApplied) return;
         remoteApplied = true;
         if (!layout || Number(layout.version) !== 16 || !(Number(layout.width) > 0) || !(Number(layout.height) > 0)) return;
@@ -910,6 +1139,38 @@
   }
 
   const windowManager = createWindowManager();
+  if (!previewMode && window.ArzBaronAssistantUI?.create) {
+    baronAssistantUi = window.ArzBaronAssistantUI.create({
+      action,
+      refresh: force => refresh(force === true, state.page),
+      openPage: async page => {
+        if (!page) return;
+        if (page === state.page) {
+          await baronAssistantUi?.event('page', {page});
+          return;
+        }
+        await switchPage(page);
+      },
+      openFilter: async () => {
+        setTradeFilterOpen(true);
+        await baronAssistantUi?.event('filter_opened', {side: state.page});
+      },
+      ensureFilterOpen: () => {
+        setTradeFilterOpen(true);
+      },
+      openSettingsSection: async (section, notify = true) => {
+        const requested = String(section || 'general');
+        if (!['general','trade','automation','telegram','appearance','configs'].includes(requested)) return false;
+        if (state.page !== 'settings') await switchPage('settings');
+        if (state.settings.section !== requested) {
+          state.settings.section = requested;
+          renderSettings();
+        }
+        if (notify) await baronAssistantUi?.event('settings_section_changed', {section: requested});
+        return true;
+      }
+    });
+  }
 
   function hideAveragePriceTooltipNow() {
     clearTimeout(state.averagePrices.hoverTimer);
@@ -977,14 +1238,16 @@
     if (closeRequested) return;
     closeRequested = true;
 
-    // Ask the Lua bridge to close first. Do not await it: older Arizona CEF builds
-    // may abort the request as soon as the iframe is detached.
-    action('ui.close', {page: state.page, side: state.page === 'sell' ? 'sell' : state.page === 'buy' ? 'buy' : undefined}).catch(() => {});
-    detachHostFrame();
+    // Give Lua enough time to receive ui.close and release the SA-MP/CEF cursor.
+    // Detaching the iframe immediately can abort the local HTTP request in some
+    // Arizona CEF builds and leaves the mouse captured in the middle of screen.
+    action('ui.close', {page: state.page, side: state.page === 'sell' ? 'sell' : state.page === 'buy' ? 'buy' : undefined})
+      .catch(() => {})
+      .finally(() => window.setTimeout(detachHostFrame, 20));
 
-    // Retry detach once in case the parent listener is installed a frame later.
-    window.setTimeout(detachHostFrame, 40);
-    window.setTimeout(() => { closeRequested = false; }, 500);
+    // Fallback only. Normally Lua removes the iframe itself after handling ui.close.
+    window.setTimeout(detachHostFrame, 350);
+    window.setTimeout(() => { closeRequested = false; }, 650);
   }
 
   const keyOf = item => item?.identity
@@ -1013,6 +1276,15 @@
     state.selectedKey = item ? keyOf(item) : null;
   }
 
+  function revealHydratedInterface() {
+    if (!refs.app || refs.app.dataset.hydrated === '1') return;
+    refs.app.dataset.hydrated = '1';
+    refs.app.style.opacity = '';
+    refs.app.style.visibility = '';
+    refs.app.style.pointerEvents = '';
+    document.documentElement.classList.add('arzmarket-hydrated');
+  }
+
   function rememberPageState(page, result) {
     if (!page || !result || result.unchanged) return;
     state.pageCache[page] = result;
@@ -1025,6 +1297,10 @@
     if (state.page !== page) return;
     state.data = result;
     state.revision = state.pageRevision[page] || 0;
+    const selectedTheme = result?.common?.htmlThemeKey || result?.data?.appearance?.palette_key;
+    const selectedThemeProfile = result?.common?.htmlThemeProfile || result?.data?.appearance?.global_palette || null;
+    if (selectedThemeProfile?.enabled === true) applyHtmlTheme('global_palette', selectedThemeProfile);
+    else if (selectedTheme) applyHtmlTheme(selectedTheme, selectedThemeProfile);
     state.interfaceScalePercent = normalizeInterfaceScalePercent(result?.common?.menuScalePercent ?? state.interfaceScalePercent);
     if (!state.minimalModeHydrated) {
       state.minimalModeHydrated = true;
@@ -1034,6 +1310,7 @@
     if (windowManager) windowManager.applyRemote(result?.common?.htmlWindow);
     updateVisualScale();
     syncSelected();
+    if (baronAssistantUi) baronAssistantUi.render(result?.assistant || {active:false});
     try {
       render();
     } catch (renderError) {
@@ -1044,11 +1321,13 @@
       return;
     }
     refs.runtimeText.textContent = 'Система готова';
+    revealHydratedInterface();
     window.requestAnimationFrame(() => window.requestAnimationFrame(notifyHostReady));
   }
 
   async function refresh(force = false, requestedPage = state.page) {
     const page = ['buy','sell','settings','logs','marketplace','mods','storage'].includes(requestedPage) ? requestedPage : state.page;
+    if (!force && page === 'settings' && state.settings.paletteDragging === true) return {unchanged:true};
     const active = state.pageRequests[page];
     if (active) {
       if (!force) return active;
@@ -1062,6 +1341,7 @@
         if (!result.unchanged) applyPageState(page, result, force);
         else if (state.page === page) {
           refs.runtimeText.textContent = 'Система готова';
+          if (state.pageCache[page]) revealHydratedInterface();
           window.requestAnimationFrame(() => window.requestAnimationFrame(notifyHostReady));
         }
         return result;
@@ -1087,8 +1367,15 @@
     return node;
   }
 
+  function isBaronSellFilterTutorialStep() {
+    return /^sell_filter_[1-5]$/.test(String(refs.app?.dataset?.baronStep || ''));
+  }
+
   function setTradeFilterOpen(open) {
     if (!refs.tradeFilterPanel || !refs.tradeFilterButton) return;
+    // While Baron explains the filter panel, keep the panel visible.
+    // Clicking Baron's Skip button happens outside the panel and used to close it.
+    if (!open && isBaronSellFilterTutorialStep()) open = true;
     refs.tradeFilterPanel.classList.toggle('hidden', !open);
     refs.tradeFilterButton.classList.toggle('active', open);
     refs.tradeFilterButton.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -1231,7 +1518,6 @@
           .map(node => String(node.dataset.category || ''));
         const startX = event.clientX;
         const startY = event.clientY;
-        let moved = false;
         let finished = false;
 
         item.classList.add('reordering');
@@ -1246,21 +1532,20 @@
           });
         };
 
+        let dragStarted = false;
+        let orderChanged = false;
+
         const onMove = moveEvent => {
           if (finished) return;
-          // Old Arizona CEF builds are more reliable with mouse events than
-          // PointerEvent capture. If LMB was lost, finish safely instead of
-          // leaving the category in a stuck visual state.
-          if (typeof moveEvent.buttons === 'number' && (moveEvent.buttons & 1) === 0) {
-            finish(moveEvent);
-            return;
-          }
           moveEvent.preventDefault();
           moveEvent.stopPropagation();
 
-          const dx = moveEvent.clientX - startX;
-          const dy = moveEvent.clientY - startY;
-          if (!moved && Math.hypot(dx, dy) < 3) return;
+          const dx = Number(moveEvent.clientX || 0) - startX;
+          const dy = Number(moveEvent.clientY || 0) - startY;
+          if (!dragStarted) {
+            if ((dx * dx) + (dy * dy) < 9) return;
+            dragStarted = true;
+          }
 
           const panelRect = container.getBoundingClientRect();
           const scale = Number.parseFloat(getComputedStyle(document.querySelector('.window')).getPropertyValue('--ui-scale')) || 1;
@@ -1268,28 +1553,35 @@
           if (moveEvent.clientY < panelRect.top + edge) container.scrollTop -= Math.max(8, 12 * scale);
           else if (moveEvent.clientY > panelRect.bottom - edge) container.scrollTop += Math.max(8, 12 * scale);
 
-          // Lua moves the held category as soon as the mouse is over another
-          // category row. Use the same rule instead of midpoint/drop-target
-          // highlighting. This is symmetric for moving upward and downward.
-          const hit = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
-          const target = hit?.closest?.('.trade-filter-category');
-          if (!target || target === item || !container.contains(target)) return;
+          // Do not depend on MouseEvent.buttons or elementFromPoint here.
+          // Arizona CEF can report buttons=0 while LMB is still held, and the
+          // Baron overlay can become the top element under the cursor. Instead,
+          // calculate the insertion point only from row geometry.
+          const siblings = Array.from(container.querySelectorAll('.trade-filter-category'))
+            .filter(node => node !== item);
+          let before = null;
+          for (const node of siblings) {
+            const rect = node.getBoundingClientRect();
+            if (moveEvent.clientY < rect.top + rect.height / 2) {
+              before = node;
+              break;
+            }
+          }
 
-          const children = Array.from(container.querySelectorAll('.trade-filter-category'));
-          const sourceIndex = children.indexOf(item);
-          const targetIndex = children.indexOf(target);
-          if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
-
-          if (sourceIndex < targetIndex) container.insertBefore(item, target.nextSibling);
-          else container.insertBefore(item, target);
-
-          moved = true;
-          renumber();
+          const currentChildren = Array.from(container.querySelectorAll('.trade-filter-category'));
+          const oldIndex = currentChildren.indexOf(item);
+          container.insertBefore(item, before);
+          const nextChildren = Array.from(container.querySelectorAll('.trade-filter-category'));
+          const newIndex = nextChildren.indexOf(item);
+          if (oldIndex !== newIndex) {
+            orderChanged = true;
+            renumber();
+          }
         };
 
         const cleanup = () => {
-          window.removeEventListener('mousemove', onMove, true);
-          window.removeEventListener('mouseup', finish, true);
+          document.removeEventListener('mousemove', onMove, true);
+          document.removeEventListener('mouseup', finish, true);
           window.removeEventListener('blur', cancel, true);
           drag.classList.remove('grabbing');
           cleanupGlobalDragClasses();
@@ -1302,14 +1594,14 @@
           finishEvent?.stopPropagation?.();
           cleanup();
 
-          if (!moved) {
+          if (!dragStarted) {
             scrollToCategory(id);
             return;
           }
 
           const nextOrder = Array.from(container.querySelectorAll('.trade-filter-category'))
             .map(node => String(node.dataset.category || ''));
-          if (nextOrder.join('|') === initialOrder.join('|')) {
+          if (!orderChanged || nextOrder.join('|') === initialOrder.join('|')) {
             renderTradeFilterPanel();
             return;
           }
@@ -1322,11 +1614,11 @@
           cleanup();
           applyLocalCategoryOrder(initialOrder);
           renderTradeFilterPanel();
-          renderTable();
+          if (state.page === 'sell') renderSellItems(); else renderTable();
         };
 
-        window.addEventListener('mousemove', onMove, true);
-        window.addEventListener('mouseup', finish, true);
+        document.addEventListener('mousemove', onMove, true);
+        document.addEventListener('mouseup', finish, true);
         window.addEventListener('blur', cancel, true);
       });
 
@@ -1335,14 +1627,27 @@
     refs.tradeFilterCategories.append(fragment);
   }
 
+  let buySearchBlurTimer = 0;
+
   function configItemByName(name) {
     const wanted = catalogName(name);
-    return (state.data?.data?.items || []).find(item => catalogName(item.name) === wanted) || null;
+    return asArray(state.data?.data?.items).find(item => catalogName(item.name) === wanted) || null;
+  }
+
+  function closeBuySearchAfterPick() {
+    window.clearTimeout(buySearchBlurTimer);
+    buySearchBlurTimer = 0;
+    state.search = '';
+    refs.searchInput.value = '';
+    state.searchFocused = false;
+    refs.globalSearchResults.classList.add('hidden');
+    refs.globalSearchResults.innerHTML = '';
+    if (document.activeElement === refs.searchInput) refs.searchInput.blur();
   }
 
   function renderGlobalSearchResults() {
     if (!refs.globalSearchResults) return;
-    const source = state.data?.data?.source || [];
+    const source = asArray(state.data?.data?.source);
     const query = normalizeName(state.search);
     if (!state.searchFocused || !source.length) {
       refs.globalSearchResults.classList.add('hidden');
@@ -1385,13 +1690,27 @@
         if (configured) {
           state.selectedItem = configured;
           state.selectedKey = keyOf(configured);
-          state.search = configured.name;
-          refs.searchInput.value = configured.name;
-          state.searchFocused = false;
-          refs.globalSearchResults.classList.add('hidden');
+          closeBuySearchAfterPick();
           renderTable();
           renderDetails();
           requestAnimationFrame(() => document.querySelector('.trade-row.selected')?.scrollIntoView({block:'nearest'}));
+        } else if (state.page === 'buy') {
+          closeBuySearchAfterPick();
+          try {
+            await action('trade.item.add', {side: 'buy', source_index: item.index});
+            showToast('Товар добавлен в скупку', 'success');
+            await refresh(true);
+            const added = configItemByName(item.name);
+            if (added) {
+              state.selectedItem = added;
+              state.selectedKey = keyOf(added);
+              renderTable();
+              renderDetails();
+              requestAnimationFrame(() => document.querySelector('.trade-row.selected')?.scrollIntoView({block:'nearest'}));
+            }
+          } catch (err) {
+            showToast(`Не удалось добавить: ${err.message}`, 'error');
+          }
         } else {
           state.searchFocused = false;
           refs.globalSearchResults.classList.add('hidden');
@@ -1644,7 +1963,7 @@
     refs.currencyButton.textContent = `${currency}$`;
     refs.currencyButton.disabled = busy;
     if (refs.sellCurrencyQuickButton) {
-      refs.sellCurrencyQuickButton.classList.toggle('hidden', buy);
+      refs.sellCurrencyQuickButton.classList.remove('hidden');
       refs.sellCurrencyQuickButton.textContent = `${currency}$`;
       refs.sellCurrencyQuickButton.disabled = busy;
       refs.sellCurrencyQuickButton.title = currency === 'VC' ? 'Сейчас VC$. Нажмите для SA$' : 'Сейчас SA$. Нажмите для VC$';
@@ -1665,7 +1984,7 @@
     refs.continueButton.textContent = buyContinue ? 'Продолжение: Вкл' : 'Продолжить';
     refs.continueButton.disabled = busy;
     refs.budgetButton.classList.toggle('hidden', !buy);
-    refs.budgetButton.disabled = busy || !(state.data?.data?.items || []).length;
+    refs.budgetButton.disabled = busy || !asArray(state.data?.data?.items).length;
     refs.refreshButton.classList.toggle('hidden', !buy);
     refs.refreshButton.disabled = busy;
     refs.pricesButton.disabled = busy;
@@ -1677,7 +1996,8 @@
       refs.sellScanMainButton.classList.toggle('active-action', scanActive);
       refs.sellScanMainButton.disabled = busy;
     }
-    refs.addButton.disabled = busy;
+    refs.addButton.classList.add('hidden');
+    refs.addButton.disabled = true;
     if (refs.tradeFilterPanel && !refs.tradeFilterPanel.classList.contains('hidden')) renderTradeFilterPanel();
   }
 
@@ -1686,13 +2006,14 @@
     const locked = tradeBusy();
     refs.tableHead.className = `table-head ${state.page}`;
     refs.tableHead.innerHTML = '';
-    const currency = buy ? 'SA' : (state.data?.common?.currencyMode === 'VC' ? 'VC' : 'SA');
+    const currency = state.data?.common?.currencyMode === 'VC' ? 'VC' : 'SA';
+    if (state.sortKey === 'remaining') {
+      state.sortKey = null;
+      state.sortDirection = 1;
+    }
 
-    const columns = buy
-      ? [['name','Товар'],['price','Цена'],['count','Кол-во'],['remaining','Остаток'],['status','Статус']]
-      : [['name','Товар'],['price','Цена'],['count','Кол-во'],['remaining','Доступно'],['status','Статус']];
+    const columns = [['name','Товар'],['price','Цена'],['count','Кол-во'],['status','Статус']];
     for (const [key, label] of columns) {
-      const cell = div('', 'table-head-cell');
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `table-sort-btn ${state.sortKey === key ? 'active' : ''}`;
@@ -1708,19 +2029,23 @@
         event.stopPropagation();
         cycleSort(key);
       });
-      cell.append(button);
-      refs.tableHead.append(cell);
+      if (buy) refs.tableHead.append(button);
+      else {
+        const cell = div('', 'table-head-cell');
+        cell.append(button);
+        refs.tableHead.append(cell);
+      }
     }
-    refs.tableHead.append(div('', 'table-head-cell table-head-actions'));
+    if (buy) refs.tableHead.append(document.createElement('span'));
+    else refs.tableHead.append(div('', 'table-head-cell table-head-actions'));
 
-    const all = state.data?.data?.items || [];
+    const all = asArray(state.data?.data?.items);
     const q = normalizeName(state.search);
     const filtered = q ? all.filter(item => normalizeName(item.name).includes(q)) : all.slice();
     const direction = state.sortDirection < 0 ? -1 : 1;
     const sortValue = item => {
       if (state.sortKey === 'price') return Number(currency === 'VC' ? item.price_vc : item.price) || 0;
       if (state.sortKey === 'count') return Number(item.maximum ? item.count_maximum : item.count) || 0;
-      if (state.sortKey === 'remaining') return Number(buy ? item.continue : item.all_count) || 0;
       if (state.sortKey === 'status') return item.enabled === false ? 0 : 1;
       return normalizeName(item.name || '');
     };
@@ -1759,7 +2084,7 @@
 
     const appendRow = item => {
       const row = document.createElement('div');
-      row.className = `trade-row ${state.page}`;
+      row.className = 'trade-row buy buy-sell-row';
       row.dataset.category = String(item?.category || 'other');
       if (item.enabled === false) row.classList.add('disabled-row');
       if (keyOf(item) === state.selectedKey) row.classList.add('selected');
@@ -1770,33 +2095,40 @@
         renderDetails();
       });
 
-      const itemCell = div('', 'item-cell');
+      const itemCell = div('', 'sell-sale-item buy-sell-item');
       {
-        const box = div('', 'item-thumb-box');
+        const box = div('', 'sell-sale-thumb-box');
         const img = document.createElement('img');
-        img.className = 'item-thumb';
+        img.className = 'sell-sale-thumb';
         img.alt = '';
         img.loading = 'lazy';
         setIcon(img, item, 48);
         box.append(img);
         itemCell.append(box);
       }
-      const wrap = div('', 'item-name-wrap');
-      const itemId = getItemId(item);
-      wrap.append(div(item.name, 'item-name'), div(buy ? itemKind(item) : (itemId ? `ID ${itemId}` : 'Инвентарь'), 'item-meta'));
-      bindAveragePriceHover(wrap, item);
-      itemCell.append(wrap);
+      const copy = div('', 'sell-sale-copy');
+      copy.append(div(item.name, 'sell-sale-name'), div(itemKind(item), 'sell-sale-kind'));
+      bindAveragePriceHover(copy, item);
+      itemCell.append(copy);
       row.append(itemCell);
-      const currentPrice = currency === 'VC' ? item.price_vc : item.price;
-      row.append(div(currency === 'VC' ? `${moneyRef(currentPrice)} VC$` : `$ ${moneyRef(currentPrice)}`, 'money'));
-      row.append(div(item.maximum ? (buy ? `Макс. ${money(item.count_maximum)}` : 'Макс.') : money(item.count), 'count'));
-      row.append(div(buy ? money(item.continue) : money(item.all_count), 'count'));
 
-      const status = div('', 'row-status');
+      const priceCell = div('', 'sell-sale-input-cell sell-price-cell');
+      const priceKey = currency === 'VC' ? 'price_vc' : 'price';
+      const priceValue = currency === 'VC' ? item.price_vc : item.price;
+      priceCell.append(div(currency === 'VC' ? 'VC$' : '$', 'sell-inline-prefix'), makeSellInlineNumber(item, priceValue, priceKey, {formatMoney:true}));
+      row.append(priceCell);
+
+      const countCell = div('', 'sell-count-cell');
+      const configuredCount = item.maximum === true ? (Number(item.count_maximum) || Number(item.count) || 0) : (Number(item.count) || 0);
+      countCell.append(makeSellInlineNumber(item, configuredCount, 'count', {className:'sell-count-input'}));
+      row.append(countCell);
+
+      const status = div('', 'sell-sale-status');
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = `toggle ${item.enabled !== false ? 'on' : ''}`;
       toggle.disabled = locked;
+      toggle.title = item.enabled !== false ? 'Выключить' : 'Включить';
       toggle.addEventListener('click', async event => {
         event.stopPropagation();
         if (!locked) await patchItem(item, {enabled: item.enabled === false});
@@ -1806,7 +2138,7 @@
 
       const trash = document.createElement('button');
       trash.type = 'button';
-      trash.className = 'trash';
+      trash.className = 'trash sell-sale-trash';
       trash.textContent = '';
       trash.title = locked ? 'Остановите торговлю для редактирования' : 'Удалить товар';
       trash.disabled = locked;
@@ -1958,21 +2290,29 @@
     if (!item) return;
 
     refs.detailName.textContent = item.name || 'Предмет';
-    refs.detailStatus.textContent = item.enabled !== false ? 'Включен' : 'Выключен';
-    refs.detailStatus.className = item.enabled !== false ? 'badge badge-success' : 'badge badge-muted';
     setIcon(refs.detailIcon, item, 256);
     refs.detailFields.innerHTML = '';
 
-    const price = div('', 'field-row');
-    price.append(numberField('Цена', item.price, 'price'), numberField('Цена VC$', item.price_vc, 'price_vc'));
-    refs.detailFields.append(price);
+    const currency = state.data?.common?.currencyMode === 'VC' ? 'VC' : 'SA';
+    if (state.page === 'buy') {
+      if (currency === 'VC') refs.detailFields.append(numberField('Цена VC$', item.price_vc, 'price_vc'));
+      else refs.detailFields.append(numberField('Цена SA$', item.price, 'price'));
+    } else {
+      const price = div('', 'field-row');
+      price.append(numberField('Цена', item.price, 'price'), numberField('Цена VC$', item.price_vc, 'price_vc'));
+      refs.detailFields.append(price);
+    }
 
-    const count = div('', 'field-row');
-    count.append(
-      numberField('Кол-во', item.count, 'count'),
-      state.page === 'buy' ? numberField('Осталось', item.continue, 'continue') : numberField('Доступно', item.all_count, 'all_count', true)
-    );
-    refs.detailFields.append(count);
+    if (state.page === 'buy') {
+      refs.detailFields.append(numberField('Кол-во', item.count, 'count'));
+    } else {
+      const count = div('', 'field-row');
+      count.append(
+        numberField('Кол-во', item.count, 'count'),
+        numberField('Доступно', item.all_count, 'all_count', true)
+      );
+      refs.detailFields.append(count);
+    }
     if (state.page === 'sell') {
       refs.detailFields.append(toggleField('Выставлять максимум', item.maximum === true, 'maximum'));
     }
@@ -2012,13 +2352,12 @@
   }
 
   function sellSortedItems() {
-    const all = (state.data?.data?.items || []).slice();
+    const all = asArray(state.data?.data?.items).slice();
     if (!state.sortKey) return all;
     const direction = state.sortDirection < 0 ? -1 : 1;
     const valueOf = item => {
       if (state.sortKey === 'price') return sellItemPrice(item);
       if (state.sortKey === 'count') return sellConfiguredCount(item);
-      if (state.sortKey === 'remaining') return Number(item?.all_count) || 0;
       if (state.sortKey === 'status') return item?.enabled === false ? 0 : 1;
       return normalizeName(item?.name || '');
     };
@@ -2096,7 +2435,7 @@
     const source = Array.isArray(state.data?.data?.source) ? state.data.data.source : [];
     const q = normalizeName(state.search);
     const items = q ? source.filter(item => normalizeName(item.name).includes(q)) : source;
-    const existing = new Map((state.data?.data?.items || []).map(item => [normalizeName(item.name), item]));
+    const existing = new Map(asArray(state.data?.data?.items).map(item => [normalizeName(item.name), item]));
     refs.sellInventoryRows.innerHTML = '';
     refs.sellInventoryEmpty.classList.toggle('hidden', items.length !== 0);
 
@@ -2132,6 +2471,7 @@
         if (tradeBusy()) return;
         if (configured) {
           selectSellItem(configured);
+          await baronAssistantUi?.event('sell_item_selected', {itemName: sourceItem.name});
           requestAnimationFrame(() => refs.sellSaleRows?.querySelector('.sell-sale-row.selected')?.scrollIntoView({block:'nearest'}));
           return;
         }
@@ -2139,6 +2479,7 @@
           state.selectedItem = {name: sourceItem.name};
           state.selectedKey = null;
           await action('trade.item.add', {side:'sell', source_index:sourceItem.index});
+          await baronAssistantUi?.event('sell_item_selected', {itemName: sourceItem.name});
           showToast('Товар добавлен на продажу', 'success');
           await refresh(true);
         } catch (err) {
@@ -2147,11 +2488,16 @@
         }
       });
       row.addEventListener('click', () => {
-        if (configured) selectSellItem(configured);
+        if (configured) {
+          selectSellItem(configured);
+          void baronAssistantUi?.event('sell_item_selected', {itemName: sourceItem.name});
+          requestAnimationFrame(() => refs.sellSaleRows?.querySelector('.sell-sale-row.selected')?.scrollIntoView({block:'nearest'}));
+          return;
+        }
+        if (!tradeBusy()) add.click();
       });
       if (thumbBox) row.append(thumbBox);
       row.append(copy, count, add);
-      bindAveragePriceHover(row, sourceItem);
       fragment.append(row);
     }
     refs.sellInventoryRows.append(fragment);
@@ -2161,14 +2507,22 @@
     if (!refs.sellSaleRows) return;
     updateSellSortHeaders();
     const locked = tradeBusy();
+    if (state.sortKey === 'remaining') {
+      state.sortKey = null;
+      state.sortDirection = 1;
+    }
     const all = Array.isArray(state.data?.data?.items) ? state.data.data.items : [];
     const q = normalizeName(state.search);
-    const filtered = q ? all.filter(item => normalizeName(item.name).includes(q)) : all.slice();
+    const statusFiltered = state.sellStatusFilter === 'enabled'
+      ? all.filter(item => item.enabled !== false)
+      : state.sellStatusFilter === 'disabled'
+        ? all.filter(item => item.enabled === false)
+        : all.slice();
+    const filtered = q ? statusFiltered.filter(item => normalizeName(item.name).includes(q)) : statusFiltered;
     const direction = state.sortDirection < 0 ? -1 : 1;
     const valueOf = item => {
       if (state.sortKey === 'price') return sellItemPrice(item);
       if (state.sortKey === 'count') return sellConfiguredCount(item);
-      if (state.sortKey === 'remaining') return Number(item?.all_count) || 0;
       if (state.sortKey === 'status') return item?.enabled === false ? 0 : 1;
       return normalizeName(item?.name || '');
     };
@@ -2201,7 +2555,15 @@
     if (state.sortKey) fallback.sort(compareItems);
 
     refs.sellSaleRows.innerHTML = '';
-    refs.sellSaleEmpty.classList.toggle('hidden', filtered.length !== 0);
+    if (refs.sellSaleEmpty) {
+      const filterEmptyText = state.sellStatusFilter === 'enabled'
+        ? 'Включённых товаров нет.'
+        : state.sellStatusFilter === 'disabled'
+          ? 'Отключённых товаров нет.'
+          : 'Добавьте предметы из инвентаря слева.';
+      refs.sellSaleEmpty.textContent = filterEmptyText;
+      refs.sellSaleEmpty.classList.toggle('hidden', filtered.length !== 0);
+    }
     const fragment = document.createDocumentFragment();
 
     const appendRow = item => {
@@ -2237,17 +2599,38 @@
       const countCell = div('', 'sell-count-cell');
       countCell.append(makeSellInlineNumber(item, sellConfiguredCount(item), 'count', {className:'sell-count-input', clampAvailable:true}));
       row.append(countCell);
-      row.append(div(money(item.all_count || 0), 'sell-sale-remaining'));
-
       const status = div('', 'sell-sale-status');
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = `toggle ${item.enabled !== false ? 'on' : ''}`;
       toggle.disabled = locked;
       toggle.title = item.enabled !== false ? 'Выключить' : 'Включить';
+      if (keyOf(item) === state.selectedKey) {
+        toggle.dataset.baronAnchor = 'sell_status_toggle';
+      }
       toggle.addEventListener('click', async event => {
         event.stopPropagation();
-        if (!locked) await patchItem(item, {enabled:item.enabled === false});
+        if (locked) return;
+        const previousEnabled = item.enabled !== false;
+        const nextEnabled = !previousEnabled;
+
+        item.enabled = nextEnabled;
+        toggle.classList.toggle('on', nextEnabled);
+        toggle.title = nextEnabled ? 'Выключить' : 'Включить';
+        row.classList.toggle('disabled-row', !nextEnabled);
+
+        const saved = await patchItem(item, {enabled:nextEnabled});
+        if (saved) {
+          void baronAssistantUi?.event('sell_status_toggled', {
+            itemName: item.name,
+            enabled: nextEnabled
+          });
+        } else {
+          item.enabled = previousEnabled;
+          toggle.classList.toggle('on', previousEnabled);
+          toggle.title = previousEnabled ? 'Выключить' : 'Включить';
+          row.classList.toggle('disabled-row', !previousEnabled);
+        }
       });
       status.append(toggle);
       row.append(status);
@@ -2299,11 +2682,14 @@
     }
 
     const enabled = all.filter(item => item.enabled !== false);
-    const totalCount = enabled.reduce((sum, item) => sum + sellEffectiveCount(item), 0);
     if (refs.sellTotalItems) refs.sellTotalItems.textContent = String(all.length);
     if (refs.sellEnabledItems) refs.sellEnabledItems.textContent = String(enabled.length);
     if (refs.sellDisabledItems) refs.sellDisabledItems.textContent = String(Math.max(0, all.length - enabled.length));
-    if (refs.sellTotalCount) refs.sellTotalCount.textContent = money(totalCount);
+    document.querySelectorAll('[data-sell-status-filter]').forEach(button => {
+      const active = String(button.dataset.sellStatusFilter || 'all') === state.sellStatusFilter;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
   }
 
   function sellMarketCacheKey(item) {
@@ -2869,7 +3255,6 @@
     head.className = 'settings-card-head';
     const copy = document.createElement('div');
     const h = document.createElement('h2'); h.textContent = title; copy.append(h);
-    if (subtitle) { const p = document.createElement('p'); p.textContent = subtitle; copy.append(p); }
     head.append(copy); card.append(head);
     const body = document.createElement('div'); body.className = 'settings-card-body'; card.append(body);
     return {card, body, head};
@@ -2880,7 +3265,6 @@
     const row = document.createElement('div'); row.className = `settings-row ${options.indent ? 'settings-row-indent' : ''}`.trim();
     const copy = document.createElement('div'); copy.className = 'settings-row-copy';
     const title = document.createElement('strong'); title.textContent = label; copy.append(title);
-    if (description) { const small = document.createElement('small'); small.textContent = description; copy.append(small); }
     const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = `settings-toggle ${values[key] === true ? 'on' : ''}`; toggle.disabled = options.disabled === true;
     toggle.setAttribute('aria-pressed', values[key] === true ? 'true' : 'false'); toggle.innerHTML = '<span></span>';
     toggle.addEventListener('click', () => saveSetting(key, values[key] !== true));
@@ -2892,7 +3276,6 @@
     const row = document.createElement('label'); row.className = `settings-row settings-input-row ${options.indent ? 'settings-row-indent' : ''}`.trim();
     const copy = document.createElement('div'); copy.className = 'settings-row-copy';
     const title = document.createElement('strong'); title.textContent = label; copy.append(title);
-    if (description) { const small = document.createElement('small'); small.textContent = description; copy.append(small); }
     const input = document.createElement('input'); input.className = 'settings-input'; input.type = options.type || 'text'; input.value = values[key] == null ? '' : String(values[key]);
     if (options.min != null) input.min = String(options.min); if (options.max != null) input.max = String(options.max); if (options.step != null) input.step = String(options.step);
     if (options.placeholder) input.placeholder = options.placeholder; if (options.password) input.type = 'password';
@@ -2905,7 +3288,6 @@
     const row = document.createElement('div'); row.className = 'settings-row settings-range-row';
     const copy = document.createElement('div'); copy.className = 'settings-row-copy';
     const title = document.createElement('strong'); title.textContent = label; copy.append(title);
-    if (description) { const small = document.createElement('small'); small.textContent = description; copy.append(small); }
     const control = document.createElement('div'); control.className = 'settings-range-control';
     const input = document.createElement('input'); input.type = 'range'; input.min = min; input.max = max; input.step = step; input.value = Number(values[key] ?? min);
     const value = document.createElement('span'); value.className = 'settings-range-value'; value.textContent = `${input.value}${suffix}`;
@@ -2918,34 +3300,98 @@
     const button = document.createElement('button'); button.type = 'button'; button.className = `settings-action ${className}`.trim(); button.textContent = label; return button;
   }
 
-  function renderSettingsGeneral(root) {
-    const finance = settingsCard('Финансы', 'Курсы валют и комиссия ArzMarket');
-    settingsInput(finance.body, 'buy_vc', 'Курс покупки VC$', 'Используется при конвертации цен покупки', {type:'number', min:1, step:1, number:true});
-    settingsInput(finance.body, 'sell_vc', 'Курс продажи VC$', 'Используется при конвертации цен продажи', {type:'number', min:1, step:1, number:true});
-    settingsInput(finance.body, 'sell_percent', 'Ваша комиссия в %', 'Процент комиссии для расчетов продажи', {type:'number', min:0, step:1});
-    root.append(finance.card);
+  function settingsModsData() {
+    const mods = settingsSnapshot()?.mods;
+    return mods && typeof mods === 'object' ? mods : {};
+  }
 
-    const common = settingsCard('Общие функции', 'Настройки, которые влияют на работу ArzMarket вне торговли');
-    settingsToggle(common.body, 'buy_sell_history', 'Показывать процесс выставки товаров', 'Сохраняет и показывает историю процесса покупки и продажи');
-    settingsToggle(common.body, 'id_mode', 'Режим просмотра игроков через /id', 'Дополняет просмотр информации о игроках данными ArzMarket');
-    if (settingsValues().premium_available) settingsToggle(common.body, 'premium_dialog', 'Премиум табличка с ценами', 'Доступно для авторизованного Premium');
+  async function saveSettingsMod(key, value) {
+    try {
+      await action('mods.set', {page:'settings', key, value});
+      await refresh(true, 'settings');
+      return true;
+    } catch (err) {
+      showToast(`Основные: ${err.message}`, 'error');
+      await refresh(true, 'settings').catch(() => {});
+      return false;
+    }
+  }
+
+  function settingsModToggle(body, key, label) {
+    const row = document.createElement('div'); row.className = 'settings-row';
+    const copy = document.createElement('div'); copy.className = 'settings-row-copy';
+    const title = document.createElement('strong'); title.textContent = label; copy.append(title);
+    const enabled = settingsModsData()[key] === true;
+    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = `settings-toggle ${enabled ? 'on' : ''}`;
+    toggle.setAttribute('aria-pressed', enabled ? 'true' : 'false'); toggle.innerHTML = '<span></span>';
+    toggle.addEventListener('click', () => saveSettingsMod(key, !enabled));
+    row.append(copy, toggle); body.append(row); return row;
+  }
+
+  function renderSettingsGeneral(root) {
+    const common = settingsCard('Общие функции');
+    settingsToggle(common.body, 'buy_sell_history', 'Показывать процесс выставки товаров');
+    settingsToggle(common.body, 'id_mode', 'Режим просмотра игроков через /id');
+    if (settingsValues().premium_available) settingsToggle(common.body, 'premium_dialog', 'Премиум табличка с ценами');
+    settingsToggle(common.body, 'auto_piar', 'Авто-пиар в чаты в игре');
+    settingsToggle(common.body, 'lavka_helper', 'Помощник установки лавки');
+    if (settingsValues().lavka_helper) {
+      settingsToggle(common.body, 'lavka_helper_auto_disable', 'Автоматически отключать помощник после отхода', '', {indent:true});
+      settingsRange(common.body, 'lavka_helper_radius', 'Радиус зоны установки', '', 5, 50, 1, '');
+    }
     root.append(common.card);
+
+    const display = settingsCard('Отображение');
+    settingsModToggle(display.body, 'remove_players', 'Удалять других игроков');
+    settingsModToggle(display.body, 'remove_vehicles', 'Удалять транспорт');
+    root.append(display.card);
+
+    const cycle = settingsCard('Автоцикл');
+    settingsModToggle(cycle.body, 'auto_cycle', 'Автоцикл');
+    const mods = settingsModsData();
+    const manual = settingsActionButton(mods.manual_purchased_running === true ? 'Остановить ручное выставление' : 'Выставить скупленные товары', mods.manual_purchased_running === true ? 'danger' : 'primary');
+    manual.disabled = mods.trade_busy === true && mods.manual_purchased_running !== true;
+    manual.addEventListener('click', async () => {
+      try {
+        manual.disabled = true;
+        const result = await action('mods.manual_purchased', {page:'settings'});
+        showToast(result.state === 'stopped' ? 'Ручное выставление остановлено' : 'Ручное выставление запущено', 'success');
+        await refresh(true, 'settings');
+      } catch (err) {
+        showToast(`Автоцикл: ${err.message}`, 'error');
+        await refresh(true, 'settings').catch(() => {});
+      }
+    });
+    cycle.body.append(manual);
+    root.append(cycle.card);
+
+    const community = settingsCard('Канал разработки ArzMarket');
+    const telegram = settingsActionButton('Открыть Telegram');
+    telegram.addEventListener('click', () => action('mods.telegram', {page:'settings'}).catch(err => showToast(`Telegram: ${err.message}`, 'error')));
+    community.body.append(telegram);
+    root.append(community.card);
   }
 
   function renderSettingsTrade(root) {
-    const currency = settingsCard('Валюта', 'Автоматическая работа с SA$ и VC$');
+    const finance = settingsCard('Финансы');
+    settingsInput(finance.body, 'buy_vc', 'Курс покупки VC$', '', {type:'number', min:1, step:1, number:true});
+    settingsInput(finance.body, 'sell_vc', 'Курс продажи VC$', '', {type:'number', min:1, step:1, number:true});
+    settingsInput(finance.body, 'sell_percent', 'Ваша комиссия в %', '', {type:'number', min:0, step:1, number:true});
+    root.append(finance.card);
+
+    const currency = settingsCard('Валюта');
     settingsToggle(currency.body, 'always_convert', 'Всегда конвертировать VC$/SA$', 'Автоматически переводит цены между валютами');
     if (settingsValues().always_convert) settingsToggle(currency.body, 'always_convert_once', 'Конвертировать только 1 раз', 'После первой конвертации режим автоматически отключается', {indent:true});
     root.append(currency.card);
 
-    const trade = settingsCard('Трейды и лавка', 'Автоматизация общения и оформления лавки');
+    const trade = settingsCard('Трейды и лавка');
     settingsToggle(trade.body, 'trader_chat', 'Чат с трейдером', 'Показывает интерфейс общения во время трейда');
     settingsToggle(trade.body, 'trade_auto_accept', 'Авто принятие трейда', 'Автоматически принимает подходящие предложения торговли');
     settingsToggle(trade.body, 'auto_lavka_name', 'Автоматически называть лавку', 'Подставляет сохраненное название при установке лавки');
     if (settingsValues().auto_lavka_name) settingsInput(trade.body, 'lavka_name', 'Название лавки', 'Название применяется при следующей установке', {indent:true, placeholder:'Название лавки'});
     root.append(trade.card);
 
-    const prices = settingsCard('Цены и производительность', 'Средние цены и оптимизация процесса выставления');
+    const prices = settingsCard('Цены и производительность');
     settingsToggle(prices.body, 'avg_price', 'Отображение средних цен', 'Включает подсказки со средними ценами предметов');
     if (settingsValues().avg_price) settingsToggle(prices.body, 'avg_price_new_window', 'Новое окно цен', 'Использует новый интерфейс информации о средних ценах', {indent:true});
     settingsToggle(prices.body, 'fps_up_sell', 'FPS Up при выставлении товаров', 'Уменьшает лишнюю отрисовку во время автоматической торговли');
@@ -2953,18 +3399,8 @@
   }
 
   function renderSettingsAutomation(root) {
-    const ad = settingsCard('Авто-пиар', 'Автоматическая отправка рекламных сообщений в игровые чаты');
-    settingsToggle(ad.body, 'auto_piar', 'Авто-пиар в чаты в игре', 'Использует существующие профили авто-пиара Lua');
-    root.append(ad.card);
-
-    const helper = settingsCard('Помощник установки лавки', 'Зона установки и автоматическое отключение помощника');
-    settingsToggle(helper.body, 'lavka_helper', 'Включить помощника установки лавки', 'Показывает допустимую область для установки или аренды лавки');
-    settingsToggle(helper.body, 'lavka_helper_auto_disable', 'Автоматически отключать после отхода', 'Помощник останется у своей лавки и выключится после ухода');
-    if (settingsValues().lavka_helper) settingsRange(helper.body, 'lavka_helper_radius', 'Радиус зоны установки', 'Размер зоны помощника', 5, 50, 1, '');
-    root.append(helper.card);
-
-    const mascot = settingsCard('Спутники', 'Система спутников ArzMarket');
-    settingsToggle(mascot.body, 'satellites', 'Система спутников', 'Включает выбранного спутника и его поведение');
+    const mascot = settingsCard('Спутники');
+    settingsToggle(mascot.body, 'satellites', 'Система спутников');
     root.append(mascot.card);
   }
 
@@ -3014,44 +3450,232 @@
 
   function renderSettingsAppearance(root) {
     const appearance = settingsSnapshot().appearance || {};
+    const global = Object.assign({enabled:false,base:'#4B8DFF',depth:72,saturation:82,contrast:72,glow:80,picker_hue:null,picker_saturation:null,picker_value:null,tokens:null}, appearance.global_palette || {});
+    global.base=themeNormalizeHex(global.base);
+
+    const globalCard = settingsCard('Единая палитра всего скрипта', 'Настоящая цветовая палитра. Один выбранный цвет автоматически перестраивает Lua и HTML');
+    globalCard.card.classList.add('settings-global-palette-card','settings-appearance-global');
+    const paletteTop = document.createElement('div'); paletteTop.className='settings-palette-top settings-global-palette-top';
+    const paletteTitle=document.createElement('div'); paletteTitle.className='settings-row-copy'; paletteTitle.innerHTML='<strong>Использовать единую палитру</strong><small>Квадрат меняет насыщенность и яркость, полоса справа меняет оттенок. Изменения сразу видны на всём HTML-интерфейсе.</small>';
+    const paletteToggle=document.createElement('button'); paletteToggle.type='button'; paletteToggle.className=`settings-toggle ${global.enabled?'on':''}`; paletteToggle.innerHTML='<span></span>'; paletteToggle.setAttribute('aria-pressed',global.enabled?'true':'false');
+    paletteTop.append(paletteTitle,paletteToggle); globalCard.body.append(paletteTop);
+
+    let saveTimer=0;
+    const payloadFor = next => ({page:'settings',enabled:next.enabled===true,base:themeNormalizeHex(next.base),depth:Number(next.depth),saturation:Number(next.saturation),contrast:Number(next.contrast),glow:Number(next.glow),picker_hue:themeClamp01(next.picker_hue),picker_saturation:themeClamp01(next.picker_saturation),picker_value:themeClamp01(next.picker_value),reset:next.reset===true});
+    const applyLiveGlobal = () => {
+      global.base=themeNormalizeHex(global.base);
+      global.tokens=buildGlobalPaletteTokens(global);
+      if (global.enabled) {
+        applyHtmlTheme('global_palette',Object.assign({},global,{enabled:true,tokens:global.tokens,glow:Number(global.glow)||0}));
+      } else {
+        const datasetKey=String(refs.app?.dataset?.htmlTheme || '');
+        const liveThemeKey=(datasetKey && datasetKey!=='global_palette') ? datasetKey : String(appearance.palette_key || 'arzmarket_default');
+        applyHtmlTheme(liveThemeKey,{enabled:false,glow:Number(global.glow)||0});
+      }
+    };
+    const sendGlobal = async (patch, refreshAfter=true) => {
+      Object.assign(global,patch||{});
+      global.base=themeNormalizeHex(global.base);
+      applyLiveGlobal();
+      try {
+        await action('settings.global_palette.update',payloadFor(global));
+        if (refreshAfter) await refresh(true,'settings');
+      } catch(err) { showToast(`Палитра: ${err.message}`,'error'); }
+    };
+    const scheduleGlobalSave = patch => {
+      Object.assign(global,patch||{});
+      global.base=themeNormalizeHex(global.base);
+      applyLiveGlobal();
+      clearTimeout(saveTimer);
+      saveTimer=window.setTimeout(()=>{ void sendGlobal({},false); },180);
+    };
+    paletteToggle.addEventListener('click',()=>sendGlobal({enabled:!global.enabled},true));
+
+    const pickerShell=document.createElement('div');pickerShell.className='settings-global-picker-shell';
+    const pickerMain=document.createElement('div');pickerMain.className='settings-global-picker-main';
+    const sv=document.createElement('div');sv.className='settings-global-sv';sv.setAttribute('role','slider');sv.setAttribute('aria-label','Насыщенность и яркость');
+    const svMarker=document.createElement('i');svMarker.className='settings-global-sv-marker';sv.append(svMarker);
+    const hue=document.createElement('div');hue.className='settings-global-hue';hue.setAttribute('role','slider');hue.setAttribute('aria-label','Оттенок');
+    const hueMarker=document.createElement('i');hueMarker.className='settings-global-hue-marker';hue.append(hueMarker);
+    pickerMain.append(sv,hue);
+
+    const pickerInfo=document.createElement('div');pickerInfo.className='settings-global-picker-info';
+    const currentLabel=document.createElement('strong');currentLabel.textContent='Текущий цвет';
+    const currentSwatch=document.createElement('div');currentSwatch.className='settings-global-current-swatch';
+    const hexLabel=document.createElement('label');hexLabel.className='settings-global-hex-label';hexLabel.textContent='HEX';
+    const colorHex=document.createElement('input');colorHex.type='text';colorHex.className='settings-input settings-global-color-hex';colorHex.maxLength=7;colorHex.spellcheck=false;colorHex.value=global.base;
+    hexLabel.append(colorHex);
+    const rgbText=document.createElement('div');rgbText.className='settings-global-rgb';
+    const pickerHint=document.createElement('p');pickerHint.className='settings-global-picker-hint';pickerHint.textContent='Выбери цвет мышкой. Оттенок задаётся вертикальной радугой, а квадратом регулируются насыщенность и яркость.';
+    pickerInfo.append(currentLabel,currentSwatch,hexLabel,rgbText,pickerHint);
+    pickerShell.append(pickerMain,pickerInfo);globalCard.body.append(pickerShell);
+
+    const baseHsv=themeRgbToHsv(themeHexRgb(global.base));
+    let pickerHsv={
+      h:Number.isFinite(Number(global.picker_hue))?themeClamp01(global.picker_hue):baseHsv.h,
+      s:Number.isFinite(Number(global.picker_saturation))?themeClamp01(global.picker_saturation):baseHsv.s,
+      v:Number.isFinite(Number(global.picker_value))?themeClamp01(global.picker_value):baseHsv.v
+    };
+    global.picker_hue=pickerHsv.h; global.picker_saturation=pickerHsv.s; global.picker_value=pickerHsv.v;
+    const getPickerHsv = () => ({h:pickerHsv.h,s:pickerHsv.s,v:pickerHsv.v});
+    const updatePickerUi = () => {
+      const hsv=getPickerHsv();
+      const hueRgb=themeRgbHex(themeHsvToRgb(hsv.h,1,1));
+      sv.style.setProperty('--picker-hue',hueRgb);
+      svMarker.style.left=`${(hsv.s*100).toFixed(2)}%`;
+      svMarker.style.top=`${((1-hsv.v)*100).toFixed(2)}%`;
+      hueMarker.style.top=`${(hsv.h*100).toFixed(2)}%`;
+      currentSwatch.style.background=global.base;
+      colorHex.value=global.base;
+      const rgb=themeHexRgb(global.base);
+      rgbText.textContent=`RGB: ${rgb.r}, ${rgb.g}, ${rgb.b}`;
+    };
+    const setBaseFromHsv = hsv => {
+      pickerHsv={h:themeClamp01(hsv.h),s:themeClamp01(hsv.s),v:themeClamp01(hsv.v)};
+      global.picker_hue=pickerHsv.h;
+      global.picker_saturation=pickerHsv.s;
+      global.picker_value=pickerHsv.v;
+      global.base=themeRgbHex(themeHsvToRgb(pickerHsv.h,pickerHsv.s,pickerHsv.v)).toUpperCase();
+      updatePickerUi();
+      applyLiveGlobal();
+    };
+    const pointerValue=(event,node)=>{
+      const rect=node.getBoundingClientRect();
+      return {x:themeClamp01((event.clientX-rect.left)/Math.max(1,rect.width)),y:themeClamp01((event.clientY-rect.top)/Math.max(1,rect.height))};
+    };
+    const bindDrag=(node,onMove)=>{
+      node.addEventListener('mousedown',event=>{
+        if (event.button!==0) return;
+        event.preventDefault();
+        state.settings.paletteDragging=true;
+        clearTimeout(saveTimer);
+        const move=e=>{e.preventDefault();onMove(e);};
+        const up=e=>{
+          if(e) e.preventDefault();
+          window.removeEventListener('mousemove',move);
+          window.removeEventListener('mouseup',up);
+          state.settings.paletteDragging=false;
+          clearTimeout(saveTimer);
+          void sendGlobal({base:global.base,picker_hue:pickerHsv.h,picker_saturation:pickerHsv.s,picker_value:pickerHsv.v},false);
+        };
+        onMove(event);
+        window.addEventListener('mousemove',move);
+        window.addEventListener('mouseup',up);
+      });
+    };
+    bindDrag(sv,event=>{const pos=pointerValue(event,sv),hsv=getPickerHsv();setBaseFromHsv({h:hsv.h,s:pos.x,v:1-pos.y});});
+    bindDrag(hue,event=>{const pos=pointerValue(event,hue),hsv=getPickerHsv();setBaseFromHsv({h:pos.y,s:hsv.s,v:hsv.v});});
+    colorHex.addEventListener('change',()=>{
+      const value=String(colorHex.value||'').trim().toUpperCase();
+      if(!/^#[0-9A-F]{6}$/.test(value)){colorHex.value=global.base;showToast('Цвет должен быть в формате #RRGGBB','error');return;}
+      global.base=value;
+      pickerHsv=themeRgbToHsv(themeHexRgb(value));
+      global.picker_hue=pickerHsv.h;global.picker_saturation=pickerHsv.s;global.picker_value=pickerHsv.v;
+      updatePickerUi();void sendGlobal({base:value,picker_hue:pickerHsv.h,picker_saturation:pickerHsv.s,picker_value:pickerHsv.v},false);
+    });
+    colorHex.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();colorHex.blur();}});
+    updatePickerUi();
+
+    const modifiersTitle=document.createElement('div');modifiersTitle.className='settings-global-modifiers-title';modifiersTitle.innerHTML='<strong>Дополнительная обработка цвета</strong><small>Эти параметры не заменяют палитру. Они меняют то, как выбранный цвет раскладывается на фон, панели, границы и активные элементы.</small>';globalCard.body.append(modifiersTitle);
+    const addGlobalRange=(key,label,description,min,max,suffix='%')=>{
+      const row=document.createElement('div');row.className='settings-row settings-range-row settings-global-range-row';
+      const copy=document.createElement('div');copy.className='settings-row-copy';const title=document.createElement('strong');title.textContent=label;const hint=document.createElement('small');hint.textContent=description;copy.append(title,hint);
+      const control=document.createElement('div');control.className='settings-range-control';
+      const input=document.createElement('input');input.type='range';input.min=String(min);input.max=String(max);input.step='1';input.value=String(Number(global[key]??min));
+      const value=document.createElement('span');value.className='settings-range-value';value.textContent=`${input.value}${suffix}`;
+      let manualDrag=false;
+      const setRangeValue = rawValue => {
+        const step=Math.max(0.000001,Number(input.step)||1);
+        const low=Number(input.min)||0, high=Number(input.max)||100;
+        const clamped=Math.max(low,Math.min(high,Number(rawValue)||0));
+        const next=Math.round((clamped-low)/step)*step+low;
+        input.value=String(Math.max(low,Math.min(high,next)));
+        const numeric=Number(input.value);
+        value.textContent=`${input.value}${suffix}`;
+        global[key]=numeric;
+        applyLiveGlobal();
+      };
+      const setRangeFromPointer = event => {
+        const rect=input.getBoundingClientRect();
+        const ratio=themeClamp01((Number(event.clientX)-rect.left)/Math.max(1,rect.width));
+        setRangeValue((Number(input.min)||0)+ratio*((Number(input.max)||100)-(Number(input.min)||0)));
+      };
+      input.addEventListener('mousedown',event=>{
+        if(event.button!==0) return;
+        event.preventDefault();
+        input.focus({preventScroll:true});
+        manualDrag=true;
+        state.settings.paletteDragging=true;
+        clearTimeout(saveTimer);
+        setRangeFromPointer(event);
+        const move=e=>{if(!manualDrag)return;e.preventDefault();setRangeFromPointer(e);};
+        const up=e=>{
+          if(!manualDrag)return;
+          if(e)e.preventDefault();
+          manualDrag=false;
+          window.removeEventListener('mousemove',move,true);
+          window.removeEventListener('mouseup',up,true);
+          state.settings.paletteDragging=false;
+          clearTimeout(saveTimer);
+          void sendGlobal({[key]:Number(input.value)},false);
+        };
+        window.addEventListener('mousemove',move,true);
+        window.addEventListener('mouseup',up,true);
+      });
+      input.addEventListener('input',()=>{
+        if(manualDrag)return;
+        value.textContent=`${input.value}${suffix}`;
+        global[key]=Number(input.value);
+        applyLiveGlobal();
+        scheduleGlobalSave({[key]:Number(input.value)});
+      });
+      input.addEventListener('change',()=>{if(manualDrag)return;clearTimeout(saveTimer);void sendGlobal({[key]:Number(input.value)},false);});
+      control.append(input,value);row.append(copy,control);
+      if (key === 'glow') row.dataset.baronAnchor = 'settings_glow';
+      globalCard.body.append(row);
+    };
+    addGlobalRange('depth','Глубина','Насколько тёмными будут фон и панели.',0,100);
+    addGlobalRange('saturation','Интенсивность цвета','Насколько сильно выбранный цвет влияет на весь интерфейс.',0,100);
+    addGlobalRange('contrast','Контраст','Насколько заметно разделяются фон, панели, рамки и активные элементы.',0,100);
+    addGlobalRange('glow','Свечение','Сила подсветки кнопок, рамок и активных состояний.',0,100);
+
+    const resetGlobal=settingsActionButton('Сбросить единую палитру');resetGlobal.addEventListener('click',()=>sendGlobal({reset:true,base:'#4B8DFF',depth:72,saturation:82,contrast:72,glow:80},true));globalCard.body.append(resetGlobal);
+    root.append(globalCard.card);
+
     const themes = Array.isArray(appearance.themes) ? appearance.themes : [];
-    const themeCard = settingsCard('Палитра цветов', 'Готовые темы Lua-интерфейса ArzMarket');
+    const themeCard = settingsCard('Готовые темы', 'Готовые темы меняют и Lua, и HTML');
+    themeCard.card.dataset.baronAnchor = 'settings_themes';
+    themeCard.card.classList.add('settings-appearance-themes');
     const themeGrid = document.createElement('div'); themeGrid.className = 'settings-theme-grid';
     for (const theme of themes) {
-      const button = document.createElement('button'); button.type='button'; button.className=`settings-theme ${theme.selected?'active':''}`;
+      const button = document.createElement('button'); button.type='button'; button.className=`settings-theme ${theme.selected&&!global.enabled?'active':''}`;
       button.style.setProperty('--theme-accent', theme.accent || '#42d69b');
-      button.innerHTML = `<span class="settings-theme-dot"></span><span><strong>${text(theme.label)}</strong><small>${text(theme.hint)}</small></span>`;
-      button.addEventListener('click', async () => { try { await action('settings.theme.select',{page:'settings',key:theme.key}); showToast(`Тема: ${theme.label}`,'success'); await refresh(true,'settings'); } catch(err){showToast(`Тема: ${err.message}`,'error');} });
+      button.innerHTML = `<span class="settings-theme-dot"></span><span><strong>${text(theme.label)}</strong></span>`;
+      button.addEventListener('click', async () => { const previous=refs.app?.dataset.htmlTheme || 'arzmarket_default'; const previousProfile=state.data?.common?.htmlThemeProfile || appearance.global_palette || null; applyHtmlTheme(theme.key,{enabled:false,glow:Number(global.glow)||0}); try { await action('settings.theme.select',{page:'settings',key:theme.key}); showToast(`Тема: ${theme.label}`,'success'); await refresh(true,'settings'); } catch(err){ applyHtmlTheme(previous,previousProfile); showToast(`Тема: ${err.message}`,'error'); } });
       themeGrid.append(button);
     }
     themeCard.body.append(themeGrid); root.append(themeCard.card);
 
     const ui = settingsCard('Интерфейс Lua', 'Параметры старого mimgui-интерфейса сохраняются в тех же конфигурациях');
+    ui.card.classList.add('settings-appearance-lua');
     settingsToggle(ui.body,'background_blur','Размытие фона за меню','Размывает игровую сцену за Lua-окном ArzMarket');
     settingsToggle(ui.body,'button_style','Стиль переключателей','Альтернативное оформление ToggleButton');
     settingsToggle(ui.body,'border_side','Включить обводку элементов','Показывает границы полей и контролов');
-    settingsToggle(ui.body,'rgb_window','Тип обводки экрана','Включает динамическую цветную обводку основного окна');
-    settingsToggle(ui.body,'smooth_open','Плавные открытия в меню','Включает fade-анимацию Lua-интерфейса');
-    settingsRange(ui.body,'menu_opacity_percent','Общая прозрачность','20% почти прозрачно, 100% полностью непрозрачно',20,100,1,'%');
-    settingsRange(ui.body,'rainbow_speed','Скорость смены цвета контура','Скорость динамической обводки',0,5,0.1,'');
-    settingsRange(ui.body,'blur_strength','Сила размытия','Интенсивность размытия фона',0.5,4,0.1,'');
-    const scaleRow = document.createElement('div'); scaleRow.className='settings-row settings-scale-row';
-    const copy=document.createElement('div'); copy.className='settings-row-copy'; copy.innerHTML='<strong>Размер интерфейса</strong><small>Текст, кнопки и элементы. Размер окна меняется только мышью за правый нижний угол.</small>';
-    const control=document.createElement('div'); control.className='settings-scale-control';
-    const range=document.createElement('input'); range.type='range'; range.min='100'; range.max='150'; range.step='1'; range.value=String(state.settings.pendingScale ?? settingsValues().menu_scale_percent ?? 100);
-    const val=document.createElement('span'); val.className='settings-range-value'; val.textContent=`${range.value}%`;
-    const apply=settingsActionButton('Применить','primary');
-    range.addEventListener('input',()=>{state.settings.pendingScale=Number(range.value);val.textContent=`${range.value}%`;apply.disabled=Number(range.value)===Number(settingsValues().menu_scale_percent);});
-    apply.disabled=Number(range.value)===Number(settingsValues().menu_scale_percent);
-    apply.addEventListener('click',async()=>{try{const value=normalizeInterfaceScalePercent(range.value);state.interfaceScalePercent=value;updateVisualScale();await action('settings.scale.apply',{page:'settings',value});state.settings.pendingScale=null;showToast('Размер интерфейса применен.','success');}catch(err){showToast(`Масштаб: ${err.message}`,'error');}});
-    control.append(range,val,apply); scaleRow.append(copy,control); ui.body.append(scaleRow);
+    settingsToggle(ui.body,'rgb_window','RGB обводка меню','Динамическая радужная обводка окна');
+    settingsToggle(ui.body,'smooth_open','Плавное открытие меню','Анимация прозрачности при открытии');
+    settingsRange(ui.body,'menu_opacity_percent','Прозрачность меню','',20,100,1,'%');
+    settingsRange(ui.body,'rainbow_speed','Скорость RGB','',0.1,10,0.1,'');
+    settingsRange(ui.body,'blur_strength','Сила размытия','',0,10,0.1,'');
+    const scaleRow=document.createElement('div');scaleRow.className='settings-row settings-scale-row';const copy=document.createElement('div');copy.className='settings-row-copy';copy.innerHTML='<strong>Размер интерфейса</strong>';
+    const control=document.createElement('div');control.className='settings-scale-control';const range=document.createElement('input');range.type='range';range.min='100';range.max='150';range.step='1';range.value=String(state.settings.pendingScale ?? settingsValues().menu_scale_percent ?? 120);const val=document.createElement('span');val.className='settings-range-value';val.textContent=`${range.value}%`;const apply=settingsActionButton('Применить','small');range.addEventListener('input',()=>{state.settings.pendingScale=Number(range.value);val.textContent=`${range.value}%`;});apply.addEventListener('click',async()=>{try{await action('settings.scale.apply',{page:'settings',value:Number(range.value)});showToast('Размер сохранён. Интерфейс перезагружается.','success');}catch(err){showToast(`Размер: ${err.message}`,'error');}});control.append(range,val,apply);scaleRow.append(copy,control);ui.body.append(scaleRow);
     root.append(ui.card);
 
-    const custom = settingsCard('Пользовательская палитра', 'Те же цвета, которые используются редактором Lua');
+    const custom = settingsCard('Точная палитра Lua', 'Ручная настройка отдельных цветов старого Lua-интерфейса');
+    custom.card.classList.add('settings-appearance-custom');
     const enabled = appearance.custom_enabled === true;
     const top = document.createElement('div'); top.className='settings-palette-top';
     const customToggle=document.createElement('button');customToggle.type='button';customToggle.className=`settings-toggle ${enabled?'on':''}`;customToggle.innerHTML='<span></span>';customToggle.addEventListener('click',async()=>{try{await action('settings.palette.enable',{page:'settings',value:!enabled});await refresh(true,'settings');}catch(err){showToast(`Палитра: ${err.message}`,'error');}});
-    const titleWrap=document.createElement('div');titleWrap.className='settings-row-copy';titleWrap.innerHTML='<strong>Включить пользовательскую палитру</strong><small>Цвета применяются к Lua-интерфейсу и сохраняются в theme.json</small>';top.append(titleWrap,customToggle);custom.body.append(top);
+    const titleWrap=document.createElement('div');titleWrap.className='settings-row-copy';titleWrap.innerHTML='<strong>Включить точную палитру Lua</strong>';top.append(titleWrap,customToggle);custom.body.append(top);
     const groups = Array.isArray(appearance.custom_groups) ? appearance.custom_groups : [];
     for (const group of groups) {
       const groupBox=document.createElement('div');groupBox.className='settings-color-group';
@@ -3116,45 +3740,14 @@
     installWheelScroller(refs.settingsContent);
   }
 
-  function modsData() { return state.data?.data || {}; }
-  function setModsToggle(node, enabled) {
-    if (!node) return;
-    node.classList.toggle('on', enabled === true);
-    node.setAttribute('aria-pressed', enabled === true ? 'true' : 'false');
-  }
-  async function saveMod(key, value) {
-    try {
-      await action('mods.set', {page:'mods', key, value});
-      await refresh(true, 'mods');
-      return true;
-    } catch (err) {
-      showToast(`Модификации: ${err.message}`, 'error');
-      await refresh(true, 'mods').catch(() => {});
-      return false;
-    }
-  }
   function renderMods() {
-    const data = modsData();
-    setModsToggle(refs.modsRemovePlayers, data.remove_players === true);
-    setModsToggle(refs.modsRemoveVehicles, data.remove_vehicles === true);
-    setModsToggle(refs.modsAutoCycle, data.auto_cycle === true);
-    if (refs.modsManualCount) refs.modsManualCount.textContent = String(Math.max(0, Number(data.manual_purchased_count || 0)));
-    if (refs.modsPendingSell) refs.modsPendingSell.textContent = String(Math.max(0, Number(data.cycle_pending_sell || 0)));
-    if (refs.modsPendingRebuy) refs.modsPendingRebuy.textContent = String(Math.max(0, Number(data.cycle_pending_rebuy || 0)));
-    const manualRunning = data.manual_purchased_running === true;
-    const cycleActive = data.cycle_active === true;
-    if (refs.modsManualPurchasedButton) {
-      refs.modsManualPurchasedButton.textContent = manualRunning ? 'Остановить ручное выставление' : 'Выставить скупленные товары';
-      refs.modsManualPurchasedButton.classList.toggle('danger', manualRunning);
-      refs.modsManualPurchasedButton.disabled = data.trade_busy === true && !manualRunning;
-    }
-    if (refs.modsCycleStatus) {
-      const strong = refs.modsCycleStatus.querySelector('strong');
-      refs.modsCycleStatus.classList.toggle('active', cycleActive || manualRunning);
-      if (manualRunning) { if (strong) strong.textContent='Ручное выставление'; }
-      else if (cycleActive) { if (strong) strong.textContent='Автоцикл выполняется'; }
-      else { if (strong) strong.textContent=data.auto_cycle === true ? 'Автоцикл готов' : 'Ожидание'; }
-    }
+    if (!refs.modsWorkspace) return;
+    refs.modsWorkspace.querySelectorAll('[data-mods-section]').forEach(button => {
+      const active = button.dataset.modsSection === state.modsSection;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    // Content intentionally stays empty for both sections until their functionality is implemented.
   }
 
   function render() {
@@ -3219,17 +3812,25 @@
   }
 
   async function patchItem(item, patch) {
-    if (!item || tradeBusy()) return;
+    if (!item || tradeBusy()) return false;
     try {
       refs.saveBadge.textContent = 'Сохранение...';
       await action('trade.item.update', {side: state.page, identity: item.identity, patch});
       refs.saveBadge.textContent = 'Сохранено';
       await refresh(true);
       setTimeout(() => { refs.saveBadge.textContent = 'Автосохранение'; }, 900);
+      return true;
     } catch (err) {
       refs.saveBadge.textContent = 'Не сохранено';
-      showToast(err.status === 409 ? 'Состояние изменилось. Обновляю данные.' : `Не удалось сохранить: ${err.message}`, 'error');
+      if (err.status === 409 && err.message === 'trade_active') {
+        showToast('Сначала остановите активную торговлю.', 'error');
+      } else if (err.status === 409 && err.message === 'stale_state') {
+        showToast('Список обновился. Повтори изменение состояния.', 'error');
+      } else {
+        showToast(`Не удалось сохранить: ${err.message}`, 'error');
+      }
       await refresh(true);
+      return false;
     }
   }
 
@@ -3305,8 +3906,8 @@
   }
 
   function renderPicker() {
-    const source = state.data?.data?.source || [];
-    const existing = new Set((state.data?.data?.items || []).map(item => normalizeName(item.name)));
+    const source = asArray(state.data?.data?.source);
+    const existing = new Set(asArray(state.data?.data?.items).map(item => normalizeName(item.name)));
     const q = normalizeName(state.pickerSearch);
     const filtered = source
       .filter(item => !existing.has(normalizeName(item.name)) && (!q || normalizeName(item.name).includes(q)))
@@ -3351,7 +3952,7 @@
     if (page === 'buy' || page === 'sell') Object.assign(common, {configs:[], activeConfig:'', currencyMode:'SA'});
     let data;
     if (page === 'logs') data = {records:[]};
-    else if (page === 'settings') data = {values:{}, appearance:{themes:[], customGroups:[]}, configs:{sell:{items:[]}, buy:{items:[]}}};
+    else if (page === 'settings') data = {values:{}, appearance:{themes:[], global_palette:{enabled:false,base:'#4B8DFF',depth:72,saturation:82,contrast:72,glow:80}, custom_groups:[]}, configs:{sell:{items:[]}, buy:{items:[]}}, mods:{remove_players:false,remove_vehicles:false,auto_cycle:false,manual_purchased_running:false,trade_busy:false}};
     else if (page === 'marketplace') data = {status:'loading', shops:[], servers:[], selectedIndex:0, selectedName:'Все сервера', currentServerId:null, queue:0, shopCount:0, sortMode:0, lastUpdated:0};
     else if (page === 'mods') data = {remove_players:false, remove_vehicles:false, auto_fps:false, auto_fps_active:false, auto_fps_reason:'none', fps:0, players:null, players_threshold:80, fps_threshold:45, auto_cycle:false, manual_purchased_count:0, manual_purchased_running:false, cycle_active:false, cycle_pending_sell:0, cycle_pending_rebuy:0, trade_busy:false};
     else data = {items:[], source:[], locationCount:0};
@@ -3393,15 +3994,21 @@
 
     // Give CEF one frame to present the page before doing Lua/HTTP work.
     await new Promise(resolve => requestAnimationFrame(resolve));
-    const payload = {page, side: page === 'sell' ? 'sell' : page === 'buy' ? 'buy' : undefined};
-    const navigatePromise = action('ui.navigate', payload).catch(() => null);
-    const refreshPromise = refresh(true, page).catch(() => null);
-    await Promise.all([navigatePromise, refreshPromise]);
+    const payload = {page, side: page === 'sell' ? 'sell' : page === 'buy' ? 'buy' : undefined, preview: previewMode === true};
+    await action('ui.navigate', payload).catch(() => null);
+    await refresh(true, page).catch(() => null);
   }
 
   document.addEventListener('click', async event => {
     const pageButton = event.target.closest('.nav-item[data-page]');
-    if (pageButton) return switchPage(pageButton.dataset.page);
+    if (pageButton) {
+      const requestedPage = pageButton.dataset.page;
+      if (requestedPage === state.page) {
+        await baronAssistantUi?.event('page', {page: requestedPage});
+        return;
+      }
+      return switchPage(requestedPage);
+    }
     const button = event.target.closest('[data-action]');
     if (!button) return;
     const name = button.dataset.action;
@@ -3448,15 +4055,14 @@
     if (name === 'budget-close') closeBudget();
   });
 
-  refs.modsRemovePlayers?.addEventListener('click',()=>saveMod('remove_players', modsData().remove_players !== true));
-  refs.modsRemoveVehicles?.addEventListener('click',()=>saveMod('remove_vehicles', modsData().remove_vehicles !== true));
-  refs.modsAutoCycle?.addEventListener('click',()=>saveMod('auto_cycle', modsData().auto_cycle !== true));
-  refs.modsManualPurchasedButton?.addEventListener('click',async()=>{
-    try { refs.modsManualPurchasedButton.disabled=true; const result=await action('mods.manual_purchased',{page:'mods'}); showToast(result.state==='stopped'?'Ручное выставление остановлено':'Ручное выставление запущено','success'); await refresh(true,'mods'); }
-    catch(err){ showToast(`Автоцикл: ${err.message}`,'error'); await refresh(true,'mods').catch(()=>{}); }
-    finally { refs.modsManualPurchasedButton.disabled=false; }
+  refs.modsWorkspace?.addEventListener('click', event => {
+    const button = event.target.closest('[data-mods-section]');
+    if (!button || state.page !== 'mods') return;
+    const section = String(button.dataset.modsSection || 'scripts');
+    if (!['scripts','mine'].includes(section)) return;
+    state.modsSection = section;
+    renderMods();
   });
-  refs.modsTelegramButton?.addEventListener('click',()=>action('mods.telegram',{page:'mods'}).catch(err=>showToast(`Telegram: ${err.message}`,'error')));
 
   refs.marketplaceSearchInput?.addEventListener('input',()=>{
     state.marketplace.search=refs.marketplaceSearchInput.value;
@@ -3486,6 +4092,7 @@
     if (!['general','trade','automation','telegram','appearance','configs'].includes(section)) return;
     state.settings.section = section;
     renderSettings();
+    baronAssistantUi?.event('settings_section_changed', {section});
   });
 
   refs.storageSearchInput?.addEventListener('input',()=>{state.storage.search=refs.storageSearchInput.value;renderStorage();});
@@ -3509,6 +4116,22 @@
     if (state.page === 'sell' && !tradeBusy()) refs.scanButton.click();
   });
 
+
+  document.querySelectorAll('[data-sell-status-filter]').forEach(button => {
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      const next = String(button.dataset.sellStatusFilter || 'all');
+      state.sellStatusFilter = ['enabled','disabled'].includes(next) ? next : 'all';
+      renderSellItems();
+
+      const baronEvent = state.sellStatusFilter === 'enabled'
+        ? 'sell_stats_enabled_clicked'
+        : state.sellStatusFilter === 'disabled'
+          ? 'sell_stats_disabled_clicked'
+          : 'sell_stats_total_clicked';
+      void baronAssistantUi?.event(baronEvent, {filter: state.sellStatusFilter});
+    });
+  });
 
   document.querySelectorAll('[data-sell-sort]').forEach(button => {
     button.addEventListener('click', event => {
@@ -3611,7 +4234,7 @@
     event.preventDefault();
     event.stopPropagation();
     const today = state.data?.common?.today || '';
-    const dates = [...new Set((state.data?.data?.records || []).map(record => record.date).filter(Boolean))]
+    const dates = [...new Set(asArray(state.data?.data?.records).map(record => record.date).filter(Boolean))]
       .sort((a,b) => logsDateValue(b) - logsDateValue(a));
     const options = [{value:'all', label:state.logs.period === 'today' ? 'Сегодня' : 'Все даты'}]
       .concat(dates.map(value => ({value, label:value === today ? `Сегодня · ${value}` : value})));
@@ -3629,8 +4252,17 @@
   });
 
   refs.searchInput.addEventListener('focus', () => {
+    window.clearTimeout(buySearchBlurTimer);
+    buySearchBlurTimer = 0;
     state.searchFocused = state.page === 'buy';
     if (state.page === 'buy') renderGlobalSearchResults();
+  });
+  refs.searchInput.addEventListener('click', () => {
+    if (state.page !== 'buy') return;
+    window.clearTimeout(buySearchBlurTimer);
+    buySearchBlurTimer = 0;
+    state.searchFocused = true;
+    renderGlobalSearchResults();
   });
   refs.searchInput.addEventListener('input', () => {
     state.search = refs.searchInput.value;
@@ -3644,7 +4276,9 @@
     }
   });
   refs.searchInput.addEventListener('blur', () => {
-    window.setTimeout(() => {
+    window.clearTimeout(buySearchBlurTimer);
+    buySearchBlurTimer = window.setTimeout(() => {
+      buySearchBlurTimer = 0;
       state.searchFocused = false;
       if (state.page === 'buy') renderGlobalSearchResults();
       else refs.globalSearchResults.classList.add('hidden');
@@ -3653,7 +4287,9 @@
   refs.tradeFilterButton?.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-    setTradeFilterOpen(refs.tradeFilterPanel?.classList.contains('hidden') !== false);
+    const opening = refs.tradeFilterPanel?.classList.contains('hidden') !== false;
+    setTradeFilterOpen(opening);
+    if (opening) baronAssistantUi?.event('filter_opened', {side: state.page});
   });
   refs.tradeFilterClose?.addEventListener('click', event => {
     event.preventDefault();
@@ -3677,7 +4313,7 @@
     } catch (err) { showToast(`Возврат: ${err.message}`, 'error'); }
   });
   refs.clearButton.addEventListener('click', async () => {
-    if (tradeBusy() || !(state.data?.data?.items || []).length) return;
+    if (tradeBusy() || !asArray(state.data?.data?.items).length) return;
     if (Date.now() >= state.clearArmedUntil) {
       state.clearArmedUntil = Date.now() + 2400;
       renderHeader();
@@ -3739,9 +4375,9 @@
     } catch (err) { showToast(`Валюта: ${err.message}`, 'error'); }
   });
   if (refs.sellCurrencyQuickButton) refs.sellCurrencyQuickButton.addEventListener('click', async () => {
-    if (tradeBusy() || state.page !== 'sell') return;
+    if (tradeBusy() || (state.page !== 'buy' && state.page !== 'sell')) return;
     try {
-      await action('trade.currency.toggle', {side: 'sell'});
+      await action('trade.currency.toggle', {side: state.page});
       await refresh(true);
     } catch (err) { showToast(`Валюта: ${err.message}`, 'error'); }
   });
@@ -3891,6 +4527,8 @@
     state.data = emptyPageState('settings');
     try { render(); refs.runtimeText.textContent = 'Загрузка настроек...'; } catch (err) { console.error('[ArzMarket HTML] initial settings shell failed:', err); }
   }
+  // Do not paint a temporary buy/sell shell on boot. The interface stays hidden
+  // until the first real Lua state arrives, which prevents the foreign first window.
   refresh(true);
   window.setInterval(() => refresh(false), 650);
 })();

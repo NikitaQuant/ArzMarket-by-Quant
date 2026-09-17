@@ -1,0 +1,424 @@
+/* Baron assistant overlay. Matches the polished onboarding mockup. */
+.baron-assistant {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  position: fixed;
+  z-index: 2147483000;
+  width: 466px;
+  height: 293px;
+  min-height: 293px;
+  padding: 26px 30px 28px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.992);
+  box-shadow: 0 16px 34px rgba(0,0,0,.17), 0 2px 0 rgba(255,255,255,.92) inset;
+  color: #111827;
+  font-family: Arial, sans-serif;
+  pointer-events: auto;
+  overflow: visible;
+  outline: none !important;
+  transition: opacity .14s ease, transform .14s ease;
+}
+.baron-assistant.hidden { display: none !important; }
+.baron-assistant.photo-bubble {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  box-shadow: none;
+  border-radius: 0;
+}
+.baron-assistant.photo-bubble::after { display: none; }
+.baron-assistant.photo-bubble .baron-assistant-text {
+  display: flex;
+  flex: 1 1 auto;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  font-family: Arial, sans-serif !important;
+  font-size: 27px !important;
+  font-weight: 700 !important;
+  line-height: 1.16 !important;
+  text-align: center;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  text-shadow: none;
+}
+.baron-assistant.photo-bubble .baron-assistant-text-flow {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.baron-assistant.photo-bubble .baron-assistant-actions {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: calc(100% - 36px);
+  margin: 10px auto 0;
+  padding: 0 24px 0 6px;
+  box-sizing: border-box;
+}
+.baron-assistant.entering { opacity: 0; transform: translateY(6px) scale(.985); }
+.baron-assistant::after {
+  content: "";
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  background: rgba(255,255,255,.992);
+  filter: drop-shadow(0 7px 6px rgba(0,0,0,.07));
+}
+.baron-assistant.bubble-top::after {
+  left: calc(var(--baron-tail-left, 72%) - 13px);
+  bottom: -22px;
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+}
+.baron-assistant.bubble-left::after {
+  right: -22px;
+  top: calc(var(--baron-tail-top, 50%) - 13px);
+  clip-path: polygon(100% 50%, 0 0, 0 100%);
+  filter: drop-shadow(7px 0 6px rgba(0,0,0,.07));
+}
+.baron-assistant.bubble-right::after {
+  left: -22px;
+  top: calc(var(--baron-tail-top, 50%) - 13px);
+  clip-path: polygon(0 50%, 100% 0, 100% 100%);
+  filter: drop-shadow(-7px 0 6px rgba(0,0,0,.07));
+}
+.baron-assistant-text {
+  flex: 1 1 auto;
+  color: #101a2b;
+  font-family: Arial, sans-serif !important;
+  font-size: 27px !important;
+  font-weight: 700 !important;
+  line-height: 1.16 !important;
+  letter-spacing: -.01em;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  text-align: left;
+}
+.baron-assistant-text .baron-text-blue { color: #2ab8ff; }
+.baron-assistant-text .baron-text-red { color: #e84f45; }
+.baron-assistant-text .baron-text-green { color: #22ad63; }
+.baron-assistant-actions {
+  flex: 0 0 auto;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.baron-assistant button {
+  min-width: 132px;
+  height: 38px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: #e8f0fa;
+  color: #526f93;
+  font-family: Arial, sans-serif !important;
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  cursor: pointer;
+  box-shadow: none;
+}
+.baron-assistant button:hover { background: #dceaf7; color: #426486; }
+.baron-assistant button:active { background: #d1e3f3; }
+.baron-assistant button:disabled { background: #edf3f9; color: #8fa4be; cursor: default; opacity: .98; }
+.baron-assistant button:disabled:hover { background: #edf3f9; color: #8fa4be; }
+.baron-assistant button.primary {
+  background: #2187d4;
+  color: #fff;
+}
+.baron-assistant button.primary:hover { background: #2c94e2; color: #fff; }
+.baron-assistant button.interface-old { background: #e84f45; color: #fff; }
+.baron-assistant button.interface-old:hover { background: #f0645b; color: #fff; }
+.baron-assistant button.interface-new { background: #22ad63; color: #fff; }
+.baron-assistant button.interface-new:hover { background: #2ac471; color: #fff; }
+.baron-mascot-layer {
+  position: fixed;
+  z-index: 2147483001;
+  width: 440px;
+  height: 440px;
+  pointer-events: none;
+  filter: drop-shadow(0 14px 25px rgba(0,0,0,.30));
+}
+.baron-mascot-layer.hidden { display: none !important; }
+.baron-mascot-image,
+.baron-mascot-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.baron-mascot-image {
+  display: block;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.baron-mascot-image.failed { display: none; }
+.baron-mascot-fallback { display: none; pointer-events: none; }
+.baron-mascot-fallback.visible { display: block; }
+.baron-mascot-fallback svg { width: 100%; height: 100%; overflow: visible; }
+.baron-pointer { display: none !important; }
+.baron-target-highlight {
+  outline: 2px solid rgba(74,184,255,.90);
+  outline-offset: 4px;
+  box-shadow: 0 0 0 5px rgba(74,184,255,.12), 0 0 18px rgba(70,181,255,.38);
+  animation: baronTargetPulse 1.05s ease-in-out infinite;
+}
+@keyframes baronTargetPulse {
+  0%,100% { box-shadow: 0 0 0 4px rgba(74,184,255,.10), 0 0 13px rgba(70,181,255,.25); }
+  50% { box-shadow: 0 0 0 7px rgba(74,184,255,.17), 0 0 22px rgba(70,181,255,.48); }
+}
+@media (max-width: 900px), (max-height: 620px) {
+  .baron-assistant-text { font-family: Arial, sans-serif !important; font-size: 27px !important; font-weight: 700 !important; line-height: 1.16 !important; }
+  .baron-assistant button { min-width: 116px; height: 38px; font-family: Arial, sans-serif !important; font-size: 18px !important; font-weight: 700 !important; }
+  .baron-mascot-layer { width: 280px; height: 280px; }
+}
+
+/* Baron tutorial keeps required controls reachable without changing the user's minimal-mode preference. */
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_filter_prompt"] #tradeFilterButton,
+#app.minimal-mode.baron-tutorial-active[data-baron-step^="sell_filter_"] #tradeFilterButton,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_currency"] #sellCurrencyQuickButton,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="buy_auto_prices"] #averageButton {
+  display: inline-flex !important;
+}
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_filter_1"] #tradeFilterPanel,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_filter_2"] #tradeFilterPanel,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_filter_3"] #tradeFilterPanel,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_filter_4"] #tradeFilterPanel,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_filter_5"] #tradeFilterPanel {
+  display: block !important;
+}
+
+.baron-assistant button.tutorial-accept { min-width: 156px; }
+.baron-assistant button.tutorial-later { min-width: 102px; }
+
+
+/* Baron future-features promo. Keep these styles in the external stylesheet:
+   Arizona CEF may ignore dynamically injected <style> elements. */
+.baron-promo-backdrop {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483646 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  padding: 10px !important;
+  background: rgba(4, 8, 14, .78) !important;
+}
+.baron-promo-backdrop.hidden {
+  display: none !important;
+}
+.baron-promo-card {
+  position: relative !important;
+  width: min(740px, calc(100vw - 16px)) !important;
+  height: min(960px, calc(100vh - 16px)) !important;
+  max-width: calc(100vw - 20px) !important;
+  max-height: calc(100vh - 20px) !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 72px 70px 58px !important;
+  overflow: hidden !important;
+  background-color: transparent !important;
+  background-image: url('/static/assets/baron/promo_panel.png?v=103') !important;
+  background-position: center !important;
+  background-size: 100% 100% !important;
+  background-repeat: no-repeat !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+.baron-promo-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  padding: 2px 10px 0 4px !important;
+  box-sizing: border-box !important;
+}
+.baron-promo-line {
+  display: block !important;
+  margin: 0 0 16px !important;
+  color: #172235 !important;
+  font-family: Arial, sans-serif !important;
+  font-size: 19px !important;
+  font-weight: 600 !important;
+  line-height: 1.46 !important;
+  letter-spacing: .005em !important;
+  text-transform: none !important;
+  white-space: pre-wrap !important;
+}
+.baron-promo-heading {
+  margin-bottom: 22px !important;
+  font-size: 21px !important;
+  font-weight: 800 !important;
+  line-height: 1.28 !important;
+}
+.baron-promo-alert {
+  color: #dd2a20 !important;
+  font-weight: 800 !important;
+  text-transform: uppercase !important;
+  line-height: 1.36 !important;
+  margin-top: 10px !important;
+}
+.baron-promo-link-call {
+  display: block !important;
+  margin: 6px 0 8px !important;
+  color: #7e1f19 !important;
+  font-family: Arial, sans-serif !important;
+  font-size: 19px !important;
+  font-weight: 700 !important;
+  line-height: 1.28 !important;
+  text-align: center !important;
+}
+.baron-promo-link {
+  display: block !important;
+  margin: 0 0 14px !important;
+  color: transparent !important;
+  font-family: Arial, sans-serif !important;
+  font-size: 21px !important;
+  font-weight: 800 !important;
+  line-height: 1.28 !important;
+  text-transform: uppercase !important;
+  text-decoration: none !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  background: linear-gradient(90deg, #ff334d, #ff9a2f, #ffe14a, #48d66f, #2ccde4, #4f7cff, #a95cff, #ff4bc1, #ff334d) !important;
+  background-size: 320% 100% !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  animation: baronPromoRainbow 3.2s linear infinite !important;
+  filter: drop-shadow(0 0 4px rgba(70, 120, 255, .16)) !important;
+}
+@keyframes baronPromoRainbow {
+  from { background-position: 0% 50%; }
+  to { background-position: 320% 50%; }
+}
+.baron-promo-actions {
+  flex: 0 0 auto !important;
+  padding-top: 10px !important;
+  display: flex !important;
+  justify-content: center !important;
+}
+.baron-promo-button {
+  min-width: 190px !important;
+  height: 38px !important;
+  padding: 0 22px !important;
+  box-sizing: border-box !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #e8eef6 !important;
+  color: #4a6688 !important;
+  font-family: Arial, sans-serif !important;
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+}
+.baron-promo-button:disabled {
+  cursor: default !important;
+  color: #90a0b3 !important;
+}
+
+.baron-assistant-actions.baron-link-actions {
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.baron-assistant button.baron-message-link {
+  min-width: 210px;
+  color: #1976c9;
+  text-decoration: underline;
+}
+
+
+/* v182: keep sell status summary visible while Baron explains its three filters. */
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_stats_total"] .sell-title-summary,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_stats_enabled"] .sell-title-summary,
+#app.minimal-mode.baron-tutorial-active[data-baron-step="sell_stats_disabled"] .sell-title-summary {
+  display: flex !important;
+}
+
+
+/* v223: Baron text scales with the viewport, while the PNG bubble uses a gentler capped scale. */
+.baron-assistant {
+  --baron-screen-scale: 1;
+}
+.baron-assistant .baron-assistant-text,
+.baron-assistant.photo-bubble .baron-assistant-text {
+  font-size: calc(27px * var(--baron-screen-scale)) !important;
+}
+.baron-assistant .baron-assistant-actions {
+  gap: calc(8px * var(--baron-screen-scale)) !important;
+  margin-top: calc(12px * var(--baron-screen-scale)) !important;
+}
+.baron-assistant.photo-bubble .baron-assistant-actions {
+  width: calc(100% - (36px * var(--baron-screen-scale))) !important;
+  margin-top: calc(10px * var(--baron-screen-scale)) !important;
+  padding-left: calc(6px * var(--baron-screen-scale)) !important;
+  padding-right: calc(24px * var(--baron-screen-scale)) !important;
+}
+.baron-assistant button {
+  min-width: calc(132px * var(--baron-screen-scale)) !important;
+  height: calc(38px * var(--baron-screen-scale)) !important;
+  padding-left: calc(18px * var(--baron-screen-scale)) !important;
+  padding-right: calc(18px * var(--baron-screen-scale)) !important;
+  font-size: calc(18px * var(--baron-screen-scale)) !important;
+}
+.baron-assistant button.tutorial-accept {
+  min-width: calc(156px * var(--baron-screen-scale)) !important;
+}
+.baron-assistant button.tutorial-later {
+  min-width: calc(102px * var(--baron-screen-scale)) !important;
+}
+.baron-assistant-actions.baron-link-actions {
+  gap: calc(6px * var(--baron-screen-scale)) !important;
+  margin-top: calc(8px * var(--baron-screen-scale)) !important;
+}
+.baron-assistant button.baron-message-link {
+  min-width: calc(210px * var(--baron-screen-scale)) !important;
+}
+
+/* v224: text now scales more softly and long messages use wider bubble metrics. */
+
+/* v225: all normal Baron replies use one viewport-scaled font size. */
+
+/* v228: larger promo text, wider spacing and animated Telegram link. */
+
+/* v229: promo panel made roomier and text reduced a bit to avoid scrolling. */
+
+
+/* v255: every normal Baron replica uses the original large Arial Bold typography in every HTML viewport. */
+.baron-assistant .baron-assistant-text,
+.baron-assistant.photo-bubble .baron-assistant-text,
+.baron-assistant .baron-assistant-text-flow {
+  font-family: Arial, sans-serif !important;
+  font-weight: 700 !important;
+  font-style: normal !important;
+  line-height: 1.16 !important;
+}
+
+.baron-assistant button.future-details-yes { min-width: 132px; }
+.baron-assistant button.future-details-no { min-width: 286px; font-size: 16px !important; }
+.baron-assistant.photo-bubble .baron-assistant-actions.future-details-actions { width: calc(100% - 12px); padding: 0 10px 0 2px; }

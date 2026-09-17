@@ -21,16 +21,16 @@
   width:calc(72px * var(--ui-scale)) !important;
   height:calc(72px * var(--ui-scale)) !important;
   flex:none !important;
-  border:1px solid rgba(83,239,171,.76) !important;
+  border:1px solid var(--am-accent-medium) !important;
   border-radius:calc(12px * var(--ui-scale)) !important;
-  background-color:rgba(32,188,117,.23) !important;
-  box-shadow:inset 0 0 calc(26px * var(--ui-scale)) rgba(44,225,151,.10),0 0 calc(17px * var(--ui-scale)) rgba(42,215,144,.11) !important;
+  background-color:var(--am-accent-soft) !important;
+  box-shadow:inset 0 0 calc(26px * var(--ui-scale)) var(--am-accent-soft),0 0 calc(17px * var(--ui-scale)) var(--am-accent-glow) !important;
 }
 #app[data-page="sell"] .page-header-icon svg {
   display:block !important;
   width:calc(40px * var(--ui-scale)) !important;
   height:calc(40px * var(--ui-scale)) !important;
-  color:#61f0b1 !important;
+  color:var(--am-accent-2) !important;
 }
 #app[data-page="sell"] .page-header-copy { min-width:calc(295px * var(--ui-scale)) !important; }
 #app[data-page="sell"] .page-header h1 {
@@ -196,14 +196,14 @@
   font-size:calc(15.5px * var(--ui-scale)) !important;
   font-weight:750 !important;
   color:#f7fff9 !important;
-  border-color:rgba(88,244,170,.78) !important;
-  background:linear-gradient(180deg,#4be6a4 0%,#2dcc89 54%,#20b977 100%) !important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.34),inset 0 -1px 0 rgba(0,0,0,.14),0 0 calc(24px * var(--ui-scale)) rgba(43,213,143,.19) !important;
+  border-color:var(--am-accent-medium) !important;
+  background:linear-gradient(180deg,var(--am-accent-2) 0%,var(--am-accent) 54%,var(--am-accent-dark) 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.34),inset 0 -1px 0 rgba(0,0,0,.14),0 0 calc(24px * var(--ui-scale)) var(--am-accent-glow) !important;
 }
 #app[data-page="sell"] #sellScanMainButton.active-action {
-  color:#8cf4c5 !important;
-  border-color:rgba(54,221,153,.58) !important;
-  background:linear-gradient(180deg,rgba(30,121,87,.30),rgba(17,70,52,.24)) !important;
+  color:var(--am-accent-2) !important;
+  border-color:var(--am-accent-medium) !important;
+  background:linear-gradient(180deg,var(--am-accent-medium),var(--am-accent-soft)) !important;
 }
 
 /* No separate Sell information card. Two Buy-style cards fill the whole workspace. */
@@ -342,7 +342,7 @@
   border-color:rgba(54,221,149,.52) !important;
   background:rgba(28,185,112,.12) !important;
 }
-#app[data-page="sell"] .sell-inventory-add.added::before { color:#67edb0 !important; }
+#app[data-page="sell"] .sell-inventory-add.added::before { color:var(--am-accent-2) !important; }
 
 /* Sell table copies Buy table geometry, with inline fields kept because Sell has no details card. */
 #app[data-page="sell"] .sell-table-head,
@@ -448,7 +448,7 @@
 }
 #app[data-page="sell"] .sell-sale-remaining {
   font-size:calc(13.5px * var(--ui-scale)) !important;
-  color:#57ecaa !important;
+  color:var(--am-accent-2) !important;
 }
 #app[data-page="sell"] .sell-sale-status {
   display:flex !important;

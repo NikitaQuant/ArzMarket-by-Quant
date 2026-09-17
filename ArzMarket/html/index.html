@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="referrer" content="no-referrer">
   <title>ArzMarket</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=120">
   <link rel="stylesheet" href="/static/css/state.css">
   <link rel="stylesheet" href="/static/css/buy.css?v=12">
   <link rel="stylesheet" href="/static/css/buy-polish.css?v=12">
-  <link rel="stylesheet" href="/static/css/windowing.css?v=16">
+  <link rel="stylesheet" href="/static/css/windowing.css?v=90">
   <link rel="stylesheet" href="/static/css/buy-v13.css?v=16">
   <link rel="stylesheet" href="/static/css/visual-v18.css?v=18">
   <link rel="stylesheet" href="/static/css/visual-v19.css?v=19">
@@ -26,27 +26,52 @@
   <link rel="stylesheet" href="/static/css/sell-v32-two-column.css?v=32">
   <link rel="stylesheet" href="/static/css/sell-v33-buy-clone.css?v=33">
   <link rel="stylesheet" href="/static/css/sell-v34-cleanup.css?v=34">
-  <link rel="stylesheet" href="/static/css/sell-v35-row-polish.css?v=35">
+  <link rel="stylesheet" href="/static/css/sell-v35-row-polish.css?v=36">
   <link rel="stylesheet" href="/static/css/logs-v36.css?v=36">
   <link rel="stylesheet" href="/static/css/logs-v37-buy-parity.css?v=37">
   <link rel="stylesheet" href="/static/css/storage-v38.css?v=42">
   <link rel="stylesheet" href="/static/css/storage-v42-layout-fix.css?v=42">
   <link rel="stylesheet" href="/static/css/storage-v43-sell-parity.css?v=43">
   <link rel="stylesheet" href="/static/css/settings-v45.css?v=45">
-  <link rel="stylesheet" href="/static/css/settings-v46-fix.css?v=66">
+  <link rel="stylesheet" href="/static/css/settings-v46-fix.css?v=88">
   <link rel="stylesheet" href="/static/css/marketplace-v47.css?v=50">
-  <link rel="stylesheet" href="/static/css/mods-v55.css?v=68">
+  <link rel="stylesheet" href="/static/css/mods-v55.css?v=88">
   <link rel="stylesheet" href="/static/css/average-prices-v56.css?v=58">
   <link rel="stylesheet" href="/static/css/ui-unified-v59.css?v=60">
   <link rel="stylesheet" href="/static/css/interface-scale-v65.css?v=67">
-  <link rel="stylesheet" href="/static/css/minimal-mode-v69.css?v=70">
+  <link rel="stylesheet" href="/static/css/minimal-mode-v69.css?v=88">
+  <link rel="stylesheet" href="/static/css/assistant-v78.css?v=265">
+  <link rel="stylesheet" href="/static/css/html-themes-v88.css?v=88">
+  <link rel="stylesheet" href="/static/css/ui-polish-v89.css?v=92">
+  <link rel="stylesheet" href="/static/css/theme-system-v158.css?v=192">
+  <link rel="stylesheet" href="/static/css/buy-topbar-sell-parity-v193.css?v=193">
+  <link rel="stylesheet" href="/static/css/buy-header-meta-sell-parity-v194.css?v=194">
+  <link rel="stylesheet" href="/static/css/topbar-sell-parity-v195.css?v=195">
+  <link rel="stylesheet" href="/static/css/header-height-sell-parity-v196.css?v=196">
+  <link rel="stylesheet" href="/static/css/buy-detail-layout-v199.css?v=199">
+  <link rel="stylesheet" href="/static/css/trade-row-sell-parity-v200.css?v=200">
+  <link rel="stylesheet" href="/static/css/number-input-no-spinners-v201.css?v=201">
+  <link rel="stylesheet" href="/static/css/buy-list-fixes-v209.css?v=209">
+  <link rel="stylesheet" href="/static/css/buy-sell-parity-v202.css?v=202">
+  <link rel="stylesheet" href="/static/css/buy-sell-exact-parity-v205.css?v=205">
+  <link rel="stylesheet" href="/static/css/trade-controls-parity-v210.css?v=210">
+  <link rel="stylesheet" href="/static/css/sidebar-settings-reference-v214.css?v=214">
+  <link rel="stylesheet" href="/static/css/buy-start-sell-parity-v217.css?v=217">
+  <link rel="stylesheet" href="/static/css/buy-config-sell-copy-v219.css?v=219">
+  <link rel="stylesheet" href="/static/css/glow-final-v242.css?v=244">
+  <link rel="stylesheet" href="/static/css/theme-accent-parity-v249.css?v=249">
+  <link rel="stylesheet" href="/static/css/mods-catalog-v250.css?v=252">
+  <style id="arzmarket-boot-guard">
+    #app[data-hydrated="0"] { opacity:0 !important; visibility:hidden !important; pointer-events:none !important; }
+  </style>
+  <link rel="stylesheet" href="/static/css/settings-appearance-responsive-v268.css?v=268">
 </head>
 <body data-token="__ARZMARKET_TOKEN__">
-  <div id="app" class="app-shell" data-page="buy">
+  <div id="app" class="app-shell" data-page="buy" data-hydrated="0" style="opacity:0;visibility:hidden;pointer-events:none;">
     <div class="game-dim"></div>
     <main class="window">
       <div class="window-scale-layer">
-      <header class="topbar">
+      <header class="topbar" data-baron-anchor="window_drag">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true"><span></span></div>
           <div class="brand-copy"><div class="brand-title">ArzMarket</div><div class="brand-subtitle">Arizona RP</div></div>
@@ -70,18 +95,17 @@
       <div class="body-grid">
         <aside class="sidebar">
           <nav class="nav-list" aria-label="Разделы ArzMarket">
-            <button class="nav-item" type="button" data-page="sell"><span class="nav-icon nav-icon-sell"></span><span>Продажа</span></button>
-            <button class="nav-item active" type="button" data-page="buy"><span class="nav-icon nav-icon-buy"></span><span>Скупка</span></button>
-            <button class="nav-item" type="button" data-page="settings"><span class="nav-icon nav-icon-settings"></span><span>Настройки</span></button>
-            <button class="nav-item" type="button" data-page="logs"><span class="nav-icon nav-icon-logs"></span><span>Логи</span></button>
-            <button class="nav-item" type="button" data-page="marketplace"><span class="nav-icon nav-icon-market"></span><span>Маркетплейс</span></button>
-            <button class="nav-item" type="button" data-page="mods"><span class="nav-icon nav-icon-mods"></span><span>Модификации</span></button>
-            <button class="nav-item" type="button" data-page="storage"><span class="nav-icon nav-icon-storage"></span><span>Хранилище</span></button>
+            <button class="nav-item" type="button" data-page="sell" data-baron-anchor="nav_sell"><span class="nav-icon nav-icon-sell"></span><span>Продажа</span></button>
+            <button class="nav-item active" type="button" data-page="buy" data-baron-anchor="nav_buy"><span class="nav-icon nav-icon-buy"></span><span>Скупка</span></button>
+            <button class="nav-item" type="button" data-page="settings" data-baron-anchor="nav_settings"><span class="nav-icon nav-icon-settings"></span><span>Настройки</span></button>
+            <button class="nav-item" type="button" data-page="logs" data-baron-anchor="nav_logs"><span class="nav-icon nav-icon-logs"></span><span>Логи</span></button>
+            <button class="nav-item" type="button" data-page="marketplace" data-baron-anchor="nav_marketplace"><span class="nav-icon nav-icon-market"></span><span>Маркетплейс</span></button>
+            <button class="nav-item" type="button" data-page="mods" data-baron-anchor="nav_mods"><span class="nav-icon nav-icon-mods"></span><span>Модификации</span></button>
+            <button class="nav-item" type="button" data-page="storage" data-baron-anchor="nav_storage"><span class="nav-icon nav-icon-storage"></span><span>Хранилище</span></button>
           </nav>
           <div class="sidebar-footer">
             <div class="arizona-card"><div class="arizona-card-glow"></div><div class="arizona-card-title">Arizona RP</div><div class="arizona-card-subtitle">Больше, чем игра</div></div>
             <div class="runtime-state"><span class="status-dot"></span><span id="runtimeText">Подключение...</span></div>
-            <div class="version">v1.0.0</div>
           </div>
         </aside>
         <section class="content">
@@ -89,7 +113,7 @@
             <div class="page-header-icon" id="pageHeaderIcon" aria-hidden="true"></div>
             <div class="page-header-copy"><h1 id="pageTitle">Скупка</h1><p id="pageSubtitle">Автоматический выкуп товаров с Arizona RP</p></div>
             <div class="page-header-meta">
-              <label class="config-label"><span class="config-caption">Конфиг:</span><select id="configSelect" class="select"><option>Не выбран</option></select></label>
+              <label class="config-label"><span class="config-caption">Конфиг:</span><select id="configSelect" class="select" data-baron-anchor="sell_config"><option>Не выбран</option></select></label>
               <div id="automationBadge" class="badge badge-success">Активен</div>
               <div id="saveBadge" class="save-state">Автосохранение</div>
             </div>
@@ -121,15 +145,15 @@
           <div class="toolbar">
             <div class="search-wrap">
               <span class="search-icon" aria-hidden="true"></span>
-              <input id="searchInput" type="text" autocomplete="off" placeholder="Поиск товара...">
+              <input id="searchInput" type="text" data-baron-anchor="buy_search" autocomplete="off" placeholder="Поиск товара...">
               <kbd>Ctrl + F</kbd>
               <div id="globalSearchResults" class="global-search-results hidden"></div>
             </div>
-            <button id="addButton" class="btn btn-secondary" type="button">Добавить</button>
-            <button id="sellScanMainButton" class="btn btn-secondary hidden" type="button">Скан инвентаря</button>
-            <button id="averageButton" class="btn btn-secondary" type="button">Автоматические цены</button>
-            <button id="tradeFilterButton" class="btn btn-secondary filter-open-button" type="button" aria-haspopup="true" aria-expanded="false"><span class="filter-funnel" aria-hidden="true"></span><span>Фильтр</span></button>
-            <div id="tradeFilterPanel" class="trade-filter-panel hidden" role="dialog" aria-label="Порядок типов предметов">
+            <button id="addButton" class="btn btn-secondary hidden" type="button" aria-hidden="true" tabindex="-1">Добавить</button>
+            <button id="sellScanMainButton" class="btn btn-secondary hidden" type="button" data-baron-anchor="sell_scan">Скан инвентаря</button>
+            <button id="averageButton" class="btn btn-secondary" type="button" data-baron-anchor="buy_auto_prices">Автоматические цены</button>
+            <button id="tradeFilterButton" class="btn btn-secondary filter-open-button" type="button" data-baron-anchor="sell_filter_button" aria-haspopup="true" aria-expanded="false"><span class="filter-funnel" aria-hidden="true"></span><span>Фильтр</span></button>
+            <div id="tradeFilterPanel" class="trade-filter-panel hidden" role="dialog" data-baron-anchor="sell_filter_panel" aria-label="Порядок типов предметов">
               <div class="trade-filter-head">
                 <div><strong>Порядок типов</strong><small>Перетаскивайте категории. Товары идут блоками сверху вниз.</small></div>
                 <button id="tradeFilterClose" class="trade-filter-close" type="button" aria-label="Закрыть">×</button>
@@ -137,7 +161,7 @@
               <div id="tradeFilterCategories" class="trade-filter-categories"></div>
               <div class="trade-filter-foot">Клик по типу прокручивает список к его блоку.</div>
             </div>
-            <button id="sellCurrencyQuickButton" class="btn btn-secondary sell-currency-quick hidden" type="button" title="Переключить валюту продажи">SA$</button>
+            <button id="sellCurrencyQuickButton" class="btn btn-secondary sell-currency-quick hidden" type="button" data-baron-anchor="sell_currency" title="Переключить валюту продажи">SA$</button>
             <details class="more-actions">
               <summary aria-label="Дополнительные действия">Доп. действия</summary>
               <div class="more-actions-panel">
@@ -191,19 +215,19 @@
             <button class="settings-tab" type="button" data-settings-section="trade">Торговля</button>
             <button class="settings-tab" type="button" data-settings-section="automation">Автоматизация</button>
             <button class="settings-tab" type="button" data-settings-section="telegram">Telegram</button>
-            <button class="settings-tab" type="button" data-settings-section="appearance">Оформление</button>
+            <button class="settings-tab" type="button" data-settings-section="appearance" data-baron-anchor="settings_appearance_tab">Оформление</button>
             <button class="settings-tab" type="button" data-settings-section="configs">Конфиги</button>
           </div>
           <div class="workspace">
             <section class="table-card">
-              <div class="table-head buy" id="tableHead"><div>Товар</div><div>Цена ↕</div><div>Кол-во</div><div>Остаток</div><div>Статус</div><div></div></div>
+              <div class="table-head buy" id="tableHead"><div>Товар</div><div>Цена ↕</div><div>Кол-во</div><div>Статус</div><div></div></div>
               <div class="table-scroll" id="tableRows"></div>
-              <div class="empty-state hidden" id="emptyState"><div class="empty-icon">▧</div><div class="empty-title">Список пуст</div><div class="empty-text">Добавьте товары в активный конфиг.</div></div>
+              <div class="empty-state hidden" id="emptyState"><div class="empty-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="12" width="30" height="25" rx="5"/><path d="M16 12V9h16v3M16 20h16M24 25v8M20 29h8"/></svg></div><div class="empty-title">Список пуст</div><div class="empty-text">Добавьте товары в активный конфиг.</div></div>
             </section>
             <aside class="detail-card" id="detailCard">
-              <div class="detail-empty" id="detailEmpty"><div class="detail-empty-icon">◇</div><div>Выберите товар</div><small>Параметры появятся здесь</small></div>
+              <div class="detail-empty" id="detailEmpty"><div class="detail-empty-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 17 24 8l16 9-16 9z"/><path d="M8 17v17l16 8 16-8V17M24 26v16"/><path d="M31 13 15 22"/></svg></div><div>Выберите товар</div><small>Параметры появятся здесь</small></div>
               <div class="detail-content hidden" id="detailContent">
-                <div class="detail-top"><div class="detail-icon-box"><img id="detailIcon" class="detail-icon" alt=""></div><div class="detail-title-wrap"><div id="detailName" class="detail-title"></div><div id="detailStatus" class="badge badge-success">Активен</div></div></div>
+                <div class="detail-top"><div class="detail-icon-box"><img id="detailIcon" class="detail-icon" alt=""></div><div class="detail-title-wrap"><div id="detailName" class="detail-title"></div></div></div>
                 <div class="detail-tabs"><button class="detail-tab active" type="button">Основные</button></div>
                 <div id="detailFields" class="detail-fields"></div>
                 <div class="autosave-note"><span class="status-dot"></span><span>Изменения сохраняются автоматически</span></div>
@@ -211,7 +235,7 @@
             </aside>
           </div>
           <div id="sellWorkspace" class="sell-workspace">
-            <section class="sell-panel sell-inventory-panel">
+            <section class="sell-panel sell-inventory-panel" data-baron-anchor="sell_inventory">
               <header class="sell-card-head sell-clone-titlebar">
                 <h2>Ваш инвентарь</h2>
               </header>
@@ -219,21 +243,19 @@
               <div id="sellInventoryEmpty" class="sell-mini-empty hidden">Инвентарь пуст. Нажмите «Скан инвентаря».</div>
             </section>
 
-            <section class="sell-panel sell-list-panel">
+            <section class="sell-panel sell-list-panel" data-baron-anchor="sell_selected_items">
               <header class="sell-card-head sell-clone-titlebar sell-sale-titlebar">
                 <h2>Товары на продажу</h2>
-                <div class="sell-title-summary" aria-label="Статистика товаров на продажу">
-                  <span>Всего товаров: <strong id="sellTotalItems">0</strong></span>
-                  <span>Включено: <strong id="sellEnabledItems">0</strong></span>
-                  <span>Отключено: <strong id="sellDisabledItems">0</strong></span>
-                  <span>Общее кол-во: <strong id="sellTotalCount">0</strong></span>
+                <div class="sell-title-summary" aria-label="Фильтр товаров на продажу">
+                  <button type="button" class="sell-summary-filter active" data-sell-status-filter="all">Всего товаров: <strong id="sellTotalItems">0</strong></button>
+                  <button type="button" class="sell-summary-filter" data-sell-status-filter="enabled">Включено: <strong id="sellEnabledItems">0</strong></button>
+                  <button type="button" class="sell-summary-filter" data-sell-status-filter="disabled">Отключено: <strong id="sellDisabledItems">0</strong></button>
                 </div>
               </header>
               <div class="sell-table-head">
                 <button type="button" data-sell-sort="name">Товар <span>↕</span></button>
                 <button type="button" data-sell-sort="price">Цена <span>↕</span></button>
                 <button type="button" data-sell-sort="count">Кол-во <span>↕</span></button>
-                <button type="button" data-sell-sort="remaining">Доступно <span>↕</span></button>
                 <button type="button" data-sell-sort="status">Статус <span>↕</span></button>
                 <span></span>
               </div>
@@ -316,37 +338,12 @@
               </div>
             </div>
           </div>
-          <div id="modsWorkspace" class="mods-workspace hidden">
-            <div class="mods-grid">
-              <section class="mods-card mods-performance-card">
-                <header class="mods-card-head">
-                  <div><h2>Отображение</h2></div>
-                </header>
-                <div class="mods-control-list">
-                  <div class="mods-control-row"><div><strong>Удалять других игроков</strong></div><button id="modsRemovePlayers" class="mods-toggle" type="button" aria-pressed="false"><span></span></button></div>
-                  <div class="mods-control-row"><div><strong>Удалять транспорт</strong></div><button id="modsRemoveVehicles" class="mods-toggle" type="button" aria-pressed="false"><span></span></button></div>
-                </div>
-              </section>
-
-              <div class="mods-side-column">
-                <section class="mods-card mods-cycle-card">
-                  <header class="mods-card-head"><div><h2>Автоцикл</h2></div></header>
-                  <div class="mods-control-row mods-cycle-toggle"><div><strong>Скупка → продажа → скупка</strong></div><button id="modsAutoCycle" class="mods-toggle" type="button" aria-pressed="false"><span></span></button></div>
-                  <div class="mods-cycle-stats">
-                    <div><span>Запомнено</span><strong><span id="modsManualCount">0</span> шт.</strong></div>
-                    <div><span>К продаже</span><strong><span id="modsPendingSell">0</span> шт.</strong></div>
-                    <div><span>К восстановлению</span><strong><span id="modsPendingRebuy">0</span> шт.</strong></div>
-                  </div>
-                  <div id="modsCycleStatus" class="mods-cycle-status"><span class="status-dot"></span><div><strong>Ожидание</strong></div></div>
-                  <button id="modsManualPurchasedButton" class="mods-primary-action" type="button">Выставить скупленные товары</button>
-                  <div class="mods-warning-note"><strong>Цена берётся из текущего конфига продажи.</strong></div>
-                </section>
-                <section class="mods-card mods-community-card">
-                  <div class="mods-community-copy"><span class="mods-community-icon">↗</span><div><h3>Канал разработки ArzMarket</h3></div></div>
-                  <button id="modsTelegramButton" class="mods-secondary-action" type="button">Открыть Telegram</button>
-                </section>
-              </div>
-            </div>
+          <div id="modsWorkspace" class="mods-workspace mods-catalog-workspace hidden">
+            <aside class="mods-catalog-nav" role="tablist" aria-label="Разделы модификаций">
+              <button class="mods-catalog-tab active" type="button" data-mods-section="scripts" role="tab" aria-selected="true">Скрипты</button>
+              <button class="mods-catalog-tab" type="button" data-mods-section="mine" role="tab" aria-selected="false">Мои</button>
+            </aside>
+            <section class="mods-catalog-content" aria-live="polite"></section>
           </div>
           <div id="storageWorkspace" class="storage-workspace hidden">
             <section class="storage-table-card">
@@ -369,8 +366,8 @@
               </div>
             </aside>
           </div>
-          <div id="settingsWorkspace" class="settings-workspace hidden">
-            <div id="settingsContent" class="settings-content"></div>
+          <div id="settingsWorkspace" class="settings-workspace hidden" data-baron-anchor="settings_main">
+            <div id="settingsContent" class="settings-content" data-baron-anchor="settings_appearance_panel"></div>
           </div>
         </section>
       </div>
@@ -397,7 +394,8 @@
     </div>
     <div id="toast" class="toast hidden"></div>
   </div>
-  <script src="/static/js/app.js?v=70"></script>
-  <script src="/static/js/buy-polish.js?v=22"></script>
+  <script src="/static/js/assistant-v78.js?v=265"></script>
+  <script src="/static/js/app.js?v=268"></script>
+  <script src="/static/js/buy-polish.js?v=209"></script>
 </body>
 </html>

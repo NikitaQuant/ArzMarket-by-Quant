@@ -37,9 +37,17 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px s
 .hidden { display:none !important; }
 
 .app-shell { position:fixed; inset:0; display:grid; place-items:center; padding:clamp(16px,2.2vw,38px); }
-.game-dim { position:absolute; inset:0; background:var(--bg-overlay); }
+.game-dim {
+  position:absolute;
+  inset:0;
+  z-index:0;
+  background:var(--bg-overlay);
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
 .window {
   position:relative;
+  z-index:1;
   width:min(1510px, calc(100vw - 32px));
   height:min(850px, calc(100vh - 32px));
   min-width:920px;
@@ -70,7 +78,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px s
 .nav-list { display:flex; flex-direction:column; gap:7px; }
 .nav-item { height:44px; width:100%; display:flex; align-items:center; gap:12px; padding:0 13px; border:1px solid transparent; border-radius:8px; background:transparent; color:#a1afba; cursor:pointer; text-align:left; font-size:13px; }
 .nav-item:hover:not(:disabled) { background:#101a23; color:#dce6ec; }
-.nav-item.active { color:#eafff6; background:linear-gradient(90deg,rgba(32,190,127,.20),rgba(32,190,127,.055)); border-color:rgba(41,213,143,.26); box-shadow:inset 3px 0 0 var(--green),0 0 18px rgba(41,213,143,.045); }
+.nav-item.active { color:#eafff6; background:linear-gradient(90deg,rgba(32,190,127,.20),rgba(32,190,127,.055)); border-top-color:rgba(41,213,143,.26); border-bottom-color:rgba(41,213,143,.26); border-left-color:transparent; border-right-color:transparent; box-shadow:inset 3px 0 0 var(--green),0 0 18px rgba(41,213,143,.045); }
 .nav-item.disabled { opacity:.38; cursor:default; }
 .nav-icon { width:23px; text-align:center; font-size:18px; color:#748694; }
 .nav-item.active .nav-icon { color:var(--green); }
@@ -113,7 +121,7 @@ kbd { padding:2px 6px; border:1px solid #253543; border-radius:5px; background:#
 .btn-destructive { color:#b97580; }
 .btn-destructive:hover:not(:disabled), .btn-destructive.confirming { color:#ff7c91; border-color:rgba(239,80,104,.34); background:rgba(239,80,104,.07); }
 .btn-secondary.active-action { color:#92f5c9; border-color:rgba(41,213,143,.34); background:var(--green-dim); box-shadow:0 0 14px rgba(41,213,143,.07); }
-.btn-primary { min-width:126px; margin-left:auto; border-color:rgba(41,213,143,.48); background:linear-gradient(180deg,#28cf8b,#20b979); color:#04110c; box-shadow:0 0 18px rgba(41,213,143,.12); }
+.btn-primary { min-width:126px; margin-left:auto; border-top-color:rgba(41,213,143,.48); border-bottom-color:rgba(41,213,143,.48); border-left-color:transparent; border-right-color:transparent; background:linear-gradient(180deg,#28cf8b,#20b979); color:#04110c; box-shadow:0 0 18px rgba(41,213,143,.12); }
 .btn-primary:hover { filter:brightness(1.06); }
 .btn-danger { border-color:rgba(239,80,104,.28); color:#ff7c91; background:rgba(239,80,104,.06); }
 
@@ -211,3 +219,155 @@ kbd { padding:2px 6px; border:1px solid #253543; border-radius:5px; background:#
 .budget-summary strong { display:block; overflow:hidden; text-overflow:ellipsis; color:#dce7ed; font-size:13px; font-weight:650; }
 .modal-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:16px; }
 .modal-actions .btn-primary { margin-left:0; }
+
+html.preview-mode .game-dim { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }
+
+/* v237: top/bottom glow only in fallback theme. */
+.nav-item.active,
+.mode-btn.active,
+.btn-primary {
+  position: relative;
+  overflow: visible;
+}
+
+.nav-item.active {
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.mode-btn.active,
+.btn-primary {
+  box-shadow: none;
+}
+
+.nav-item.active::before,
+.mode-btn.active::before,
+.btn-primary::before,
+.nav-item.active::after,
+.mode-btn.active::after,
+.btn-primary::after {
+  content: "";
+  display: block;
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  height: 1px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 13px 2px rgba(41,213,143,.16);
+  pointer-events: none;
+}
+
+.nav-item.active::before,
+.mode-btn.active::before,
+.btn-primary::before {
+  top: -1px;
+  bottom: auto;
+}
+
+.nav-item.active::after,
+.mode-btn.active::after,
+.btn-primary::after {
+  bottom: -1px;
+  top: auto;
+}
+
+/* v238: stronger top/bottom glow in fallback theme. */
+.nav-item.active::before,
+.mode-btn.active::before,
+.btn-primary::before,
+.nav-item.active::after,
+.mode-btn.active::after,
+.btn-primary::after {
+  left: 28px;
+  right: 28px;
+  height: 2px;
+  background: #55efad;
+  box-shadow: 0 0 10px 3px rgba(41,213,143,.28), 0 0 24px 5px rgba(41,213,143,.22);
+}
+
+.nav-item.active::before,
+.mode-btn.active::before,
+.btn-primary::before { top: -2px; }
+
+.nav-item.active::after,
+.mode-btn.active::after,
+.btn-primary::after { bottom: -2px; }
+
+/* v239: soft fallback glow, no hard bars and no side cloud. */
+.nav-item.active::before,
+.nav-item.active::after,
+.mode-btn.active::before,
+.mode-btn.active::after,
+.btn-primary::before,
+.btn-primary::after {
+  display: none !important;
+  content: none !important;
+}
+
+.nav-item.active {
+  box-shadow:
+    inset 3px 0 0 var(--green),
+    0 -8px 18px -11px rgba(41,213,143,.34),
+    0 8px 18px -11px rgba(41,213,143,.34);
+}
+
+.mode-btn.active,
+.btn-primary {
+  box-shadow:
+    0 -8px 18px -11px rgba(41,213,143,.34),
+    0 8px 18px -11px rgba(41,213,143,.34);
+}
+
+/* v240: restore contour glow in fallback theme. Sides stay soft, top/bottom stronger. */
+.nav-item.active::before,
+.nav-item.active::after,
+.mode-btn.active::before,
+.mode-btn.active::after,
+.btn-primary::before,
+.btn-primary::after {
+  content: none !important;
+  display: none !important;
+  box-shadow: none !important;
+}
+
+.nav-item.active,
+.mode-btn.active,
+.btn-primary {
+  border-left-color: transparent;
+  border-right-color: transparent;
+}
+
+.nav-item.active {
+  box-shadow:
+    inset 3px 0 0 var(--green),
+    0 0 10px rgba(41,213,143,.11),
+    0 -2px 14px rgba(41,213,143,.16),
+    0 2px 14px rgba(41,213,143,.16);
+}
+
+.mode-btn.active,
+.btn-primary {
+  box-shadow:
+    0 0 10px rgba(41,213,143,.12),
+    0 -2px 14px rgba(41,213,143,.17),
+    0 2px 14px rgba(41,213,143,.17);
+}
+
+.nav-item.active:hover,
+.mode-btn.active:hover,
+.btn-primary:hover {
+  box-shadow:
+    inset 3px 0 0 var(--green),
+    0 0 12px rgba(41,213,143,.14),
+    0 -2px 16px rgba(41,213,143,.19),
+    0 2px 16px rgba(41,213,143,.19);
+}
+
+.mode-btn.active:hover,
+.btn-primary:hover {
+  box-shadow:
+    0 0 12px rgba(41,213,143,.14),
+    0 -2px 16px rgba(41,213,143,.19),
+    0 2px 16px rgba(41,213,143,.19);
+}

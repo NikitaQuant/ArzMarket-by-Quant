@@ -385,3 +385,39 @@
 #app[data-page="mods"] .mods-community-card h3 { font-size:calc(14px * var(--ui-scale)) !important; }
 #app[data-page="mods"] .mods-secondary-action { font-size:calc(13.5px * var(--ui-scale)) !important; }
 
+
+
+/* v88: compact Modifications cards. */
+#app[data-page="mods"] .mods-performance-card {
+  width:min(calc(520px * var(--ui-scale)),100%) !important;
+  align-self:flex-start !important;
+}
+#app[data-page="mods"] .mods-performance-card .mods-card-head {
+  min-height:calc(48px * var(--ui-scale)) !important;
+  padding:calc(10px * var(--ui-scale)) calc(16px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-performance-card .mods-control-row {
+  min-height:calc(52px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-cycle-card {
+  width:min(calc(580px * var(--ui-scale)),100%) !important;
+  align-self:flex-start !important;
+  overflow:visible !important;
+}
+#app[data-page="mods"] .mods-cycle-card .mods-card-head {
+  min-height:calc(48px * var(--ui-scale)) !important;
+  padding:calc(10px * var(--ui-scale)) calc(16px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-cycle-toggle {
+  margin:0 calc(16px * var(--ui-scale)) !important;
+  min-height:calc(52px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-cycle-list-button {
+  width:auto !important;
+  min-width:calc(220px * var(--ui-scale)) !important;
+  max-width:calc(310px * var(--ui-scale)) !important;
+  height:calc(38px * var(--ui-scale)) !important;
+  margin:calc(12px * var(--ui-scale)) calc(16px * var(--ui-scale)) calc(16px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  font-size:calc(12.5px * var(--ui-scale)) !important;
+}
