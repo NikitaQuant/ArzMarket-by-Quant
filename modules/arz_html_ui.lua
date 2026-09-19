@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 71,
+    module_version = 73,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -25,6 +25,7 @@ local htmlWindowStatePath, htmlWindowState = nil, {}
 local HTML_LAYOUT_VERSION = 16
 local revision, fingerprints = { buy = 1, sell = 1, settings = 1, logs = 1, marketplace = 1, storage = 1, mods = 1 }, { buy = "", sell = "", settings = "", logs = "", marketplace = "", storage = "", mods = "" }
 local lastInjectCheck = 0
+local htmlSessionGeneration = 0
 local lastHtmlInputReclaim = 0
 local lastMenuAutoOpenAttempt = 0
 local sourceCache = { buy = {at=0,data={},fingerprint="0"}, sell = {at=0,data={},fingerprint="0"} }
@@ -43,15 +44,17 @@ local globalDecodeJson, globalEncodeJson = decodeJson, encodeJson
 
 local function log(v) print("[ArzMarket HTML] " .. tostring(v)) end
 
--- IMPORTANT: HTTP service itself runs inside a MoonLoader lua_thread.
--- Do not wrap callbacks into the game/core with pcall/xpcall here: some of those
--- callbacks can yield to the MoonLoader scheduler. A C pcall boundary around a
--- yielding callback corrupts the scheduler state and causes
--- "cannot resume non-suspended coroutine". This Lua-only wrapper preserves the
--- old (ok, result, extra) calling convention without introducing a C boundary.
+-- MoonLoader 0.26.5 uses LuaJIT 2.1. LuaJIT has a fully resumable VM, so
+-- yielding across pcall/xpcall is supported. Protect bridge callbacks so one
+-- malformed HTML request cannot terminate the whole ArzMarket script.
+local function bridgeTraceback(err)
+    local message=tostring(err or "unknown_error")
+    if debug and type(debug.traceback)=="function" then return debug.traceback(message,2) end
+    return message
+end
 local function callCore(fn, ...)
     if type(fn) ~= "function" then return false, "function_unavailable" end
-    return true, fn(...)
+    return xpcall(fn,bridgeTraceback,...)
 end
 local function nowMs()
     if type(getGameTimer) == "function" then
@@ -908,6 +911,7 @@ local STORAGE_KIND_LABELS={
 }
 local storageSnapshotCache={items={},locationCount=0,ready=false,scanning=false,lastScan=0,error="loading",fingerprint=""}
 local storageWorkerRunning=false
+local storageWorkerGeneration=0
 local storageRefreshRequested=true
 
 local function safeStorageFinder()
@@ -1057,13 +1061,20 @@ local function refreshStorageSnapshotCache()
     return true
 end
 
+local function stopStorageSnapshotWorker()
+    storageWorkerGeneration=storageWorkerGeneration+1
+    storageWorkerRunning=false
+end
+
 local function startStorageSnapshotWorker()
     if storageWorkerRunning then return true end
     if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create)~="function" or type(ctx.wait)~="function" then return false end
+    storageWorkerGeneration=storageWorkerGeneration+1
+    local generation=storageWorkerGeneration
     storageWorkerRunning=true
-    ctx.lua_thread.create(function()
+    local workerOk,workerOrErr=pcall(ctx.lua_thread.create,function()
         ctx.wait(0)
-        while storageWorkerRunning do
+        while storageWorkerRunning and generation==storageWorkerGeneration do
             local ok,err=callCore(refreshStorageSnapshotCache)
             if not ok then
                 storageSnapshotCache.error=tostring(err)
@@ -1071,17 +1082,24 @@ local function startStorageSnapshotWorker()
             end
             storageRefreshRequested=false
             local waited=0
-            while storageWorkerRunning and waited<1200 and not storageRefreshRequested do
+            while storageWorkerRunning and generation==storageWorkerGeneration and waited<1200 and not storageRefreshRequested do
                 ctx.wait(100)
                 waited=waited+100
             end
         end
     end)
+    if not workerOk or not workerOrErr then
+        if generation==storageWorkerGeneration then storageWorkerRunning=false end
+        storageSnapshotCache.error="storage_worker_start_failed"
+        log("storage snapshot worker start failed: "..tostring(workerOrErr))
+        return false
+    end
     return true
 end
 
 local function storageState()
     currentPage="storage"
+    startStorageSnapshotWorker()
     local cache=storageSnapshotCache
     return {
         revision=revision.storage,page="storage",
@@ -1517,17 +1535,10 @@ local function setCefCursor(value)
     end
 
     if value then
-        -- If ImGui already owns an active cursor, do not cycle SA-MP cursor modes.
-        -- Cycling 2 -> 1 recenters the mouse, which made every Baron step jump
-        -- the cursor to the middle of the screen.
-        pcall(function()
-            local bs=raknetNewBitStream()
-            raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
-            raknetBitStreamWriteInt8(bs,128); raknetBitStreamWriteInt16(bs,0)
-            raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
-        end)
+        -- Do not emulate Arizona packet 220 for cursor ownership. It is an
+        -- internal game protocol and repeatedly injecting it is unnecessary.
         if not alreadyActive then
-            pcall(function() if sampSetCursorMode then sampSetCursorMode(2); sampSetCursorMode(1) end end)
+            pcall(function() if sampSetCursorMode then sampSetCursorMode(1) end end)
             pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
             cefCursorOwned=true
         else
@@ -1540,12 +1551,6 @@ local function setCefCursor(value)
 
     -- Never disable a cursor that was already active before CEF opened.
     if not cefCursorOwned then return end
-    pcall(function()
-        local bs=raknetNewBitStream()
-        raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
-        raknetBitStreamWriteInt8(bs,0); raknetBitStreamWriteInt16(bs,0)
-        raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
-    end)
     pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
     pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
     pcall(function() if sampShowCursor then sampShowCursor(false) end end)
@@ -1554,12 +1559,7 @@ local function setCefCursor(value)
 end
 
 local function forceDisableCefCursor()
-    pcall(function()
-        local bs=raknetNewBitStream()
-        raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
-        raknetBitStreamWriteInt8(bs,0); raknetBitStreamWriteInt16(bs,0)
-        raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
-    end)
+    if not cefCursorOwned then return end
     pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
     pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
     pcall(function() if sampShowCursor then sampShowCursor(false) end end)
@@ -1610,50 +1610,32 @@ end
 local function reclaimHtmlInputIfNeeded()
     if not htmlOpen or not acef then return end
     local now=nowMs()
-    if now-lastHtmlInputReclaim<75 then return end
+    if now-lastHtmlInputReclaim<250 then return end
     lastHtmlInputReclaim=now
 
-    -- A SA-MP dialog or the game's own CEF can enable the stock cursor after
-    -- ArzMarket is already open. In that case the iframe stays visible, but
-    -- mouse clicks are consumed by the game UI. Reassert our cursor mode and
-    -- focus without using the old 2 -> 1 cycle, so the pointer is not recentered.
-    if backgroundGameUiStealsCursor() then
-        pcall(function()
-            local bs=raknetNewBitStream()
-            raknetBitStreamWriteInt8(bs,25); raknetBitStreamWriteInt32(bs,0)
-            raknetBitStreamWriteInt8(bs,128); raknetBitStreamWriteInt16(bs,0)
-            raknetEmulPacketReceiveBitStream(220,bs); raknetDeleteBitStream(bs)
-        end)
-        pcall(function() if sampSetCursorMode then sampSetCursorMode(1) end end)
-        pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
-        pcall(function() if sampShowCursor then sampShowCursor(true) end end)
-        pcall(function() if showCursor then showCursor(true) end end)
-        cefCursorOwned=true
+    -- A real game dialog/CEF owns its cursor. Do not fight it from ArzMarket.
+    -- When it closes, the next normal HTML frame can regain focus safely.
+    if backgroundGameUiStealsCursor() or gameUiNeedsCursor() then return end
+    local active=false
+    if type(sampIsCursorActive)=="function" then
+        local ok,value=pcall(sampIsCursorActive)
+        active=ok and value==true
     end
-
-    -- Refocus is cheap and also protects against another CEF stealing DOM focus.
+    if not active then setCefCursor(true) end
     refocusHtmlFrame()
 end
 
--- CEF and mimgui can release their cursor one frame later than the visible UI.
--- When HTML closes, clear the cursor immediately and repeat the cleanup for a
--- few frames. Stop as soon as another real game UI needs the cursor.
 local function releaseCursorAfterHtmlClose()
-    cefCursorOwned=false
-    if not gameUiNeedsCursor() and not backgroundGameUiStealsCursor() then forceDisableCefCursor() end
-    if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create)~="function" then return end
-    ctx.lua_thread.create(function()
-        local delays={0,50,120,220}
-        for i=1,#delays do
-            wait(delays[i])
-            if htmlOpen or previewOpen then return end
-            if gameUiNeedsCursor() or backgroundGameUiStealsCursor() then return end
-            forceDisableCefCursor()
-        end
-    end)
+    if htmlOpen or previewOpen then return end
+    if gameUiNeedsCursor() or backgroundGameUiStealsCursor() then
+        cefCursorOwned=false
+        return
+    end
+    forceDisableCefCursor()
 end
 
 local function removeStaleCefFrames()
+    htmlSessionGeneration=htmlSessionGeneration+1
     htmlOpen=false
     previewOpen=false
     previewSignature=""
@@ -1678,12 +1660,11 @@ local function removeStaleCefFrames()
 end
 
 local function recoverGameInputAfterReload()
+    -- A Lua reload may leave our iframe in Arizona CEF, but it must not reset a
+    -- cursor owned by another game window or another script.
     removeStaleCefFrames()
     cursorWasActiveBeforeHtml=false
     cefCursorOwned=false
-    if not gameUiNeedsCursor() and not backgroundGameUiStealsCursor() then
-        forceDisableCefCursor()
-    end
 end
 
 local function quoteJs(v) return string.format("%q",tostring(v or "")):gsub("\r","\\r"):gsub("\n","\\n") end
@@ -1754,6 +1735,7 @@ local function injectPreviewIframe(bounds,options)
     return ok
 end
 local function removeIframe()
+    htmlSessionGeneration=htmlSessionGeneration+1
     local wasHtmlOpen=htmlOpen==true
     htmlOpen=false
     htmlTemporaryMode=false
@@ -1767,7 +1749,7 @@ local function removeIframe()
     end
     cursorWasActiveBeforeHtml=false
 end
-local function injectIframe()
+local function injectIframe(inheritLuaCursor)
     if not acef or type(acef.eval)~="function" or not port then return false end
     local activeBefore=false
     if type(sampIsCursorActive)=="function" then
@@ -1785,23 +1767,17 @@ local function injectIframe()
         -- ArzMarket window was hidden. Only protect a pre-existing cursor when
         -- an actual game UI (pause/chat/dialog) owned it before CEF opened.
         cursorWasActiveBeforeHtml=protectedCursorBefore
+        htmlSessionGeneration=htmlSessionGeneration+1
         htmlOpen=true
         lastInjectCheck=nowMs()
         setCefCursor(true)
-        if ctx and ctx.lua_thread and type(ctx.lua_thread.create)=="function" then
-            ctx.lua_thread.create(function()
-                wait(120)
-                if htmlOpen then
-                    setCefCursor(true)
-                    pcall(acef.eval,"var f=document.getElementById('arzmarket-html-frame');if(f&&window.__arzMarketFocusFrame)window.__arzMarketFocusFrame(f);")
-                end
-                wait(260)
-                if htmlOpen then
-                    setCefCursor(true)
-                    pcall(acef.eval,"var f=document.getElementById('arzmarket-html-frame');if(f&&window.__arzMarketFocusFrame)window.__arzMarketFocusFrame(f);")
-                end
-            end)
-        end
+        -- When HTML was opened directly from the ArzMarket Lua window, the
+        -- cursor can still report active for one frame. Treat that cursor as
+        -- ours so closing HTML back to the game cannot leave it stuck.
+        if inheritLuaCursor==true and not protectedCursorBefore then cefCursorOwned=true end
+        -- No temporary focus coroutine is needed here. M.pump() already checks
+        -- the iframe and cursor every frame while HTML is open, which avoids
+        -- creating another short-lived MoonLoader coroutine during UI startup.
     end
     return ok
 end
@@ -2414,7 +2390,34 @@ local function handle(req)
         if req.method~="GET" then return response(405,"method_not_allowed") end
         if not validToken(req) then return response(403,"forbidden") end
         local requested=req.query.page=="settings" and "settings" or req.query.page=="logs" and "logs" or req.query.page=="marketplace" and "marketplace" or req.query.page=="mods" and "mods" or req.query.page=="storage" and "storage" or req.query.page=="sell" and "sell" or "buy"
+        local marketplaceCacheKey=nil
+        if requested=="marketplace" then
+            if ctx and type(ctx.pumpMarketplaceHtml)=="function" then callCore(ctx.pumpMarketplaceHtml) end
+            if ctx and type(ctx.getMarketplaceRevisionKey)=="function" then
+                local keyOk,keyValue=callCore(ctx.getMarketplaceRevisionKey)
+                if keyOk then marketplaceCacheKey=tostring(keyValue or "") end
+            end
+            if marketplaceCacheKey~=nil then
+                local assistantKey=""
+                if ctx and type(ctx.getAssistantSnapshot)=="function" then
+                    local assistantOk,assistantValue=callCore(ctx.getAssistantSnapshot,requested,"html")
+                    if assistantOk and type(assistantValue)=="table" then assistantKey=encode(assistantValue) end
+                end
+                marketplaceCacheKey=table.concat({
+                    marketplaceCacheKey,
+                    tostring(currentHtmlThemeKey() or ""),
+                    encode(currentHtmlThemeProfile() or {}),
+                    tostring(currentMenuScalePercent() or 100),
+                    encode(htmlWindowState or {}),
+                    assistantKey
+                },"\30")
+            end
+        end
         local cachedState=stateResponseCache[requested]
+        if requested=="marketplace" and cachedState and marketplaceCacheKey~=nil and cachedState.sourceKey==marketplaceCacheKey then
+            if tonumber(req.query.since)==tonumber(cachedState.revision) then return response(204,"","application/json; charset=utf-8") end
+            return response(200,cachedState.body,"application/json; charset=utf-8","no-store")
+        end
         if not focusIsStable() then
             if cachedState then
                 if tonumber(req.query.since)==tonumber(cachedState.revision) then return response(204,"","application/json; charset=utf-8") end
@@ -2431,7 +2434,7 @@ local function handle(req)
             if okAssistant and type(assistant)=="table" then value.assistant=assistant end
         end
         local body=encode(value)
-        stateResponseCache[requested]={revision=tonumber(value.revision) or 0,body=body}
+        stateResponseCache[requested]={revision=tonumber(value.revision) or 0,body=body,sourceKey=marketplaceCacheKey}
         if tonumber(req.query.since)==tonumber(value.revision) then return response(204,"","application/json; charset=utf-8") end
         return response(200,body,"application/json; charset=utf-8","no-store")
     end
@@ -2492,9 +2495,13 @@ local function requestWorker(generation)
         if job then
             local entry=job.entry
             if entry and clients[entry] then
-                -- Do not wrap handle() in pcall/xpcall: core callbacks may yield.
-                local out=handle(job.req)
-                if type(out)~="string" then out=response(500,"invalid_handler_response") end
+                local okHandle,out=xpcall(handle,bridgeTraceback,job.req)
+                if not okHandle then
+                    log("request handler failed: "..tostring(out))
+                    out=response(500,"internal_error")
+                elseif type(out)~="string" then
+                    out=response(500,"invalid_handler_response")
+                end
                 if clients[entry] then queueResponse(entry,out) end
             end
             ctx.wait(0)
@@ -2504,45 +2511,25 @@ local function requestWorker(generation)
     end
 end
 
-local function markReady(list)
-    local set={}
-    if type(list)=="table" then
-        for _,sock in ipairs(list) do set[sock]=true end
-    end
-    return set
-end
-
 local function service()
-    if not server or not socketApi or type(socketApi.select)~="function" then return end
+    if not server then return end
 
     local count=0
-    local readSockets={server}
-    local writeSockets={}
-    for entry in pairs(clients) do
-        count=count+1
-        if entry.socket then
-            if entry.out then
-                writeSockets[#writeSockets+1]=entry.socket
-            elseif not entry.processing then
-                readSockets[#readSockets+1]=entry.socket
-            end
-        end
-    end
+    for _ in pairs(clients) do count=count+1 end
 
-    -- select(..., 0) is a pure non-blocking readiness probe. We never call
-    -- accept/receive/send unless the corresponding socket is ready, avoiding
-    -- coroutine transitions inside a would-block socket operation.
-    local readable,writable=socketApi.select(readSockets,writeSockets,0)
-    local canRead=markReady(readable)
-    local canWrite=markReady(writable)
-
-    if count<12 and canRead[server] then
-        local client=server:accept()
+    -- All sockets are configured with settimeout(0). LuaSocket then reports
+    -- "timeout" instead of blocking. Avoid socket.select entirely because the
+    -- LuaSocket documentation notes WinSock problems with non-blocking TCP and
+    -- states that select(server) does not guarantee accept() will not block.
+    if count<12 then
+        local client,acceptErr=server:accept()
         if client then
             client:settimeout(0)
             local entry={socket=client,buffer="",deadline=nowMs()+5000,processing=false}
             clients[entry]=true
             count=count+1
+        elseif acceptErr and acceptErr~="timeout" then
+            error("accept_failed: "..tostring(acceptErr))
         end
     end
 
@@ -2552,8 +2539,8 @@ local function service()
         if clients[entry] then
             local sock=entry.socket
             if entry.out then
-                if canWrite[sock] then flushClient(entry) end
-            elseif not entry.processing and canRead[sock] then
+                flushClient(entry)
+            elseif not entry.processing and sock then
                 local chunk,err,partial=sock:receive(4096)
                 local data=chunk or partial
                 if data and #data>0 then entry.buffer=entry.buffer..data end
@@ -2566,6 +2553,8 @@ local function service()
                     elseif parseErr~="incomplete" then
                         queueResponse(entry,response(parseErr=="body_too_large" and 413 or 400,parseErr))
                     elseif err=="closed" then
+                        closeClient(entry)
+                    elseif err and err~="timeout" then
                         closeClient(entry)
                     end
                 end
@@ -2605,15 +2594,17 @@ local function startServer()
     if running then return true end
     local ok,socket=pcall(require,"socket")
     if not ok or type(socket)~="table" then return false,"luasocket_missing" end
-    if type(socket.select)~="function" then return false,"luasocket_select_missing" end
     local ports={0}; for p=38460,38489 do ports[#ports+1]=p end
     for _,p in ipairs(ports) do
-        local srv=socket.bind("127.0.0.1",p)
-        if srv then
-            srv:settimeout(0)
-            local _,actual=srv:getsockname()
-            server,port=srv,tonumber(actual) or p
-            break
+        local bindOk,srv=pcall(socket.bind,"127.0.0.1",p)
+        if bindOk and srv then
+            local timeoutOk=pcall(function() srv:settimeout(0) end)
+            local nameOk,_,actual=pcall(function() return srv:getsockname() end)
+            if timeoutOk and nameOk then
+                server,port=srv,tonumber(actual) or p
+                break
+            end
+            pcall(function() srv:close() end)
         end
     end
     if not server then return false,"port_unavailable" end
@@ -2632,25 +2623,17 @@ local function startServer()
     requestWorkerRunning=true
     serviceBusy=false
 
-    ctx.lua_thread.create(function()
+    local workerOk,workerOrError=pcall(ctx.lua_thread.create,function()
         requestWorker(generation)
     end)
-    -- Keep the socket coroutine completely isolated from CEF/game callbacks.
-    -- Generation checks prevent an old bridge thread from surviving a stop/start
-    -- cycle and servicing the same sockets together with a newly-created thread.
-    ctx.lua_thread.create(function()
-        while running and generation==serverGeneration do
-            local ok=safeService(generation)
-            ctx.wait(ok and 0 or 25)
-        end
-    end)
-    ctx.lua_thread.create(function()
-        while running and generation==serverGeneration do
-            ensureIframe()
-            reclaimHtmlInputIfNeeded()
-            ctx.wait(0)
-        end
-    end)
+    if not workerOk or not workerOrError then
+        running=false
+        requestWorkerRunning=false
+        if server then pcall(function() server:close() end) end
+        server,port=nil,nil
+        socketApi=nil
+        return false,"request_worker_start_failed: "..tostring(workerOrError)
+    end
     log("bridge listening on 127.0.0.1:"..tostring(port))
     return true
 end
@@ -2659,6 +2642,7 @@ local function stopServer()
     serverGeneration=serverGeneration+1
     running=false
     requestWorkerRunning=false
+    stopStorageSnapshotWorker()
     serviceBusy=false
     requestQueue={}
     local entries={}; for entry in pairs(clients) do entries[#entries+1]=entry end
@@ -2727,18 +2711,22 @@ function M.open_html(page,settingsSection,options)
         if not ok then if ctx and ctx.notify then pcall(ctx.notify,"HTML интерфейс недоступен: "..tostring(err)) end; return false end
     end
     if not acef or type(acef.eval)~="function" then
+        if not previewOpen then stopServer() end
         if ctx and ctx.notify then pcall(ctx.notify,"CEF API недоступен. Lua интерфейс продолжает работать.") end
         return false
     end
     local menuWasVisible=ctx and type(ctx.getCoreMenuVisible)=="function" and ctx.getCoreMenuVisible()==true
     if menuWasVisible then setMenuVisible(false) end
-    local ok=injectIframe()
+    local ok=injectIframe(menuWasVisible)
     if ok then
         if not temporary and ctx and type(ctx.setPreferredInterfaceMode)=="function" then pcall(ctx.setPreferredInterfaceMode,"html") end
     elseif menuWasVisible then
         setMenuVisible(true)
     end
-    if not ok then htmlTemporaryMode=false end
+    if not ok then
+        htmlTemporaryMode=false
+        if not previewOpen then stopServer() end
+    end
     if not ok and ctx and ctx.notify then pcall(ctx.notify,"Не удалось открыть CEF интерфейс. Используйте Lua режим.") end
     return ok
 end
@@ -2767,17 +2755,24 @@ function M.open_preview(bounds,page,options)
         local ok,err=startServer()
         if not ok then return false,err end
     end
-    if not acef or type(acef.eval)~="function" then return false,"cef_unavailable" end
-    return injectPreviewIframe(bounds,options)
+    if not acef or type(acef.eval)~="function" then
+        if not htmlOpen then stopServer() end
+        return false,"cef_unavailable"
+    end
+    local ok,err=injectPreviewIframe(bounds,options)
+    if not ok and not htmlOpen then stopServer() end
+    return ok,err
 end
 function M.close_preview()
     removePreviewIframe()
+    if not htmlOpen and not previewOpen then stopServer() end
     return true
 end
 function M.close_html()
     suppressAutoOpen=true
     removeIframe()
     removePreviewIframe()
+    if not htmlOpen and not previewOpen then stopServer() end
     return true
 end
 function M.init(context)
@@ -2795,21 +2790,9 @@ function M.init(context)
     refreshSourceCache("sell",true)
     acef=loadCefAdapter()
 
-    -- Arizona CEF can survive a MoonLoader Lua reload. Remove any iframe and
-    -- focus left by the previous script instance before opening a new UI.
+    -- Arizona CEF can survive a MoonLoader Lua reload. Remove only our stale
+    -- iframe. The local HTTP bridge is started lazily by open_html/open_preview.
     recoverGameInputAfterReload()
-    if ctx and ctx.lua_thread and type(ctx.lua_thread.create)=="function" then
-        ctx.lua_thread.create(function()
-            wait(180)
-            if not htmlOpen and not previewOpen then recoverGameInputAfterReload() end
-            wait(420)
-            if not htmlOpen and not previewOpen then recoverGameInputAfterReload() end
-        end)
-    end
-
-    local started,err=startServer()
-    if not started then log("bridge disabled: "..tostring(err)) end
-    startStorageSnapshotWorker()
     return true
 end
 function M.render(context)
@@ -2824,7 +2807,7 @@ function M.render(context)
     -- As soon as the user selects it, immediately hand control to CEF.
     -- close_html() deliberately sets suppressAutoOpen=true when returning to Lua,
     -- so selecting this menu item explicitly clears that guard again.
-    if acef and running and not htmlOpen then
+    if acef and not htmlOpen then
         local now=nowMs()
         if now-lastMenuAutoOpenAttempt >= 750 then
             lastMenuAutoOpenAttempt=now
@@ -2852,8 +2835,18 @@ function M.render(context)
         imgui.TextWrapped("Повторная попытка выполняется автоматически.")
     end
 end
+function M.pump()
+    if not running then return true end
+    local ok,err=safeService(serverGeneration)
+    if htmlOpen then
+        ensureIframe()
+        reclaimHtmlInputIfNeeded()
+    end
+    return ok,err
+end
+
 function M.shutdown(context, quitGame)
-    storageWorkerRunning=false
+    stopStorageSnapshotWorker()
     removeIframe()
     removePreviewIframe()
     removeStaleCefFrames()

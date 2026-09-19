@@ -565,7 +565,17 @@
   async function api(path, options = {}) {
     const headers = Object.assign({}, options.headers || {}, {'X-ArzMarket-Token': token});
     if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-    const response = await fetch(path, Object.assign({}, options, {headers, cache: 'no-store'}));
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs || 5000));
+    const fetchOptions = Object.assign({}, options);
+    delete fetchOptions.timeoutMs;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutId = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+    let response;
+    try {
+      response = await fetch(path, Object.assign({}, fetchOptions, {headers, cache: 'no-store', signal: controller ? controller.signal : options.signal}));
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    }
     if (response.status === 204) return {unchanged: true};
     const raw = await response.text();
     let data;
@@ -1337,7 +1347,7 @@
     const task = (async () => {
       try {
         const since = force ? 0 : Number(state.pageRevision[page] || 0);
-        const result = await api(`/api/state?page=${encodeURIComponent(page)}&since=${since}`);
+        const result = await api(`/api/state?page=${encodeURIComponent(page)}&since=${since}`, page === 'marketplace' ? {timeoutMs: 15000} : {});
         if (!result.unchanged) applyPageState(page, result, force);
         else if (state.page === page) {
           refs.runtimeText.textContent = 'Система готова';
@@ -4529,6 +4539,11 @@
   }
   // Do not paint a temporary buy/sell shell on boot. The interface stays hidden
   // until the first real Lua state arrives, which prevents the foreign first window.
-  refresh(true);
-  window.setInterval(() => refresh(false), 650);
+  refresh(true).catch(() => null);
+  (async function pollBridge() {
+    while (true) {
+      await new Promise(resolve => window.setTimeout(resolve, 2000));
+      try { await refresh(false); } catch (_) {}
+    }
+  })();
 })();

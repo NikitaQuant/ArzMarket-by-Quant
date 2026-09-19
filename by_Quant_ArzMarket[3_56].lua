@@ -299,6 +299,18 @@ local marketplacePayload = {
 	count_buy = {},
 	price_buy = {}
 }
+ARZ_MARKETPLACE_PUBLISH_IN_FLIGHT = false
+ARZ_WORKER_GENERATION = ARZ_WORKER_GENERATION or { dialog = 0, sell = 0, sell_lookup = 0, scan = 0, clear = 0 }
+
+function arzWorkerNext(name)
+	name = tostring(name or "")
+	ARZ_WORKER_GENERATION[name] = (tonumber(ARZ_WORKER_GENERATION[name]) or 0) + 1
+	return ARZ_WORKER_GENERATION[name]
+end
+
+function arzWorkerCurrent(name, token)
+	return tonumber(token) ~= nil and tonumber(ARZ_WORKER_GENERATION[tostring(name or "")]) == tonumber(token)
+end
 local cjson = require("cjson")
 
 local function decodeJsonSafe(value)
@@ -1626,6 +1638,100 @@ function arzUiExtensionsCreateContext(extension)
 		local ok, result = pcall(openUrl, "https://t.me/moon_arz")
 		return ok and result ~= false, ok and result ~= false and nil or tostring(result)
 	end
+	ctx.marketplaceHtmlRuntime = ctx.marketplaceHtmlRuntime or {
+		lastContinueAt = 0,
+		lastSetupProbeAt = 0,
+		fallbackActive = false,
+		fallbackStartedAt = 0
+	}
+	ctx.pumpMarketplaceHtml = function()
+		if type(marketState) ~= "table" or type(marketplace_Manager) ~= "function" then return false, "marketplace_unavailable" end
+		local runtime = ctx.marketplaceHtmlRuntime
+		local now = os.time()
+
+		-- The original Lua Marketplace advances these states from its per-frame renderer.
+		-- HTML has no such renderer, so mirror only the non-visual state transitions here.
+		-- Do not replace marketplace_Manager(): Lua keeps using the original working path.
+		if download_marketplace == true then
+			if now - (tonumber(runtime.lastSetupProbeAt) or 0) >= 5 or json_vlad == nil then
+				runtime.lastSetupProbeAt = now
+				local okBuy, buyData = pcall(readJsonFile, buyJsonPath)
+				if okBuy and type(buyData) == "table" then json_vlad = buyData end
+			end
+			if type(json_vlad) == "table" and #json_vlad ~= 0 then
+				download_marketplace = nil
+			else
+				return true
+			end
+		end
+
+		-- The reserve-host timeout counter originally lived inside the Lua page renderer.
+		-- Advance it by elapsed seconds so the 2s HTML polling interval does not double
+		-- the fallback delay. This reproduces the Lua behaviour without requiring Lua UI.
+		if marketState.marketplaceTimeOut == true
+			and download_marketplace ~= "auth"
+			and download_marketplace ~= "blocked"
+			and type(download_marketplace) ~= "table"
+			and type(timers) == "table"
+			and type(timers[38]) == "table" then
+			if runtime.fallbackActive ~= true then
+				runtime.fallbackActive = true
+				runtime.fallbackStartedAt = now - math.max(0, math.min(14, tonumber(timers[38][2]) or 0))
+				timers[38][1] = now
+			end
+			local fallbackSeconds = math.max(0, math.floor(now - (tonumber(runtime.fallbackStartedAt) or now)))
+			timers[38][2] = fallbackSeconds
+			if fallbackSeconds > 14 then
+				if type(timers[39]) == "table" then timers[39][2] = 0 end
+				timers[38][2] = 0
+				runtime.fallbackActive = false
+				runtime.fallbackStartedAt = 0
+				ini.cfg.bannedByRkn = true
+				marketState.marketplaceTimeOut = nil
+				download_marketplace = nil
+				if type(save_all) == "function" then pcall(save_all) end
+			end
+		else
+			runtime.fallbackActive = false
+			runtime.fallbackStartedAt = 0
+		end
+
+		-- Continue an asynchronous stage after items.json/buy.json download, request
+		-- failure or host fallback. A small guard prevents duplicate starts if several
+		-- HTML state requests arrive during the same second.
+		if download_marketplace == nil and now ~= tonumber(runtime.lastContinueAt) then
+			runtime.lastContinueAt = now
+			download_marketplace = false
+			local okLoad, loadErr = pcall(marketplace_Manager)
+			if not okLoad then
+				print("[ArzMarket HTML] marketplace continue failed: " .. tostring(loadErr))
+				download_marketplace = nil
+				return false, tostring(loadErr)
+			end
+		end
+		return true
+	end
+	ctx.getMarketplaceRevisionKey = function()
+		local stateKind = type(download_marketplace) == "table" and "ready" or tostring(download_marketplace)
+		local serverAddress = ""
+		if type(sampGetCurrentServerAddress) == "function" then
+			local okAddress, address = pcall(sampGetCurrentServerAddress)
+			if okAddress then serverAddress = tostring(address or "") end
+		end
+		return table.concat({
+			stateKind,
+			tostring(math.floor(tonumber(ini.cfg.marketplaceSelectedItem) or 0)),
+			tostring(type(marketState) == "table" and tonumber(marketState.marketplaceQueue) or 0),
+			tostring(type(marketState) == "table" and tonumber(marketState.lavka_summ) or 0),
+			tostring(type(marketState) == "table" and tonumber(marketState.sort_mode_Marketplace) or tonumber(ini.cfg.sort_mode_Marketplace) or 0),
+			tostring(type(marketState) == "table" and marketState.marketplaceSave or nil),
+			tostring(type(marketState) == "table" and marketState.marketplaceTimeOut or nil),
+			tostring(ini.cfg.bannedByRkn == true),
+			serverAddress,
+			tostring(marketplacePayload and marketplacePayload.enabled == true or false),
+			tostring(marketplacePayload and marketplacePayload.LavkaUid or "")
+		}, "\31")
+	end
 	ctx.getMarketplaceSnapshot = function()
 		local status = "loading"
 		if download_marketplace == true then
@@ -1715,6 +1821,12 @@ function arzUiExtensionsCreateContext(extension)
 	end
 	ctx.ensureMarketplaceLoaded = function()
 		if download_marketplace ~= nil then return true end
+		if ctx.marketplaceHtmlRuntime then
+			ctx.marketplaceHtmlRuntime.lastContinueAt = 0
+			ctx.marketplaceHtmlRuntime.lastSetupProbeAt = 0
+			ctx.marketplaceHtmlRuntime.fallbackActive = false
+			ctx.marketplaceHtmlRuntime.fallbackStartedAt = 0
+		end
 		return ctx.refreshMarketplace(nil)
 	end
 	ctx.setMarketplaceSortMode = function(mode)
@@ -2004,6 +2116,23 @@ function arzUiExtensionsCloseHtmlPreview()
 	return ok and value ~= false
 end
 
+function arzUiExtensionsPump()
+	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	if not extension or extension._disabled_runtime or type(extension.pump) ~= "function" then return true end
+	local ok, value, pumpError = xpcall(function()
+		return extension.pump()
+	end, arzUiExtensionTraceback)
+	if not ok then
+		extension._last_error = tostring(value)
+		print("[ArzMarket][UIExtensions] HTML pump failed: " .. tostring(value))
+		return false
+	end
+	if value == false and pumpError then
+		print("[ArzMarket][UIExtensions] HTML pump recovered: " .. tostring(pumpError))
+	end
+	return value ~= false
+end
+
 function arzUiExtensionsGetRightChildFlags(pageId)
 	local extension = arzUiExtensionsGetByPage(pageId)
 	if extension and extension.no_scroll == true then
@@ -2063,12 +2192,13 @@ end
 -- Keep marketState.scriptVersion unchanged for server compatibility.
 -- Increase ARZ_LOCAL_BUILD_ID and update the notes on every local release.
 -- ============================================================
-ARZ_LOCAL_BUILD_ID = "3.56-custom-2026.09.05-r24-marketplace-currency-fix"
+ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.19-r26-html-marketplace-fix"
 ARZ_RELEASE_NOTES_PATH = getWorkingDirectory() .. "/ArzMarket/release_notes_state.json"
 ARZ_RELEASE_NOTES = {
 	build = ARZ_LOCAL_BUILD_ID,
 	title = "Что изменилось",
 	items = {
+		"Стабильность: переработан HTML bridge, убран socket.select, исправлены жизненный цикл coroutine/Effil, автозапуск HTML и watchdog публичной сборки.",
 		"Исправлена валюта Маркет-плейса: serverId лавки снова определяется по реально подключенному серверу, а не по auth myServerId. Обычные серверы больше не могут ошибочно попадать в идентификатор Vice City.",
 		"Добавлено ручное выставление скупленных товаров: ArzMarket запоминает скуплленные позиции и по кнопке в модификациях выставляет их на продажу по актуальным ценам текущего sell-конфига.",
 		u8("Telegram reload safety: queued single-flight delivery, tracked effil threads, and clean cancellation before script reload/termination."),
@@ -2093,6 +2223,7 @@ ARZ_RELEASE_NOTES = {
 ARZ_RELEASE_NOTES_STATE = {
 	pending = false,
 	loaded = false,
+	session_allowed = false,
 	persisted = {}
 }
 
@@ -2104,6 +2235,10 @@ function arzReleaseNotesInit()
 	ARZ_RELEASE_NOTES_STATE.persisted = state
 	ARZ_RELEASE_NOTES_STATE.pending = tostring(state.last_shown_build or "") ~= tostring(ARZ_LOCAL_BUILD_ID)
 	ARZ_RELEASE_NOTES_STATE.loaded = true
+end
+
+function arzReleaseNotesAllowThisSession()
+	if ARZ_RELEASE_NOTES_STATE then ARZ_RELEASE_NOTES_STATE.session_allowed = true end
 end
 
 function arzReleaseNotesMarkShown()
@@ -5498,7 +5633,7 @@ function arzProxyStartDownload(url, targetPath, callback)
 				pcall(os.remove, partPath)
 				if type(callback) == "function" then pcall(callback, downloadId, -1) end
 				return
-			elseif threadStatus == "canceled" then
+			elseif threadStatus == "cancelled" then
 				ARZ_PROXY_DOWNLOAD_THREADS[downloadId] = nil
 				pcall(os.remove, partPath)
 				if type(callback) == "function" then pcall(callback, downloadId, -1) end
@@ -5534,7 +5669,7 @@ function arzScriptOfflineCancelInFlight()
 		for requestId, requestThread in pairs(marketState.asyncThreads) do
 			if requestThread ~= nil then
 				pcall(function()
-					if requestThread.cancel then requestThread:cancel() end
+					if requestThread.cancel then requestThread:cancel(0) end
 				end)
 			end
 			marketState.asyncThreads[requestId] = nil
@@ -5551,7 +5686,7 @@ function arzScriptOfflineCancelInFlight()
 		for downloadId, downloadThread in pairs(ARZ_PROXY_DOWNLOAD_THREADS) do
 			if downloadThread ~= nil then
 				pcall(function()
-					if downloadThread.cancel then downloadThread:cancel() end
+					if downloadThread.cancel then downloadThread:cancel(0) end
 				end)
 			end
 			ARZ_PROXY_DOWNLOAD_THREADS[downloadId] = nil
@@ -5955,24 +6090,32 @@ function arzWatchdogReadKeyValueFile(path)
 end
 
 ARZ_WATCHDOG_CONFIG = {
-    enabled = true,
-    nick = "Nikita_Quart",
-    server = "80.66.82.22",
-    port = 7777,
+    enabled = false,
+    nick = "",
+    server = "",
+    port = 0,
     disconnect_timeout = 15,
     startup_grace = 90,
     unspawned_timeout = 30
 }
+ARZ_WATCHDOG_LEGACY_MIGRATION_PENDING = false
 
 function arzWatchdogLoadConfig()
     arzWatchdogEnsureDirectory()
     local okLoaded, loaded = pcall(arzWatchdogReadKeyValueFile, ARZ_WATCHDOG_CONFIG_PATH)
     if not okLoaded or type(loaded) ~= "table" then loaded = {} end
     if next(loaded) ~= nil then
+        local legacyBundledConfig = tostring(loaded.nick or "") == "Nikita_Quart"
+            and tostring(loaded.server or "") == "80.66.82.22"
+            and tonumber(loaded.port) == 7777
+        if legacyBundledConfig then
+            loaded.enabled, loaded.nick, loaded.server, loaded.port = "0", "", "", "0"
+            ARZ_WATCHDOG_LEGACY_MIGRATION_PENDING = true
+        end
         if loaded.enabled ~= nil then ARZ_WATCHDOG_CONFIG.enabled = tostring(loaded.enabled) == "1" end
-        if loaded.nick and loaded.nick ~= "" then ARZ_WATCHDOG_CONFIG.nick = loaded.nick end
-        if loaded.server and loaded.server ~= "" then ARZ_WATCHDOG_CONFIG.server = loaded.server end
-        ARZ_WATCHDOG_CONFIG.port = math.max(1, math.min(65535, tonumber(loaded.port) or ARZ_WATCHDOG_CONFIG.port))
+        ARZ_WATCHDOG_CONFIG.nick = tostring(loaded.nick or "")
+        ARZ_WATCHDOG_CONFIG.server = tostring(loaded.server or "")
+        ARZ_WATCHDOG_CONFIG.port = math.max(0, math.min(65535, tonumber(loaded.port) or ARZ_WATCHDOG_CONFIG.port))
         ARZ_WATCHDOG_CONFIG.disconnect_timeout = math.max(5, math.min(300, tonumber(loaded.disconnect_timeout) or ARZ_WATCHDOG_CONFIG.disconnect_timeout))
         ARZ_WATCHDOG_CONFIG.startup_grace = math.max(30, math.min(600, tonumber(loaded.startup_grace) or ARZ_WATCHDOG_CONFIG.startup_grace))
         ARZ_WATCHDOG_CONFIG.unspawned_timeout = math.max(10, math.min(300, tonumber(loaded.unspawned_timeout) or ARZ_WATCHDOG_CONFIG.unspawned_timeout))
@@ -5986,7 +6129,7 @@ function arzWatchdogSaveConfig()
         "enabled=" .. (cfg.enabled and "1" or "0"),
         "nick=" .. arzWatchdogSanitize(cfg.nick),
         "server=" .. arzWatchdogSanitize(cfg.server),
-        "port=" .. tostring(math.floor(tonumber(cfg.port) or 7777)),
+        "port=" .. tostring(math.floor(tonumber(cfg.port) or 0)),
         "disconnect_timeout=" .. tostring(math.floor(tonumber(cfg.disconnect_timeout) or 15)),
         "startup_grace=" .. tostring(math.floor(tonumber(cfg.startup_grace) or 90)),
         "unspawned_timeout=" .. tostring(math.floor(tonumber(cfg.unspawned_timeout) or 30)),
@@ -6004,7 +6147,8 @@ function arzWatchdogBufferSet(buffer, value)
 end
 
 arzWatchdogLoadConfig()
-if not doesFileExist(ARZ_WATCHDOG_CONFIG_PATH) then arzWatchdogSaveConfig() end
+if ARZ_WATCHDOG_LEGACY_MIGRATION_PENDING or not doesFileExist(ARZ_WATCHDOG_CONFIG_PATH) then arzWatchdogSaveConfig() end
+ARZ_WATCHDOG_LEGACY_MIGRATION_PENDING = false
 ARZ_WATCHDOG_ENABLED_UI = imguiNew.bool(ARZ_WATCHDOG_CONFIG.enabled == true)
 ARZ_WATCHDOG_NICK_BUFFER = imguiNew.char[64]()
 ARZ_WATCHDOG_SERVER_BUFFER = imguiNew.char[128]()
@@ -11708,7 +11852,8 @@ function arzHtmlSettingsApplyMenuScale(value)
 		mode = "html",
 		page = "settings",
 		section = "appearance",
-		createdAt = os.time()
+		createdAt = os.time(),
+		processId = type(arzWatchdogGetPid) == "function" and arzWatchdogGetPid() or 0
 	}
 	pcall(writeJsonFile, windowThemeConfig, windowThemePath)
 
@@ -16029,7 +16174,10 @@ function main()
 		and windowThemeConfig.pendingAppearanceRestore or nil
 	if pendingAppearanceRestore and pendingAppearanceRestore.active == true then
 		local restoreAge = os.time() - (tonumber(pendingAppearanceRestore.createdAt) or os.time())
-		if restoreAge >= 0 and restoreAge <= 60 then
+		local restorePid = tonumber(pendingAppearanceRestore.processId) or 0
+		local currentPid = type(arzWatchdogGetPid) == "function" and tonumber(arzWatchdogGetPid()) or 0
+		local sameProcess = restorePid > 0 and currentPid > 0 and restorePid == currentPid
+		if sameProcess and restoreAge >= 0 and restoreAge <= 60 then
 			selectedMenuPage = 3
 			marketState.selectAfterLoad = -1
 			ini.cfg.lastCrrSelect = 3
@@ -16086,17 +16234,8 @@ function main()
 	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.markScriptReady) == "function" then
 		pcall(ARZ_BARON_ASSISTANT.markScriptReady)
 	end
-	lua_thread.create(function()
-		wait(ARZ_BARON_START_DELAY_MS + 100)
-		if ARZ_BARON_SESSION_MANUAL_OVERRIDE == true then return end
-		if type(arzBaronSessionGateOpen) ~= "function" or not arzBaronSessionGateOpen() then return end
-		if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.isActive) ~= "function" then return end
-		local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
-		if not okActive or active ~= true then return end
-		pcall(arzBaronResumeOnboardingShowcase)
-		pcall(arzBaronResumePendingInterfaceSelection)
-		pcall(arzBaronResumeActiveTutorial)
-	end)
+	-- Saved Baron progress resumes only after an explicit /crr or tutorial action.
+	-- Never auto-open Lua/HTML/preview shortly after joining the server.
 
 	-- Keep the last Marketplace server across script reloads/restarts.
 	marketState.marketplace_serversSelected[0] = math.max(0, math.min(#marketState.marketplace_servers - 1, math.floor(tonumber(ini.cfg.marketplaceSelectedItem) or 1)))
@@ -16126,6 +16265,7 @@ function main()
 		AFKMessage(u8:decode("/settings - Настройка инвентаря - Сбросить настройки"))
 	end)
 	sampRegisterChatCommand("baron", function()
+		if type(arzBaronOpenSessionGateForManualCommand) == "function" then arzBaronOpenSessionGateForManualCommand() end
 		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.restartTutorial) == "function" then
 			pcall(ARZ_BARON_ASSISTANT.restartTutorial, ini.cfg.interface_mode)
 			if ini.cfg.interface_mode == "html" then
@@ -16137,6 +16277,7 @@ function main()
 		end
 	end)
 	sampRegisterChatCommand("baronreset", function()
+		if type(arzBaronOpenSessionGateForManualCommand) == "function" then arzBaronOpenSessionGateForManualCommand() end
 		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.resetOnboarding) == "function" then
 			pcall(ARZ_BARON_ASSISTANT.resetOnboarding)
 			ini.cfg.interface_choice_done = false
@@ -16154,6 +16295,8 @@ function main()
 		sendNotify(u8:decode("Авто установка лавки ") .. (marketState.autoLavka and u8:decode("включено") or u8:decode("выключено")))
 	end)
 	sampRegisterChatCommand("crr", function()
+		if type(arzReleaseNotesAllowThisSession) == "function" then arzReleaseNotesAllowThisSession() end
+		if type(arzBaronOpenSessionGateForManualCommand) == "function" then arzBaronOpenSessionGateForManualCommand() end
 		local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
 		if baronGateOpen and type(arzBaronOpenSavedProgress) == "function" and arzBaronOpenSavedProgress() == true then
 			return
@@ -16579,7 +16722,7 @@ function main()
 			deAFKMessage(debug.getinfo(1, "l"), "OnClose Event")
 		end
 
-		if marketState.marketplace[0] and marketplacePayload.enabled and timers[11] + 359 <= os.time() then
+		if marketState.marketplace[0] and marketplacePayload.enabled and not ARZ_MARKETPLACE_PUBLISH_IN_FLIGHT and timers[11] + 359 <= os.time() then
 			deAFKMessage("try to send marketplace?")
 
 			local marketplaceServerAddress = sampGetCurrentServerAddress()
@@ -16596,13 +16739,20 @@ function main()
 
 				deAFKMessage(debug.getinfo(1, "l"), "SEND DATA=[" .. marketplaceRequestBody .. "]")
 				deAFKMessage(debug.getinfo(1, "l"), "NICK=[saved]")
-				print("items success")
-				asyncHttpRequest("POST", marketState.reservehost .. "/api/insertMarketplace", {
+					print("items success")
+				ARZ_MARKETPLACE_PUBLISH_IN_FLIGHT = true
+				ARZ_MARKETPLACE_LAST_REQUEST_ID = asyncHttpRequest("POST", marketState.reservehost .. "/api/insertMarketplace", {
 					headers = {
 						["content-type"] = "application/json"
 					},
 					data = u8(marketplaceRequestBody)
-				})
+				}, function()
+					ARZ_MARKETPLACE_PUBLISH_IN_FLIGHT = false
+				end, function(requestError)
+					ARZ_MARKETPLACE_PUBLISH_IN_FLIGHT = false
+					print("[ArzMarket][Marketplace] publish failed: " .. tostring(requestError))
+				end)
+				if ARZ_MARKETPLACE_LAST_REQUEST_ID == nil then ARZ_MARKETPLACE_PUBLISH_IN_FLIGHT = false end
 
 				if #marketplacePayload.items_buy == 0 and #marketplacePayload.items_sell == 0 then
 					marketplacePayload.enabled = false
@@ -16672,24 +16822,23 @@ function main()
 
 		if lets_go == true then
 			lets_go = nil
-
-			dialogWorkerState[1]:terminate()
-
+			arzWorkerNext("dialog")
 			dialogWorkerState = {}
 		end
 
 		if lets_goo == true then
 			lets_goo = nil
-			dialogWorkerState[1] = lua_thread.create(wait_dialog)
+			dialogWorkerState._token = arzWorkerNext("dialog")
+			dialogWorkerState[1] = lua_thread.create(wait_dialog, dialogWorkerState._token)
 		end
 
 		if lets_gooo == true then
 			lets_gooo = nil
-			sell_alitems_d = lua_thread.create(sell_alitems)
+			ARZ_SELL_WORKER_TOKEN = arzWorkerNext("sell")
+			sell_alitems_d = lua_thread.create(sell_alitems, ARZ_SELL_WORKER_TOKEN)
 		elseif lets_gooo == false then
 			lets_gooo = nil
-
-			sell_alitems_d:terminate()
+			arzWorkerNext("sell")
 
 			if dialogWorkerState[1] ~= nil then
 				lets_go = true
@@ -16704,22 +16853,21 @@ function main()
 
 		if lets_goooo == true then
 			lets_goooo = nil
-			sellWorkerState[1] = lua_thread.create(kapibara)
+			sellWorkerState._token = arzWorkerNext("sell_lookup")
+			sellWorkerState[1] = lua_thread.create(kapibara, sellWorkerState._token)
 		elseif lets_goooo == false then
-			sellWorkerState[1]:terminate()
-
+			arzWorkerNext("sell_lookup")
 			lets_goooo = nil
 			sellWorkerState = {}
 		end
 
 		if lets_gooooo == true then
 			lets_gooooo = nil
-			scanWorkerState[1], scanWorkerState[2] = lua_thread.create(scan_items), true
+			scanWorkerState._token = arzWorkerNext("scan")
+			scanWorkerState[1], scanWorkerState[2] = lua_thread.create(scan_items, scanWorkerState._token), true
 		elseif lets_gooooo == false then
 			lets_gooooo = nil
-
-			scanWorkerState[1]:terminate()
-
+			arzWorkerNext("scan")
 			scanWorkerState[1], scanWorkerState[2] = nil, false
 
 			AFKMessage(u8:decode("Сканирование лавки завершено. Можете смотреть разделы."))
@@ -16727,12 +16875,11 @@ function main()
 
 		if lets_gooooo_clear == true then
 			lets_gooooo_clear = nil
-			clearWorkerState[1], clearWorkerState[2], clearWorkerState[3] = lua_thread.create(clear_items), true, false
+			clearWorkerState._token = arzWorkerNext("clear")
+			clearWorkerState[1], clearWorkerState[2], clearWorkerState[3] = lua_thread.create(clear_items, clearWorkerState._token), true, false
 		elseif lets_gooooo_clear == false then
 			lets_gooooo_clear = nil
-
-			clearWorkerState[1]:terminate()
-
+			arzWorkerNext("clear")
 			clearWorkerState[1], clearWorkerState[2], clearWorkerState[3] = nil, false, false
 
 			AFKMessage(u8:decode("Очистка страницы закончена."))
@@ -16911,7 +17058,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.56.118"
+ARZ_UPDATE_VERSION = "3.56.120"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -17391,9 +17538,10 @@ function drawCircleIn3d(centerX, centerY, centerZ, radius, segmentCount, lineWid
 	end
 end
 
-function clear_items()
-	while true do
+function clear_items(workerToken)
+	while arzWorkerCurrent("clear", workerToken) do
 		wait(0)
+		if not arzWorkerCurrent("clear", workerToken) then return end
 
 		if clearInventoryEntries[clearTextdrawState[3] + 1] == nil and clear_busy == false then
 			timers[8] = os.time()
@@ -17425,9 +17573,10 @@ function clear_items()
 	end
 end
 
-function scan_items()
-	while true do
+function scan_items(workerToken)
+	while arzWorkerCurrent("scan", workerToken) do
 		wait(0)
+		if not arzWorkerCurrent("scan", workerToken) then return end
 
 		if scannedInventoryEntries[scanTextdrawState[3] + 1] == nil and scan_busy == false then
 			lets_gooooo = false
@@ -17457,11 +17606,13 @@ function scan_items()
 	end
 end
 
-function sell_alitems()
+function sell_alitems(workerToken)
 	::label_57_0::
+	if not arzWorkerCurrent("sell", workerToken) then return end
 
-	while true do
+	while arzWorkerCurrent("sell", workerToken) do
 		wait(0)
+		if not arzWorkerCurrent("sell", workerToken) then return end
 
 		if marketState.custom_is_invent_open[1] ~= nil and marketState.custom_is_invent_open[4] ~= -1 and marketState.custom_is_invent_open[3] == true and marketState.custom_is_invent_open[2] + 2.8 <= os.clock() then
 			send_cef("clickOnBlock|{\"slot\": " .. marketState.custom_is_invent_open[4] .. ", \"type\": 1}")
@@ -17676,8 +17827,8 @@ function sell_alitems()
 	end
 end
 
-function kapibara()
-	while true do
+function kapibara(workerToken)
+	while arzWorkerCurrent("sell_lookup", workerToken) do
 		for entryIndex, inventoryEntry in pairs(scannedInventoryEntries) do
 			if tonumber(sellWorkerState[2]) == inventoryEntry[2] then
 				if inventoryEntry[3] == 0 then
@@ -17698,6 +17849,7 @@ function kapibara()
 		end
 
 		wait(txdParseDelay)
+		if not arzWorkerCurrent("sell_lookup", workerToken) then return end
 	end
 end
 
@@ -18533,12 +18685,16 @@ end
 ARZ_INPUT_CURSOR_GUARD = ARZ_INPUT_CURSOR_GUARD or { last_reclaim = 0 }
 
 function ARZ_INPUT_CURSOR_GUARD.backgroundInterference()
-	local dialogActive = false
-	if type(sampIsDialogActive) == "function" then
-		local ok, value = pcall(sampIsDialogActive)
-		dialogActive = ok and value == true
+	local function safeBool(fn)
+		if type(fn) ~= "function" then return false end
+		local ok, value = pcall(fn)
+		return ok and value == true
 	end
-	return dialogActive or (marketState and marketState.isEnableCursor == true)
+	local dialogActive = safeBool(sampIsDialogActive)
+	local chatActive = safeBool(sampIsChatInputActive)
+	local scoreboardActive = safeBool(sampIsScoreboardOpen)
+	local pauseActive = safeBool(isPauseMenuActive)
+	return dialogActive or chatActive or scoreboardActive or pauseActive or (marketState and marketState.isEnableCursor == true)
 end
 
 function ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
@@ -18549,21 +18705,18 @@ function ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
 	local baronLuaActive = baronGateOpen and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
 	local chooserActive = baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]
 	local luaUiActive = (menuVisible and menuVisible[0] == true) or baronLuaActive or chooserActive
-	if not luaUiActive or not ARZ_INPUT_CURSOR_GUARD.backgroundInterference() then return end
+	if not luaUiActive or ARZ_INPUT_CURSOR_GUARD.backgroundInterference() then return end
+
+	local cursorActive = false
+	if type(sampIsCursorActive) == "function" then
+		local ok, value = pcall(sampIsCursorActive)
+		cursorActive = ok and value == true
+	end
+	if cursorActive then return end
 
 	local now = type(getGameTimer) == "function" and getGameTimer() or math.floor(os.clock() * 1000)
-	if now - (tonumber(ARZ_INPUT_CURSOR_GUARD.last_reclaim) or 0) < 75 then return end
+	if now - (tonumber(ARZ_INPUT_CURSOR_GUARD.last_reclaim) or 0) < 250 then return end
 	ARZ_INPUT_CURSOR_GUARD.last_reclaim = now
-
-	pcall(function()
-		local bs = raknetNewBitStream()
-		raknetBitStreamWriteInt8(bs, 25)
-		raknetBitStreamWriteInt32(bs, 0)
-		raknetBitStreamWriteInt8(bs, 128)
-		raknetBitStreamWriteInt16(bs, 0)
-		raknetEmulPacketReceiveBitStream(220, bs)
-		raknetDeleteBitStream(bs)
-	end)
 	pcall(function() if sampSetCursorMode then sampSetCursorMode(1) end end)
 	pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
 end
@@ -18577,8 +18730,9 @@ mainUiFrame = imgui.OnFrame(function()
 	local baronLuaActive = baronGateOpen and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
 	local htmlUiActive = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true
 	local baronStageSyncPending = ARZ_BARON_PENDING_STAGE_SYNC ~= nil
-	return (baronGateOpen and baronStageSyncPending) or (baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]) or baronLuaActive or htmlUiActive or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
+	return (baronGateOpen and baronStageSyncPending) or (baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]) or baronLuaActive or htmlUiActive or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true and ARZ_RELEASE_NOTES_STATE.session_allowed == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
 end, function(frame)
+	if type(arzUiExtensionsPump) == "function" then arzUiExtensionsPump() end
 	ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
 	if ARZ_BARON_PENDING_STAGE_SYNC ~= nil and (type(arzBaronSessionGateOpen) ~= "function" or arzBaronSessionGateOpen()) then
 		arzBaronProcessPendingStageSync()
@@ -19886,7 +20040,7 @@ end, function(frame)
 		end
 	end
 
-	if ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true then
+	if ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true and ARZ_RELEASE_NOTES_STATE.session_allowed == true then
 		frame.HideCursor = false
 		if imgui.SetNextWindowFocus then
 			imgui.SetNextWindowFocus()
@@ -22917,30 +23071,16 @@ function onScriptTerminate(script, quitGame)
 			sampSendDialogResponsed(last_dialog_id, 0, 0, false)
 		end
 
-		if dialogWorkerState[1] ~= nil then
-			print("destroy wait_dialog_d[1]")
-			dialogWorkerState[1]:terminate()
-		end
-
-		if sell_alitems_d ~= nil then
-			print("destroy sell_alitems_d")
-			sell_alitems_d:terminate()
-		end
-
-		if sellWorkerState[1] ~= nil then
-			print("destroy kapibara_s[1]")
-			sellWorkerState[1]:terminate()
-		end
-
-		if clearWorkerState[1] ~= nil then
-			print("destroy clear_items_s[1]")
-			clearWorkerState[1]:terminate()
-		end
-
-		if scanWorkerState[1] ~= nil then
-			print("destroy scan_items_s[1]")
-			scanWorkerState[1]:terminate()
-		end
+		arzWorkerNext("dialog")
+		arzWorkerNext("sell")
+		arzWorkerNext("sell_lookup")
+		arzWorkerNext("clear")
+		arzWorkerNext("scan")
+		dialogWorkerState = {}
+		sell_alitems_d = nil
+		sellWorkerState = {}
+		clearWorkerState[1], clearWorkerState[2], clearWorkerState[3] = nil, false, false
+		scanWorkerState[1], scanWorkerState[2] = nil, false
 	end
 end
 
@@ -27268,7 +27408,9 @@ function fetchAveragePriceResponse(url, timeoutSeconds)
 		local createOk, directThread = pcall(function()
 			return effil.thread(function(targetUrl)
 				local requests = require("requests")
-				local requestOk, response = pcall(requests.request, "GET", targetUrl, {
+				local workerEffil = require("effil")
+				local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
+				local requestOk, response = workerPcall(requests.request, "GET", targetUrl, {
 					headers = {
 						["Accept-Encoding"] = "identity"
 					}
@@ -27295,7 +27437,7 @@ function fetchAveragePriceResponse(url, timeoutSeconds)
 	while true do
 		if ARZ_SCRIPT_OFFLINE then
 			pcall(function()
-				if requestThread.cancel then requestThread:cancel() end
+				if requestThread.cancel then requestThread:cancel(0) end
 			end)
 			return nil, nil, "offline_mode"
 		end
@@ -27334,14 +27476,14 @@ function fetchAveragePriceResponse(url, timeoutSeconds)
 			end
 
 			return tonumber(statusOrError) or 0, type(responseText) == "string" and responseText or "", nil
-		elseif threadStatus == "canceled" then
+		elseif threadStatus == "cancelled" then
 			return nil, nil, "request canceled"
 		end
 
 		if os.time() - startedAt >= timeout then
 			pcall(function()
 				if requestThread.cancel then
-					requestThread:cancel()
+					requestThread:cancel(0)
 				end
 			end)
 			return nil, nil, "request timeout"
@@ -29875,7 +30017,8 @@ function menu_settings()
 				active = true,
 				scrollY = currentScrollY,
 				scrollRatio = currentScrollRatio,
-				createdAt = os.time()
+				createdAt = os.time(),
+				processId = type(arzWatchdogGetPid) == "function" and arzWatchdogGetPid() or 0
 			}
 			pcall(writeJsonFile, windowThemeConfig, windowThemePath)
 
@@ -29885,7 +30028,14 @@ function menu_settings()
 				pcall(modificationState.persistMainWindowSize, true)
 			end
 			save_all()
-			thisScript():reload()
+			-- Do not reload the whole script from inside an ImGui frame callback.
+			-- Schedule it on a normal MoonLoader thread after the frame returns.
+			if lua_thread and type(lua_thread.create) == "function" then
+				lua_thread.create(function()
+					wait(220)
+					thisScript():reload()
+				end)
+			end
 			return
 		end
 	end
@@ -30339,10 +30489,10 @@ function sampev.onPlaySound(soundId, position)
 	end
 end
 
-function wait_dialog()
+function wait_dialog(workerToken)
 	local attemptCount = 0
 
-	while true do
+	while arzWorkerCurrent("dialog", workerToken) do
 		if not tradeAutomation.sell and not scanWorkerState[2] and not clearWorkerState[2] then
 			if dialogWorkerState[1] ~= nil then
 				lets_go = true
@@ -30365,6 +30515,7 @@ function wait_dialog()
 		attemptCount = attemptCount + 1
 
 		wait(1000)
+		if not arzWorkerCurrent("dialog", workerToken) then return end
 	end
 end
 
@@ -34785,49 +34936,59 @@ function telegramOriginalAsyncHttpRequest(method, url, requestOptions, onSuccess
 		return nil, "effil_unavailable"
 	end
 
-	local requestThread = effil.thread(function(method, url, requestOptions)
-		local requests = require("requests")
-		local requestSucceeded, response = pcall(requests.request, method, url, requestOptions)
+	local createOk, requestThread = pcall(function()
+		return effil.thread(function(method, url, requestOptions)
+			local requests = require("requests")
+			local workerEffil = require("effil")
+			local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
+			local requestSucceeded, response = workerPcall(requests.request, method, url, requestOptions)
 
-		if not requestSucceeded then
-			return false, response
-		end
-
-		if type(response) ~= "table" then
-			return false, "invalid_response_object"
-		end
-
-		local isGzipEncoded = response.headers and response.headers["content-encoding"] and response.headers["content-encoding"]:find("gzip")
-		local zzlibAvailable
-		local zzlib
-
-		if isGzipEncoded then
-			zzlibAvailable, zzlib = pcall(require, "zzlib")
-		end
-
-		if not zzlibAvailable and isGzipEncoded then
-			return false, "gzip_without_zzlib"
-		end
-
-		if isGzipEncoded and response.text and type(response.text) == "string" and #response.text > 2 then
-			local decompressedText = response.text
-			local wasDecompressed = false
-
-			if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
-				decompressedText = zzlib.gunzip(response.text)
-				wasDecompressed = true
+			if not requestSucceeded then
+				return false, response
 			end
 
-			if wasDecompressed and decompressedText then
-				response.text = decompressedText
-				response.original_size = #response.text
-				response.decompressed = true
+			if type(response) ~= "table" then
+				return false, "invalid_response_object"
 			end
-		end
 
-		response.json, response.xml = nil
-		return true, response
-	end)(method, url, requestOptions)
+			local isGzipEncoded = response.headers and response.headers["content-encoding"] and response.headers["content-encoding"]:find("gzip")
+			local zzlibAvailable
+			local zzlib
+
+			if isGzipEncoded then
+				zzlibAvailable, zzlib = pcall(require, "zzlib")
+			end
+
+			if not zzlibAvailable and isGzipEncoded then
+				return false, "gzip_without_zzlib"
+			end
+
+			if isGzipEncoded and response.text and type(response.text) == "string" and #response.text > 2 then
+				local decompressedText = response.text
+				local wasDecompressed = false
+
+				if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
+					local unzipOk, unzipResult = pcall(zzlib.gunzip, response.text)
+					if not unzipOk then return false, tostring(unzipResult) end
+					decompressedText = unzipResult
+					wasDecompressed = true
+				end
+
+				if wasDecompressed and decompressedText then
+					response.text = decompressedText
+					response.original_size = #response.text
+					response.decompressed = true
+				end
+			end
+
+			response.json, response.xml = nil
+			return true, response
+		end)(method, url, requestOptions)
+	end)
+	if not createOk or not requestThread then
+		pcall(onError, "effil_start_failed: " .. tostring(requestThread))
+		return nil, tostring(requestThread)
+	end
 
 	TELEGRAM_REQUEST_SERIAL = (tonumber(TELEGRAM_REQUEST_SERIAL) or 0) + 1
 	local requestId = tostring(os.clock()) .. ":tg:" .. tostring(TELEGRAM_REQUEST_SERIAL)
@@ -34886,7 +35047,7 @@ function telegramOriginalAsyncHttpRequest(method, url, requestOptions, onSuccess
 					pcall(onError, tostring(getOk and response or requestSucceeded))
 				end
 				return
-			elseif threadStatus == "cancelled" or threadStatus == "canceled" then
+			elseif threadStatus == "cancelled" then
 				cleanupRequest()
 				pcall(onError, "cancelled")
 				return
@@ -35076,117 +35237,106 @@ function telegramProcessSendQueue()
 end
 
 function telegramWorkingOriginalAsyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveSelfInfo)
-	local requestId = "" .. os.clock()
-
+	marketState.asyncRequestSerial = (tonumber(marketState.asyncRequestSerial) or 0) + 1
+	local requestId = tostring(os.clock()) .. ":tg:" .. tostring(marketState.asyncRequestSerial)
 	marketState.asyncData[requestId] = os.time()
 	requestOptions = requestOptions or {}
 	requestOptions.headers = requestOptions.headers or {}
 	requestOptions.headers["Accept-Encoding"] = ini.cfg.bannedByRkn == true and zzlibLoaded == true and "gzip, deflate" or nil
+	onSuccess = type(onSuccess) == "function" and onSuccess or function() end
+	onError = type(onError) == "function" and onError or function() end
 
-	local requestThread = effil.thread(function(method, url, requestOptions)
-		local requests = require("requests")
-		local requestSucceeded, response = pcall(requests.request, method, url, requestOptions)
+	local createOk, requestThread = pcall(function()
+		return effil.thread(function(method, url, requestOptions)
+			local requests = require("requests")
+			local workerEffil = require("effil")
+			local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
+			local requestSucceeded, response = workerPcall(requests.request, method, url, requestOptions)
+			if not requestSucceeded then return false, response end
+			if type(response) ~= "table" then return false, "invalid_response" end
 
-		if not requestSucceeded then
-			return false, response
-		end
-
-		local isGzipEncoded = response.headers
-			and response.headers["content-encoding"]
-			and response.headers["content-encoding"]:find("gzip")
-
-		local zzlibAvailable
-		local zzlib
-
-		if isGzipEncoded then
-			zzlibAvailable, zzlib = pcall(require, "zzlib")
-		end
-
-		if not zzlibAvailable and isGzipEncoded then
-			return false, response
-		end
-
-		if isGzipEncoded and response.text and type(response.text) == "string" and #response.text > 2 then
-			local decompressedText = false
-			local wasDecompressed = false
-
-			if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
-				decompressedText = zzlib.gunzip(response.text)
-				wasDecompressed = true
-			else
-				decompressedText = response.text
-				wasDecompressed = false
-			end
-
-			if wasDecompressed and decompressedText then
-				response.text = decompressedText
-				response.original_size = #response.text
-				response.decompressed = true
-			else
-				response.decompression_error = tostring(decompressedText)
-			end
-		end
-
-		response.json, response.xml = nil
-		return true, response
-	end)(method, url, requestOptions)
-
-	onSuccess = onSuccess or function()
-		return
-	end
-	onError = onError or function()
-		return
-	end
-
-	lua_thread.create(function(requestId)
-		local currentThread = requestThread
-
-		while true do
-			local threadStatus, threadError = currentThread:status()
-
-			if marketState.asyncData[requestId] + 45 < os.time() then
-				marketState.asyncData[requestId] = nil
-				print("reject rkn")
-				return onError(threadStatus)
-			end
-
-			if not threadError then
-				if threadStatus == "completed" then
-					local requestSucceeded, response = currentThread:get(0)
-
-					if requestSucceeded then
-						if saveSelfInfo == 1
-							and response.text ~= ""
-							and response.text:find("username")
-							and response.text:find("exp")
-							and response.text:find("osTime")
-						then
-							local selfInfoFile = io.open("moonloader/ArzMarket/UsersInfo/info_users_SelfInfo.json", "w")
-							if selfInfoFile then
-								selfInfoFile:write(response.text)
-								selfInfoFile:close()
-							end
-						end
-
-						onSuccess(response)
-					else
-						print("rejected0")
-						onError(response)
-					end
-
-					return
-				elseif threadStatus == "canceled" then
-					print("rejected1")
-					return onError(threadStatus)
+			local isGzipEncoded = response.headers
+				and response.headers["content-encoding"]
+				and response.headers["content-encoding"]:find("gzip")
+			local zzlibAvailable, zzlib
+			if isGzipEncoded then zzlibAvailable, zzlib = pcall(require, "zzlib") end
+			if not zzlibAvailable and isGzipEncoded then return false, response end
+			if isGzipEncoded and type(response.text) == "string" and #response.text > 2 then
+				local decompressedText, wasDecompressed
+				if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
+					local unzipOk, unzipResult = pcall(zzlib.gunzip, response.text)
+					decompressedText, wasDecompressed = unzipOk and unzipResult or nil, unzipOk
+				else
+					decompressedText, wasDecompressed = response.text, false
 				end
-			else
-				print("rejected2 (zzlib)")
-				return onError(threadError)
+				if wasDecompressed and decompressedText then
+					response.text = decompressedText
+					response.original_size = #decompressedText
+					response.decompressed = true
+				end
+			end
+			response.json, response.xml = nil, nil
+			return true, response
+		end)(method, url, requestOptions)
+	end)
+
+	if not createOk or not requestThread then
+		marketState.asyncData[requestId] = nil
+		lua_thread.create(function()
+			wait(0)
+			pcall(onError, "effil_start_failed: " .. tostring(requestThread))
+		end)
+		return nil, tostring(requestThread)
+	end
+
+	lua_thread.create(function(currentRequestId)
+		while marketState.asyncData[currentRequestId] ~= nil do
+			local statusOk, threadStatus, threadError = pcall(function() return requestThread:status() end)
+			if not statusOk then
+				marketState.asyncData[currentRequestId] = nil
+				pcall(onError, "effil_status_failed: " .. tostring(threadStatus))
+				return
 			end
 
+			local requestStartedAt = marketState.asyncData[currentRequestId]
+			if requestStartedAt == nil then return end
+			if requestStartedAt + 45 < os.time() then
+				pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
+				marketState.asyncData[currentRequestId] = nil
+				pcall(onError, "timeout")
+				return
+			end
+
+			if threadStatus == "completed" then
+				local getOk, requestSucceeded, response = pcall(function() return requestThread:get(0) end)
+				marketState.asyncData[currentRequestId] = nil
+				if not getOk then pcall(onError, "effil_get_failed: " .. tostring(requestSucceeded)); return end
+				if requestSucceeded then
+					if saveSelfInfo == 1 and type(response) == "table" and type(response.text) == "string"
+						and response.text:find("username") and response.text:find("exp") and response.text:find("osTime") then
+						pcall(function()
+							local selfInfoFile = io.open("moonloader/ArzMarket/UsersInfo/info_users_SelfInfo.json", "w")
+							if selfInfoFile then selfInfoFile:write(response.text); selfInfoFile:close() end
+						end)
+					end
+					pcall(onSuccess, response)
+				else
+					pcall(onError, response)
+				end
+				return
+			elseif threadStatus == "cancelled" then
+				marketState.asyncData[currentRequestId] = nil
+				pcall(onError, "cancelled")
+				return
+			elseif threadStatus == "failed" or threadError then
+				marketState.asyncData[currentRequestId] = nil
+				pcall(onError, threadError or "effil_failed")
+				return
+			end
 			wait(0)
 		end
 	end, requestId)
+	return requestId
 end
 
 function sendTelegramNotification(message)
@@ -35228,7 +35378,7 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
-ARZ_COMPONENTS.bootstrap.expected_bundle_version = 276
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 279
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"
@@ -36508,52 +36658,67 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 		end
 		requestThread = proxyThread
 	else
-		requestThread = effil.thread(function(method, url, requestOptions)
-			local requests = require("requests")
-			local requestSucceeded, response = pcall(requests.request, method, url, requestOptions)
+		local createOk, createdThread = pcall(function()
+			return effil.thread(function(method, url, requestOptions)
+				local requests = require("requests")
+				local workerEffil = require("effil")
+				local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
+				local requestSucceeded, response = workerPcall(requests.request, method, url, requestOptions)
 
-			if not requestSucceeded then
-				return false, response
-			end
-
-			local isGzipEncoded = response.headers and response.headers["content-encoding"] and response.headers["content-encoding"]:find("gzip")
-			local zzlibAvailable
-			local zzlib
-
-			if isGzipEncoded then
-				zzlibAvailable, zzlib = pcall(require, "zzlib")
-			end
-
-			if not zzlibAvailable and isGzipEncoded then
-				return false, response
-			end
-
-			if isGzipEncoded and response.text and type(response.text) == "string" and #response.text > 2 then
-				local var_359_6 = false
-				local decompressedText = false
-				local wasDecompressed
-
-				if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
-					decompressedText = zzlib.gunzip(response.text)
-					wasDecompressed = true
-				else
-					decompressedText = response.text
-					wasDecompressed = false
+				if not requestSucceeded then
+					return false, response
 				end
 
-				if wasDecompressed and decompressedText then
-					response.text = decompressedText
-					response.original_size = #response.text
-					response.decompressed = true
-				else
-					response.decompression_error = tostring(decompressedText)
+				local isGzipEncoded = response.headers and response.headers["content-encoding"] and response.headers["content-encoding"]:find("gzip")
+				local zzlibAvailable
+				local zzlib
+
+				if isGzipEncoded then
+					zzlibAvailable, zzlib = pcall(require, "zzlib")
 				end
+
+				if not zzlibAvailable and isGzipEncoded then
+					return false, response
+				end
+
+				if isGzipEncoded and response.text and type(response.text) == "string" and #response.text > 2 then
+					local var_359_6 = false
+					local decompressedText = false
+					local wasDecompressed
+
+					if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
+						decompressedText = zzlib.gunzip(response.text)
+						wasDecompressed = true
+					else
+						decompressedText = response.text
+						wasDecompressed = false
+					end
+
+					if wasDecompressed and decompressedText then
+						response.text = decompressedText
+						response.original_size = #response.text
+						response.decompressed = true
+					else
+						response.decompression_error = tostring(decompressedText)
+					end
+				end
+
+				response.json, response.xml = nil
+
+				return true, response
+			end)(method, url, requestOptions)
+		end)
+		if not createOk or not createdThread then
+			clearAsyncRequestState()
+			if type(onError) == "function" then
+				lua_thread.create(function()
+					wait(0)
+					pcall(onError, "effil_start_failed: " .. tostring(createdThread))
+				end)
 			end
-
-			response.json, response.xml = nil
-
-			return true, response
-		end)(method, url, requestOptions)
+			return nil, "effil_start_failed: " .. tostring(createdThread)
+		end
+		requestThread = createdThread
 	end
 
 	marketState.asyncThreads = marketState.asyncThreads or {}
@@ -36566,31 +36731,29 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 		return
 	end
 
-	lua_thread.create(function(requestId)
-		local requestThread = requestThread
-
+	lua_thread.create(function(currentRequestId)
 		while true do
 			if ARZ_SCRIPT_OFFLINE and not isOriginalTelegramTransport then
-				pcall(function()
-					if requestThread.cancel then requestThread:cancel() end
-				end)
+				pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
 				clearAsyncRequestState()
 				return
 			end
 
-			local threadStatus, threadError = requestThread:status()
+			local requestStartedAt = marketState.asyncData[currentRequestId]
+			if requestStartedAt == nil then return end
 
-			local requestStartedAt = marketState.asyncData[requestId]
-			if requestStartedAt == nil then
+			local statusOk, threadStatus, threadError = pcall(function() return requestThread:status() end)
+			if not statusOk then
+				clearAsyncRequestState()
+				pcall(onError, "effil_status_failed: " .. tostring(threadStatus))
 				return
 			end
 
 			if requestStartedAt + 45 < os.time() then
+				pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
 				clearAsyncRequestState()
-
-				print("reject rkn")
-
-				return onError(threadStatus)
+				pcall(onError, "timeout")
+				return
 			end
 
 			if not threadError then
@@ -36603,9 +36766,10 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 
 					if timers[39][2] > 9 then
 						marketState.marketplaceTimeOut = true
+						pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
 						clearAsyncRequestState()
 
-						onError(threadError)
+						pcall(onError, threadError)
 
 						return
 					end
@@ -36620,46 +36784,44 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 					print("premiumitems error counter > " .. timers[40][2])
 
 					if timers[40][2] > 15 then
+						pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
 						clearAsyncRequestState()
 						AFKMessage(u8:decode("К сожалению таблицу цен загрузить не получилось из за ограничения вашего провайдера."))
 						AFKMessage(u8:decode("Для решения вашей проблемы возможно поможет команда /premhost, напишите ее в чат игры"))
-						onError(threadError)
+						pcall(onError, threadError)
 
 						return
 					end
 				end
 
 				if threadStatus == "completed" then
-					local requestSucceeded, response = requestThread:get(0)
+					local getOk, requestSucceeded, response = pcall(function() return requestThread:get(0) end)
 					clearAsyncRequestState()
-
+					if not getOk then pcall(onError, "effil_get_failed: " .. tostring(requestSucceeded)); return end
 					if requestSucceeded then
-						if not ARZ_INI_WRITE_LOCKED and saveSelfInfo == 1 and response.text ~= "" and response.text:find("username") and response.text:find("exp") and response.text:find("osTime") then
-							arzAuthFreezeSelfInfo(response.text)
+						if not ARZ_INI_WRITE_LOCKED and saveSelfInfo == 1 and type(response) == "table" and type(response.text) == "string" and response.text:find("username") and response.text:find("exp") and response.text:find("osTime") then
+							pcall(arzAuthFreezeSelfInfo, response.text)
 						end
-						onSuccess(response)
+						pcall(onSuccess, response)
 					else
-						print("rejected0")
-						onError(response)
+						pcall(onError, response)
 					end
-
 					return
-				elseif threadStatus == "canceled" then
+				elseif threadStatus == "cancelled" then
 					clearAsyncRequestState()
-					print("rejected1")
-
-					return onError(threadStatus)
+					pcall(onError, "cancelled")
+					return
 				end
 			else
 				clearAsyncRequestState()
-				print("rejected2 (zzlib)")
-
-				return onError(threadError)
+				pcall(onError, threadError)
+				return
 			end
 
 			wait(0)
 		end
 	end, requestId)
+	return requestId
 end
 
 function imgui.FrameTheme()
