@@ -2095,6 +2095,20 @@ function arzUiExtensionsGetHtmlWindowState()
 	return ok and type(value) == "table" and value or nil
 end
 
+function arzUiExtensionsShouldCaptureWindowMessage(message)
+	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	if not extension or extension._disabled_runtime or type(extension.should_capture_window_message) ~= "function" then return false end
+	local ok, value = pcall(extension.should_capture_window_message, message)
+	return ok and value == true
+end
+
+function arzUiExtensionsForwardWindowMessage(message, wparam, lparam)
+	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	if not extension or extension._disabled_runtime or type(extension.forward_window_message) ~= "function" then return false end
+	local ok, value = pcall(extension.forward_window_message, message, wparam, lparam)
+	return ok and value == true
+end
+
 function arzUiExtensionsCloseHtml()
 	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
 	if not extension or type(extension.close_html) ~= "function" then return false end
@@ -2192,12 +2206,16 @@ end
 -- Keep marketState.scriptVersion unchanged for server compatibility.
 -- Increase ARZ_LOCAL_BUILD_ID and update the notes on every local release.
 -- ============================================================
-ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.19-r26-html-marketplace-fix"
+ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.19-r28-html-universal-input"
 ARZ_RELEASE_NOTES_PATH = getWorkingDirectory() .. "/ArzMarket/release_notes_state.json"
 ARZ_RELEASE_NOTES = {
 	build = ARZ_LOCAL_BUILD_ID,
 	title = "Что изменилось",
 	items = {
+		"Исправлен ввод при стандартном SA-MP курсоре: Lua и HTML ArzMarket остаются кликабельными при открытом игровом диалоге, а клики вне окна ArzMarket продолжают работать в самом SA-MP диалоге.",
+		"ArzMarket больше не включает SA-MP cursor mode 1. Обычный режим использует штатный MoonLoader/mimgui/CEF курсор без блокировки клавиш; для внешнего SA-MP курсора включается отдельный совместимый input bridge.",
+		"HTML Marketplace исправлен: загрузка и fallback больше не зависят от рендера Lua-страницы, устранена вечная загрузка после обновления items/buy и оптимизирована передача большого списка лавок.",
+		"HTML ввод исправлен: кнопки, поля и колесо теперь работают через единый MoonLoader input bridge и с обычным курсором, и со стандартным курсором SA-MP, без зависимости от native CEF focus.",
 		"Стабильность: переработан HTML bridge, убран socket.select, исправлены жизненный цикл coroutine/Effil, автозапуск HTML и watchdog публичной сборки.",
 		"Исправлена валюта Маркет-плейса: serverId лавки снова определяется по реально подключенному серверу, а не по auth myServerId. Обычные серверы больше не могут ошибочно попадать в идентификатор Vice City.",
 		"Добавлено ручное выставление скупленных товаров: ArzMarket запоминает скуплленные позиции и по кнопке в модификациях выставляет их на продажу по актуальным ценам текущего sell-конфига.",
@@ -17058,7 +17076,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.56.120"
+ARZ_UPDATE_VERSION = "3.56.122"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -18682,44 +18700,101 @@ function arzRenderInterfaceChooser(frame)
 	end
 end
 
-ARZ_INPUT_CURSOR_GUARD = ARZ_INPUT_CURSOR_GUARD or { last_reclaim = 0 }
+ARZ_INPUT_CURSOR_GUARD = ARZ_INPUT_CURSOR_GUARD or { last_reclaim = 0, lua_focused = false }
 
-function ARZ_INPUT_CURSOR_GUARD.backgroundInterference()
-	local function safeBool(fn)
-		if type(fn) ~= "function" then return false end
-		local ok, value = pcall(fn)
-		return ok and value == true
-	end
-	local dialogActive = safeBool(sampIsDialogActive)
-	local chatActive = safeBool(sampIsChatInputActive)
-	local scoreboardActive = safeBool(sampIsScoreboardOpen)
-	local pauseActive = safeBool(isPauseMenuActive)
-	return dialogActive or chatActive or scoreboardActive or pauseActive or (marketState and marketState.isEnableCursor == true)
+function ARZ_INPUT_CURSOR_GUARD.safeBool(fn)
+	if type(fn) ~= "function" then return false end
+	local ok, value = pcall(fn)
+	return ok and value == true
 end
 
-function ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
-	if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true then return end
+function ARZ_INPUT_CURSOR_GUARD.sampCursorActive()
+	return ARZ_INPUT_CURSOR_GUARD.safeBool(sampIsCursorActive)
+end
+
+function ARZ_INPUT_CURSOR_GUARD.backgroundInterference()
+	return ARZ_INPUT_CURSOR_GUARD.safeBool(sampIsDialogActive)
+		or ARZ_INPUT_CURSOR_GUARD.safeBool(sampIsChatInputActive)
+		or ARZ_INPUT_CURSOR_GUARD.safeBool(sampIsScoreboardOpen)
+		or ARZ_INPUT_CURSOR_GUARD.safeBool(isPauseMenuActive)
+		or (marketState and marketState.isEnableCursor == true)
+end
+
+function ARZ_INPUT_CURSOR_GUARD.luaUiActive()
+	if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true then return false end
 	local baronUsesLua = ini.cfg.interface_mode ~= "html"
 	if ARZ_BARON_SHOWCASE_MODE ~= nil then baronUsesLua = ARZ_BARON_SHOWCASE_MODE ~= "html" end
 	local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
 	local baronLuaActive = baronGateOpen and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
 	local chooserActive = baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]
-	local luaUiActive = (menuVisible and menuVisible[0] == true) or baronLuaActive or chooserActive
-	if not luaUiActive or ARZ_INPUT_CURSOR_GUARD.backgroundInterference() then return end
-
-	local cursorActive = false
-	if type(sampIsCursorActive) == "function" then
-		local ok, value = pcall(sampIsCursorActive)
-		cursorActive = ok and value == true
-	end
-	if cursorActive then return end
-
-	local now = type(getGameTimer) == "function" and getGameTimer() or math.floor(os.clock() * 1000)
-	if now - (tonumber(ARZ_INPUT_CURSOR_GUARD.last_reclaim) or 0) < 250 then return end
-	ARZ_INPUT_CURSOR_GUARD.last_reclaim = now
-	pcall(function() if sampSetCursorMode then sampSetCursorMode(1) end end)
-	pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
+	return (menuVisible and menuVisible[0] == true) or baronLuaActive or chooserActive or (sellWindowVisible and sellWindowVisible[0] == true)
 end
+
+function ARZ_INPUT_CURSOR_GUARD.pointInsideLuaUi()
+	if type(getCursorPos) ~= "function" then return false end
+	local ok, x, y = pcall(getCursorPos)
+	if not ok or not tonumber(x) or not tonumber(y) then return false end
+	x, y = tonumber(x), tonumber(y)
+	if menuVisible and menuVisible[0] == true and menuWP and tonumber(sizeX) and tonumber(sizeY) then
+		if x >= menuWP.x and x <= menuWP.x + tonumber(sizeX) and y >= menuWP.y and y <= menuWP.y + tonumber(sizeY) then return true end
+	end
+	if sellWindowVisible and sellWindowVisible[0] == true and menuDIALOG then
+		if x >= menuDIALOG.x and x <= menuDIALOG.x + 650 and y >= menuDIALOG.y and y <= menuDIALOG.y + 700 then return true end
+	end
+	return false
+end
+
+function ARZ_INPUT_CURSOR_GUARD.feedMimguiBeforeFrame()
+	if not ARZ_INPUT_CURSOR_GUARD.luaUiActive() or not ARZ_INPUT_CURSOR_GUARD.sampCursorActive() then return end
+	if type(getCursorPos) ~= "function" or type(isKeyDown) ~= "function" then return end
+	local ok, x, y = pcall(getCursorPos)
+	if not ok or not tonumber(x) or not tonumber(y) then return end
+	local io = imgui.GetIO()
+	io.MousePos = imgui.ImVec2(tonumber(x), tonumber(y))
+	local okL, l = pcall(isKeyDown, 0x01)
+	local okR, r = pcall(isKeyDown, 0x02)
+	local okM, m = pcall(isKeyDown, 0x04)
+	if okL then io.MouseDown[0] = l == true end
+	if okR then io.MouseDown[1] = r == true end
+	if okM then io.MouseDown[2] = m == true end
+	local okCtrl, ctrl = pcall(isKeyDown, 0x11)
+	local okShift, shift = pcall(isKeyDown, 0x10)
+	local okAlt, alt = pcall(isKeyDown, 0x12)
+	if okCtrl then io.KeyCtrl = ctrl == true end
+	if okShift then io.KeyShift = shift == true end
+	if okAlt then io.KeyAlt = alt == true end
+end
+
+function ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
+	-- mimgui already owns the normal ArzMarket cursor through ShowCursor().
+	-- Never enable SA-MP cursor modes here: mode 1 locks keyboard input.
+	if not ARZ_INPUT_CURSOR_GUARD.luaUiActive() then ARZ_INPUT_CURSOR_GUARD.lua_focused = false end
+end
+
+function ARZ_INPUT_CURSOR_GUARD.shouldCaptureLuaWindowMessage(message)
+	if not ARZ_INPUT_CURSOR_GUARD.luaUiActive() or not ARZ_INPUT_CURSOR_GUARD.sampCursorActive() then
+		ARZ_INPUT_CURSOR_GUARD.lua_focused = false
+		return false
+	end
+	message = tonumber(message) or -1
+	if message >= 512 and message <= 526 then
+		local inside = ARZ_INPUT_CURSOR_GUARD.pointInsideLuaUi()
+		if message == 513 or message == 516 or message == 519 then ARZ_INPUT_CURSOR_GUARD.lua_focused = inside end
+		return inside
+	end
+	if message == 256 or message == 257 or message == 258 or message == 260 or message == 261 then
+		return ARZ_INPUT_CURSOR_GUARD.lua_focused == true
+	end
+	return false
+end
+
+ARZ_INPUT_CURSOR_COMPAT_FRAME = imgui.OnFrame(function()
+	return ARZ_INPUT_CURSOR_GUARD.luaUiActive() and ARZ_INPUT_CURSOR_GUARD.sampCursorActive()
+end, function()
+	ARZ_INPUT_CURSOR_GUARD.feedMimguiBeforeFrame()
+end, function() end)
+ARZ_INPUT_CURSOR_COMPAT_FRAME.HideCursor = true
+ARZ_INPUT_CURSOR_COMPAT_FRAME.LockPlayer = false
 
 mainUiFrame = imgui.OnFrame(function()
 	local baronUsesLua = ini.cfg.interface_mode ~= "html"
@@ -22947,18 +23022,50 @@ function arzBaronTutorialLocksInterface()
 end
 
 function onWindowMessage(message, wparam, lparam)
-	-- HTML/CEF fallback: close ArzMarket on Escape even if the browser-side
-	-- key handler fails. Handle both keydown and keyup, but close only on keyup.
 	local htmlInterfaceOpen = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen()
+	local htmlCompatCapture = false
+	if htmlInterfaceOpen and type(arzUiExtensionsShouldCaptureWindowMessage) == "function" then
+		local okCapture, capture = pcall(arzUiExtensionsShouldCaptureWindowMessage, message)
+		htmlCompatCapture = okCapture and capture == true
+	end
+
+	-- Escape follows input focus. With the normal MoonLoader/CEF cursor it
+	-- closes ArzMarket as before. If a SA-MP dialog owns the standard cursor,
+	-- ArzMarket consumes Escape only after the user focused ArzMarket; after a
+	-- click outside the script Escape is left to the game dialog.
 	if (message == 256 or message == 257) and wparam == 27 and htmlInterfaceOpen and not isPauseMenuActive() then
-		consumeWindowMessage(true, false)
-		if message == 257 then
-			if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-			menuOpen = false
-			if menuVisible then menuVisible[0] = false end
-			if type(resetIO) == "function" then pcall(resetIO) end
+		local sampCursor = false
+		if type(sampIsCursorActive) == "function" then
+			local okCursor, activeCursor = pcall(sampIsCursorActive)
+			sampCursor = okCursor and activeCursor == true
 		end
+		if not sampCursor or htmlCompatCapture then
+			consumeWindowMessage(true, false)
+			if message == 257 then
+				if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+				menuOpen = false
+				if menuVisible then menuVisible[0] = false end
+				if type(resetIO) == "function" then pcall(resetIO) end
+			end
+			return
+		end
+	end
+
+	-- If a real SA-MP dialog owns the standard cursor, route input by hit-test.
+	-- Events over ArzMarket are consumed from the game but remain visible to
+	-- MoonLoader scripts; events outside ArzMarket continue to the SA-MP dialog.
+	if htmlInterfaceOpen and htmlCompatCapture then
+		if type(arzUiExtensionsForwardWindowMessage) == "function" then
+			pcall(arzUiExtensionsForwardWindowMessage, message, wparam, lparam)
+		end
+		consumeWindowMessage(true, false)
 		return
+	elseif ARZ_INPUT_CURSOR_GUARD and type(ARZ_INPUT_CURSOR_GUARD.shouldCaptureLuaWindowMessage) == "function" then
+		local okCapture, capture = pcall(ARZ_INPUT_CURSOR_GUARD.shouldCaptureLuaWindowMessage, message)
+		if okCapture and capture == true then
+			consumeWindowMessage(true, false)
+			return
+		end
 	end
 
 	-- VK_HOME (0x24): the 3.56 hotkey mirrors /crr and is ignored while
@@ -23011,17 +23118,9 @@ end
 function onScriptTerminate(script, quitGame)
 	if script == thisScript() then
 		if type(arzUiExtensionsShutdown) == "function" then pcall(arzUiExtensionsShutdown, quitGame == true) end
-		if quitGame ~= true then
-			local pauseOwnsCursor = type(isPauseMenuActive) == "function" and isPauseMenuActive()
-			local chatOwnsCursor = type(sampIsChatInputActive) == "function" and sampIsChatInputActive()
-			local dialogOwnsCursor = type(sampIsDialogActive) == "function" and sampIsDialogActive()
-			if not pauseOwnsCursor and not chatOwnsCursor and not dialogOwnsCursor then
-				pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
-				pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
-				pcall(function() if sampShowCursor then sampShowCursor(false) end end)
-				pcall(function() if showCursor then showCursor(false) end end)
-			end
-		end
+		-- mimgui and arz_html_ui release only the MoonLoader cursor they own.
+		-- Never reset SA-MP cursor mode here because a game dialog/CEF or another
+		-- script may still own the standard cursor during Lua reload.
 		-- Cancel every in-flight network worker before AutoReboot or MoonLoader unloads this Lua state.
 		if type(telegramOriginalCleanup) == "function" then pcall(telegramOriginalCleanup) end
 		if type(arzScriptOfflineCancelInFlight) == "function" then pcall(arzScriptOfflineCancelInFlight) end
@@ -35378,7 +35477,7 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
-ARZ_COMPONENTS.bootstrap.expected_bundle_version = 279
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 281
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"

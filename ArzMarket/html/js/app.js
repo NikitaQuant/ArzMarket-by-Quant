@@ -386,6 +386,214 @@
     if (activePopupSelect.anchor?.contains(event.target) || activePopupSelect.menu?.contains(event.target)) return;
     closePopupSelect();
   }, true);
+  // SA-MP cursor compatibility. When a native SA-MP dialog owns the visible
+  // cursor, MoonLoader forwards only events that happen over the ArzMarket
+  // window. Native browser input remains the default path in every other case.
+  const hostInputState = {
+    downTarget:null,
+    lastTrusted:null,
+    lastSynthetic:null,
+    buttonsMask:0,
+    lastTrustedKey:null,
+    lastSyntheticKey:null,
+    lastTrustedText:null,
+    lastSyntheticText:null
+  };
+  function hostInputButtonMask(button) { return button === 0 ? 1 : button === 1 ? 4 : 2; }
+  function hostInputNear(a, b) { return a && b && Math.abs(Number(a.x)-Number(b.x)) <= 3 && Math.abs(Number(a.y)-Number(b.y)) <= 3 && Number(a.button ?? 0) === Number(b.button ?? 0); }
+  function hostInputStamp(type, event) { return {type,x:Number(event?.clientX)||0,y:Number(event?.clientY)||0,button:Number(event?.button)||0,at:performance.now()}; }
+  function hostInputTrustedRecently(type, x, y, button) {
+    const last = hostInputState.lastTrusted;
+    return !!(last && last.type === type && performance.now() - last.at < 80 && hostInputNear(last,{x,y,button}));
+  }
+  ['mousedown','mouseup','click','wheel'].forEach(type => document.addEventListener(type, event => {
+    if (!event.isTrusted) return;
+    const current = hostInputStamp(type,event);
+    const bit = hostInputButtonMask(Number(event.button) || 0);
+    if (type === 'mousedown') hostInputState.buttonsMask |= bit;
+    else if (type === 'mouseup') hostInputState.buttonsMask &= ~bit;
+    const synthetic = hostInputState.lastSynthetic;
+    if (synthetic && synthetic.type === type && performance.now() - synthetic.at < 80 && hostInputNear(synthetic,current)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    hostInputState.lastTrusted = current;
+  }, true));
+  function hostInputKeyCode(event) { return Number(event?.keyCode || event?.which || 0); }
+  function hostInputTrustedKeyRecently(type, code) {
+    const last = hostInputState.lastTrustedKey;
+    return !!(last && last.type === type && Number(last.code) === Number(code) && performance.now() - last.at < 80);
+  }
+  ['keydown','keyup'].forEach(type => document.addEventListener(type, event => {
+    if (!event.isTrusted) return;
+    const current = {type,code:hostInputKeyCode(event),at:performance.now()};
+    const synthetic = hostInputState.lastSyntheticKey;
+    if (synthetic && synthetic.type === type && synthetic.code === current.code && performance.now() - synthetic.at < 80) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    hostInputState.lastTrustedKey = current;
+  }, true));
+  document.addEventListener('beforeinput', event => {
+    if (!event.isTrusted) return;
+    const text = typeof event.data === 'string' ? event.data : '';
+    const synthetic = hostInputState.lastSyntheticText;
+    if (synthetic && synthetic.text === text && performance.now() - synthetic.at < 80) {
+      if (event.cancelable) event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    hostInputState.lastTrustedText = {text,at:performance.now()};
+  }, true);
+  function hostInputKeyName(code) {
+    const names = {8:'Backspace',9:'Tab',13:'Enter',16:'Shift',17:'Control',18:'Alt',27:'Escape',32:' ',33:'PageUp',34:'PageDown',35:'End',36:'Home',37:'ArrowLeft',38:'ArrowUp',39:'ArrowRight',40:'ArrowDown',45:'Insert',46:'Delete'};
+    if (names[code]) return names[code];
+    if (code >= 48 && code <= 57) return String.fromCharCode(code);
+    if (code >= 65 && code <= 90) return String.fromCharCode(code);
+    return '';
+  }
+  function hostInputFocusable(node) {
+    if (!node || node === document.body || node === document.documentElement) return false;
+    const tag = String(node.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button' || tag === 'a' || node.isContentEditable || Number(node.tabIndex) >= 0;
+  }
+  function hostInputFocus(node) {
+    let target = node;
+    while (target && target !== document.body && !hostInputFocusable(target)) target = target.parentElement;
+    try { (target || node)?.focus?.({preventScroll:true}); } catch (_) { try { (target || node)?.focus?.(); } catch (_) {} }
+    try { window.focus(); } catch (_) {}
+    return target || node;
+  }
+  function hostInputDispatchMouse(data) {
+    const x = Number(data.x), y = Number(data.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit) return;
+    const button = Number.isFinite(Number(data.button)) ? Number(data.button) : 0;
+    const bit = hostInputButtonMask(button);
+    let buttons = hostInputState.buttonsMask;
+    if (data.event === 'down') buttons |= bit;
+    else if (data.event === 'up') buttons &= ~bit;
+    const common = {bubbles:true,cancelable:true,view:window,clientX:x,clientY:y,screenX:x,screenY:y,button,buttons};
+    if (data.event === 'move') {
+      try { hit.dispatchEvent(new MouseEvent('mousemove', common)); } catch (_) {}
+      try { hit.dispatchEvent(new PointerEvent('pointermove', Object.assign({pointerId:1,pointerType:'mouse',isPrimary:true}, common))); } catch (_) {}
+      return;
+    }
+    if (data.event === 'wheel') {
+      const delta = Number(data.delta) || 0;
+      if (hostInputTrustedRecently('wheel',x,y,button)) return;
+      hostInputState.lastSynthetic = {type:'wheel',x,y,button,at:performance.now()};
+      try { hit.dispatchEvent(new WheelEvent('wheel', Object.assign({deltaMode:WheelEvent.DOM_DELTA_LINE,deltaY:-delta}, common))); } catch (_) {}
+      return;
+    }
+    if (data.event === 'down') {
+      hostInputState.buttonsMask = buttons;
+      if (hostInputTrustedRecently('mousedown',x,y,button)) return;
+      const target = hostInputFocus(hit);
+      hostInputState.downTarget = target || hit;
+      hostInputState.lastSynthetic = {type:'mousedown',x,y,button,at:performance.now()};
+      try { (target || hit).dispatchEvent(new PointerEvent('pointerdown', Object.assign({pointerId:1,pointerType:'mouse',isPrimary:true}, common))); } catch (_) {}
+      try { (target || hit).dispatchEvent(new MouseEvent('mousedown', common)); } catch (_) {}
+      return;
+    }
+    if (data.event === 'up') {
+      hostInputState.buttonsMask = buttons;
+      if (hostInputTrustedRecently('mouseup',x,y,button)) { hostInputState.downTarget = null; return; }
+      const target = hit || hostInputState.downTarget;
+      hostInputState.lastSynthetic = {type:'mouseup',x,y,button,at:performance.now()};
+      try { target.dispatchEvent(new PointerEvent('pointerup', Object.assign({pointerId:1,pointerType:'mouse',isPrimary:true}, common))); } catch (_) {}
+      try { target.dispatchEvent(new MouseEvent('mouseup', common)); } catch (_) {}
+      const down = hostInputState.downTarget;
+      hostInputState.downTarget = null;
+      if (button === 0 && down && (down === target || down.contains?.(target) || target.contains?.(down))) {
+        if (!hostInputTrustedRecently('click',x,y,button)) {
+          hostInputState.lastSynthetic = {type:'click',x,y,button,at:performance.now()};
+          try { target.dispatchEvent(new MouseEvent('click', Object.assign({}, common, {buttons:0}))); } catch (_) { try { target.click?.(); } catch (_) {} }
+        }
+      }
+    }
+  }
+  function hostInputEditCharacter(target, charCode) {
+    if (!target || !Number.isFinite(charCode) || charCode <= 0) return false;
+    const text = String.fromCharCode(charCode);
+    const trusted = hostInputState.lastTrustedText;
+    if (trusted && trusted.text === text && performance.now() - trusted.at < 80) return true;
+    hostInputState.lastSyntheticText = {text,at:performance.now()};
+    const tag = String(target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+      if (target.disabled || target.readOnly) return false;
+      const start = Number.isFinite(target.selectionStart) ? target.selectionStart : String(target.value || '').length;
+      const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+      try { target.setRangeText(text, start, end, 'end'); }
+      catch (_) { target.value = String(target.value || '').slice(0,start) + text + String(target.value || '').slice(end); }
+      try { target.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text})); } catch (_) { target.dispatchEvent(new Event('input',{bubbles:true})); }
+      return true;
+    }
+    if (target.isContentEditable) {
+      try { document.execCommand('insertText', false, text); return true; } catch (_) {}
+    }
+    return false;
+  }
+  function hostInputEditControl(target, code) {
+    const tag = String(target?.tagName || '').toLowerCase();
+    if ((tag !== 'input' && tag !== 'textarea') || target.disabled || target.readOnly) return false;
+    const value = String(target.value || '');
+    let start = Number.isFinite(target.selectionStart) ? target.selectionStart : value.length;
+    let end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+    if (code === 8 && start === end && start > 0) start -= 1;
+    else if (code === 46 && start === end && end < value.length) end += 1;
+    else if (code !== 8 && code !== 46) return false;
+    try { target.setRangeText('', start, end, 'end'); }
+    catch (_) { target.value = value.slice(0,start) + value.slice(end); }
+    try { target.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:code===8?'deleteContentBackward':'deleteContentForward',data:null})); } catch (_) { target.dispatchEvent(new Event('input',{bubbles:true})); }
+    return true;
+  }
+  function hostInputDispatchKeyboard(data) {
+    const target = document.activeElement || document.body;
+    const code = Number(data.keyCode) || 0;
+    if (data.event === 'char') {
+      const explicitText = typeof data.text === 'string' ? data.text : '';
+      if (explicitText) {
+        const trusted = hostInputState.lastTrustedText;
+        if (trusted && trusted.text === explicitText && performance.now() - trusted.at < 80) return;
+        hostInputState.lastSyntheticText = {text:explicitText,at:performance.now()};
+        const tag = String(target?.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea') {
+          if (!target.disabled && !target.readOnly) {
+            const start = Number.isFinite(target.selectionStart) ? target.selectionStart : String(target.value || '').length;
+            const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+            try { target.setRangeText(explicitText, start, end, 'end'); }
+            catch (_) { target.value = String(target.value || '').slice(0,start) + explicitText + String(target.value || '').slice(end); }
+            try { target.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:explicitText})); } catch (_) { target.dispatchEvent(new Event('input',{bubbles:true})); }
+          }
+        } else if (target?.isContentEditable) {
+          try { document.execCommand('insertText', false, explicitText); } catch (_) {}
+        }
+        return;
+      }
+      hostInputEditCharacter(target, Number(data.charCode) || code);
+      return;
+    }
+    const type = data.event === 'up' ? 'keyup' : 'keydown';
+    if (hostInputTrustedKeyRecently(type,code)) return;
+    hostInputState.lastSyntheticKey = {type,code,at:performance.now()};
+    if (data.event === 'down') hostInputEditControl(target, code);
+    const key = hostInputKeyName(code);
+    try {
+      target.dispatchEvent(new KeyboardEvent(type,{bubbles:true,cancelable:true,key,code:key,which:code,keyCode:code,ctrlKey:data.ctrl===true,shiftKey:data.shift===true,altKey:data.alt===true}));
+    } catch (_) {}
+  }
+  window.addEventListener('message', event => {
+    const data = event?.data;
+    if (!data || data.channel !== 'arzmarket-host-input') return;
+    if (event.source && event.source !== window.parent) return;
+    if (data.kind === 'mouse') hostInputDispatchMouse(data);
+    else if (data.kind === 'keyboard') hostInputDispatchKeyboard(data);
+  }, false);
+
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && activePopupSelect) {
       closePopupSelect();

@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 73,
+    module_version = 75,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -27,6 +27,12 @@ local revision, fingerprints = { buy = 1, sell = 1, settings = 1, logs = 1, mark
 local lastInjectCheck = 0
 local htmlSessionGeneration = 0
 local lastHtmlInputReclaim = 0
+local htmlCompatFocused = false
+local htmlCompatLastMouseInside = false
+local htmlCompatLastX, htmlCompatLastY = nil, nil
+local htmlCompatButtons = {false,false,false}
+local htmlCompatLastWheelEventAt = 0
+local htmlCompatLastMoveAt = 0
 local lastMenuAutoOpenAttempt = 0
 local sourceCache = { buy = {at=0,data={},fingerprint="0"}, sell = {at=0,data={},fingerprint="0"} }
 local utf8ValueCache = {}
@@ -1526,58 +1532,48 @@ local function addItem(side,payload)
     return true
 end
 
+local function externalSampCursorActive()
+    if type(sampIsCursorActive)~="function" then return false end
+    local ok,active=pcall(sampIsCursorActive)
+    return ok and active==true
+end
+
 local function setCefCursor(value)
     value=value==true
-    local alreadyActive=false
-    if type(sampIsCursorActive)=="function" then
-        local ok,active=pcall(sampIsCursorActive)
-        alreadyActive=ok and active==true
-    end
-
     if value then
-        -- Do not emulate Arizona packet 220 for cursor ownership. It is an
-        -- internal game protocol and repeatedly injecting it is unnecessary.
-        if not alreadyActive then
-            pcall(function() if sampSetCursorMode then sampSetCursorMode(1) end end)
-            pcall(function() if sampToggleCursor then sampToggleCursor(true) end end)
-            cefCursorOwned=true
-        else
+        -- ArzMarket must never enable the SA-MP cursor itself. SAMPFUNCS mode 1
+        -- is CMODE_LOCKKEYS_NOCURSOR and steals keyboard input. MoonLoader's
+        -- cursor is enough for CEF and can be shown without locking controls.
+        if externalSampCursorActive() then
             cefCursorOwned=false
+            return
         end
-        pcall(function() if sampShowCursor then sampShowCursor(true) end end)
-        pcall(function() if showCursor then showCursor(true) end end)
+        pcall(function() if showCursor then showCursor(true,false) end end)
+        cefCursorOwned=true
         return
     end
 
-    -- Never disable a cursor that was already active before CEF opened.
+    -- Never disable a cursor owned by SA-MP/a game dialog.
     if not cefCursorOwned then return end
-    pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
-    pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
-    pcall(function() if sampShowCursor then sampShowCursor(false) end end)
-    pcall(function() if showCursor then showCursor(false) end end)
+    pcall(function() if showCursor then showCursor(false,false) end end)
     cefCursorOwned=false
 end
 
 local function forceDisableCefCursor()
     if not cefCursorOwned then return end
-    pcall(function() if sampSetCursorMode then sampSetCursorMode(0) end end)
-    pcall(function() if sampToggleCursor then sampToggleCursor(false) end end)
-    pcall(function() if sampShowCursor then sampShowCursor(false) end end)
-    pcall(function() if showCursor then showCursor(false) end end)
+    pcall(function() if showCursor then showCursor(false,false) end end)
     cefCursorOwned=false
 end
 
-local function refocusHtmlFrame()
+local function refocusHtmlFrame(nativePointerEvents)
     if not htmlOpen or not acef or type(acef.eval)~="function" then return end
-    pcall(acef.eval, [[
-        var f=document.getElementById('arzmarket-html-frame');
-        if(f){
-            f.style.visibility='visible';
-            f.style.pointerEvents='auto';
-            try{f.focus();}catch(e){}
-            try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}
-        }
-    ]])
+    -- The Arizona root CEF may be visible without being the active input target.
+    -- Do not depend on native CEF mouse delivery at all: the MoonLoader bridge
+    -- below owns hit-testing/click delivery for both the normal cursor and an
+    -- externally-owned SA-MP cursor. Keeping the iframe non-interactive at the
+    -- parent level also prevents invisible full-screen CEF from eating clicks
+    -- that belong to an in-game dialog outside the ArzMarket window.
+    pcall(acef.eval, "var f=document.getElementById('arzmarket-html-frame');if(f){f.style.visibility='visible';f.style.pointerEvents='none';try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}}")
 end
 local function gameUiNeedsCursor()
     if type(isPauseMenuActive)=="function" then
@@ -1607,22 +1603,144 @@ local function backgroundGameUiStealsCursor()
     return false
 end
 
+local function htmlInputBounds()
+    local sw,sh=1366,768
+    if type(getScreenResolution)=="function" then
+        local ok,w,h=pcall(getScreenResolution)
+        if ok and tonumber(w) and tonumber(h) then sw,sh=tonumber(w),tonumber(h) end
+    end
+    local state=type(htmlWindowState)=="table" and htmlWindowState or {}
+    local x,y,w,h=tonumber(state.x),tonumber(state.y),tonumber(state.width),tonumber(state.height)
+    if not (x and y and w and h and w>0 and h>0) then
+        local margin=12
+        if htmlTemporaryMode then
+            w=math.min(1380,math.max(320,sw-margin*2))
+            h=math.min(820,math.max(240,sh-margin*2))
+        else
+            w=math.min(1600,math.max(320,sw-margin*2),math.max(760,sw*0.88))
+            h=math.min(900,math.max(240,sh-margin*2),math.max(500,sh*0.84))
+        end
+        x=math.max(margin,(sw-w)*0.5)
+        y=math.max(margin,(sh-h)*0.5)
+    end
+    return x,y,w,h
+end
+
+local function cursorInsideHtmlWindow()
+    if not htmlOpen or type(getCursorPos)~="function" then return false,nil,nil end
+    local ok,x,y=pcall(getCursorPos)
+    if not ok or not tonumber(x) or not tonumber(y) then return false,nil,nil end
+    x,y=tonumber(x),tonumber(y)
+    local wx,wy,ww,wh=htmlInputBounds()
+    return x>=wx and x<=wx+ww and y>=wy and y<=wy+wh,x,y
+end
+
+local function compatInputNeeded()
+    -- Universal HTML input path. A visible MoonLoader cursor does not guarantee
+    -- that Arizona's root CEF is focused, so native browser mouse events can be
+    -- completely absent even though the pointer is moving. Route HTML input
+    -- through the same deterministic bridge in both cases:
+    --   1) ArzMarket's normal MoonLoader cursor;
+    --   2) a standard SA-MP/game cursor owned by another UI.
+    -- Lua/mimgui pages keep their own native input path.
+    return htmlOpen==true
+end
+
+local function postCompatInput(payload)
+    if not htmlOpen or not acef or type(acef.eval)~="function" or type(payload)~="table" then return false end
+    payload.channel="arzmarket-host-input"
+    -- getCursorPos() is in GTA/screen coordinates, while elementFromPoint()
+    -- inside the iframe expects coordinates relative to the iframe viewport.
+    -- Convert in the parent CEF using the real iframe rectangle instead of
+    -- assuming our saved geometry is pixel-perfect.
+    local js="(function(){var f=document.getElementById('arzmarket-html-frame');if(f&&f.contentWindow){try{var p="..encode(payload)..";if(p&&p.kind==='mouse'){var r=f.getBoundingClientRect();p.x=(Number(p.x)||0)-r.left;p.y=(Number(p.y)||0)-r.top;}f.contentWindow.postMessage(p,'*');}catch(e){}}})();"
+    local ok,result=pcall(acef.eval,js)
+    return ok and result~=false
+end
+
+local function classifyWindowMessage(message)
+    message=tonumber(message) or -1
+    if message>=512 and message<=526 then return "mouse" end
+    if message==256 or message==257 or message==258 or message==260 or message==261 then return "keyboard" end
+    return nil
+end
+
+local function pumpCompatPointer()
+    if not compatInputNeeded() then
+        htmlCompatLastX,htmlCompatLastY=nil,nil
+        htmlCompatLastMoveAt=0
+        htmlCompatButtons[1],htmlCompatButtons[2],htmlCompatButtons[3]=false,false,false
+        return
+    end
+    local inside,x,y=cursorInsideHtmlWindow()
+    htmlCompatLastMouseInside=inside==true
+    if not inside then
+        if type(isKeyDown)=="function" then
+            local okL,l=pcall(isKeyDown,0x01)
+            local okR,r=pcall(isKeyDown,0x02)
+            local okM,m=pcall(isKeyDown,0x04)
+            if (okL and l==true and not htmlCompatButtons[1]) or (okR and r==true and not htmlCompatButtons[2]) or (okM and m==true and not htmlCompatButtons[3]) then htmlCompatFocused=false end
+            if okL then htmlCompatButtons[1]=l==true end
+            if okR then htmlCompatButtons[2]=r==true end
+            if okM then htmlCompatButtons[3]=m==true end
+        end
+        htmlCompatLastX,htmlCompatLastY=x,y
+        return
+    end
+    if x~=htmlCompatLastX or y~=htmlCompatLastY then
+        -- acef.eval is a real Arizona CEF packet, so do not send one for every
+        -- rendered frame. Clicks carry their own coordinates; movement is only
+        -- needed for hover/drag and is capped to avoid CEF packet spam.
+        local moveNow=nowMs()
+        local dragging=htmlCompatButtons[1] or htmlCompatButtons[2] or htmlCompatButtons[3]
+        local minMoveInterval=dragging and 24 or 60
+        if moveNow-htmlCompatLastMoveAt>=minMoveInterval then
+            postCompatInput({kind="mouse",event="move",x=x,y=y})
+            htmlCompatLastMoveAt=moveNow
+        end
+        htmlCompatLastX,htmlCompatLastY=x,y
+    end
+    if type(isKeyDown)=="function" then
+        local keys={0x01,0x02,0x04}
+        local buttons={0,2,1}
+        for i=1,3 do
+            local ok,down=pcall(isKeyDown,keys[i])
+            if ok then
+                down=down==true
+                if down~=htmlCompatButtons[i] then
+                    htmlCompatButtons[i]=down
+                    if down then htmlCompatFocused=true end
+                    postCompatInput({kind="mouse",event=down and "down" or "up",x=x,y=y,button=buttons[i]})
+                end
+            end
+        end
+    end
+    if type(getMousewheelDelta)=="function" then
+        local ok,delta=pcall(getMousewheelDelta)
+        delta=ok and tonumber(delta) or 0
+        -- WM_MOUSEWHEEL is preferred when available. Skip the polling copy for
+        -- a short window so one physical wheel step cannot be delivered twice.
+        if delta and delta~=0 and nowMs()-htmlCompatLastWheelEventAt>80 then
+            postCompatInput({kind="mouse",event="wheel",x=x,y=y,button=0,delta=delta})
+        end
+    end
+end
+
 local function reclaimHtmlInputIfNeeded()
     if not htmlOpen or not acef then return end
     local now=nowMs()
     if now-lastHtmlInputReclaim<250 then return end
     lastHtmlInputReclaim=now
 
-    -- A real game dialog/CEF owns its cursor. Do not fight it from ArzMarket.
-    -- When it closes, the next normal HTML frame can regain focus safely.
-    if backgroundGameUiStealsCursor() or gameUiNeedsCursor() then return end
-    local active=false
-    if type(sampIsCursorActive)=="function" then
-        local ok,value=pcall(sampIsCursorActive)
-        active=ok and value==true
+    -- HTML always uses the MoonLoader -> JS input bridge. If no game UI owns a
+    -- SA-MP cursor, keep the ordinary MoonLoader cursor visible. If SA-MP owns
+    -- one, leave it untouched and use its real position/buttons for the bridge.
+    local inside=cursorInsideHtmlWindow()
+    htmlCompatLastMouseInside=inside==true
+    if not externalSampCursorActive() and not gameUiNeedsCursor() then
+        setCefCursor(true)
     end
-    if not active then setCefCursor(true) end
-    refocusHtmlFrame()
+    refocusHtmlFrame(false)
 end
 
 local function releaseCursorAfterHtmlClose()
@@ -1640,6 +1758,11 @@ local function removeStaleCefFrames()
     previewOpen=false
     previewSignature=""
     htmlTemporaryMode=false
+    htmlCompatFocused=false
+    htmlCompatLastMouseInside=false
+    htmlCompatLastX,htmlCompatLastY=nil,nil
+    htmlCompatLastMoveAt=0
+    htmlCompatButtons[1],htmlCompatButtons[2],htmlCompatButtons[3]=false,false,false
     if acef and type(acef.eval)=="function" then
         pcall(acef.eval, [[
             (function(){
@@ -1671,7 +1794,7 @@ local function quoteJs(v) return string.format("%q",tostring(v or "")):gsub("\r"
 local function parentFrameBootstrap(url,replaceExisting)
     local replaceCode=replaceExisting and "var old=document.getElementById('arzmarket-html-frame');if(old)old.remove();" or ""
     return "window.__arzMarketFrameToken="..quoteJs(token)..";"..
-        "window.__arzMarketFocusFrame=function(f,activate){if(!f)return;if(activate!==false){f.style.visibility='visible';f.style.pointerEvents='auto';}try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}};"..
+        "window.__arzMarketFocusFrame=function(f,activate){if(!f)return;f.style.visibility='visible';f.style.pointerEvents='none';try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}};"..
         "if(!window.__arzMarketFrameMessageBound){window.addEventListener('message',function(e){var d=e&&e.data;if(!d||d.channel!=='arzmarket-html'||d.token!==window.__arzMarketFrameToken)return;var f=document.getElementById('arzmarket-html-frame');if(d.action==='detach'){if(f)f.remove();return;}if(d.action==='hide'){if(f){f.style.visibility='hidden';f.style.pointerEvents='none';}return;}if(d.action==='show'){if(f){f.style.visibility='visible';window.__arzMarketFocusFrame(f);}return;}if(d.action==='ready'&&f){f.setAttribute('data-ready','1');window.__arzMarketFocusFrame(f);}},false);window.__arzMarketFrameMessageBound=true;}"..
         replaceCode..
         "if(!document.getElementById('arzmarket-html-frame')){var f=document.createElement('iframe');f.id='arzmarket-html-frame';f.src="..quoteJs(url)..";"..
@@ -1739,6 +1862,11 @@ local function removeIframe()
     local wasHtmlOpen=htmlOpen==true
     htmlOpen=false
     htmlTemporaryMode=false
+    htmlCompatFocused=false
+    htmlCompatLastMouseInside=false
+    htmlCompatLastX,htmlCompatLastY=nil,nil
+    htmlCompatLastMoveAt=0
+    htmlCompatButtons[1],htmlCompatButtons[2],htmlCompatButtons[3]=false,false,false
     if acef and type(acef.eval)=="function" then pcall(acef.eval,"var f=document.getElementById('arzmarket-html-frame');if(f){f.style.pointerEvents='none';try{f.blur();}catch(e){}try{if(f.contentWindow)f.contentWindow.blur();}catch(e){}f.remove();}") end
     if wasHtmlOpen then
         -- Preserve the cursor only while a real game UI still needs it. A cursor
@@ -2749,6 +2877,105 @@ function M.get_window_state()
     end
     return out
 end
+
+function M.should_capture_window_message(message)
+    if not compatInputNeeded() then
+        htmlCompatFocused=false
+        htmlCompatLastMouseInside=false
+        return false
+    end
+    local kind=classifyWindowMessage(message)
+    if kind=="mouse" then
+        local inside=cursorInsideHtmlWindow()
+        htmlCompatLastMouseInside=inside==true
+        local m=tonumber(message) or -1
+        if m==513 or m==516 or m==519 then
+            htmlCompatFocused=inside==true
+        end
+        return inside==true
+    end
+    if kind=="keyboard" then return htmlCompatFocused==true end
+    return false
+end
+
+function M.forward_window_message(message,wparam,lparam)
+    if not compatInputNeeded() then return false end
+    local kind=classifyWindowMessage(message)
+    if not kind then return false end
+    local inside,x,y=cursorInsideHtmlWindow()
+    if kind=="mouse" then
+        local m=tonumber(message) or -1
+        if not inside then
+            if m==513 or m==516 or m==519 then htmlCompatFocused=false end
+            return false
+        end
+        local eventType="move"
+        local button=nil
+        if m==512 then
+            local moveNow=nowMs()
+            local dragging=htmlCompatButtons[1] or htmlCompatButtons[2] or htmlCompatButtons[3]
+            local minMoveInterval=dragging and 24 or 60
+            if moveNow-htmlCompatLastMoveAt<minMoveInterval then
+                htmlCompatLastX,htmlCompatLastY=x,y
+                return true
+            end
+            htmlCompatLastMoveAt=moveNow
+        end
+        if m==513 or m==515 then eventType="down"; button=0; htmlCompatFocused=true
+        elseif m==514 then eventType="up"; button=0
+        elseif m==516 or m==518 then eventType="down"; button=2; htmlCompatFocused=true
+        elseif m==517 then eventType="up"; button=2
+        elseif m==519 or m==521 then eventType="down"; button=1; htmlCompatFocused=true
+        elseif m==520 then eventType="up"; button=1
+        elseif m==522 then eventType="wheel"
+        end
+        -- Keep the polling fallback in sync with the event-driven path.
+        -- Otherwise one physical click can be emitted once here and once more
+        -- from isKeyDown() on the next D3D frame.
+        htmlCompatLastX,htmlCompatLastY=x,y
+        if m==513 or m==515 then htmlCompatButtons[1]=true
+        elseif m==514 then htmlCompatButtons[1]=false
+        elseif m==516 or m==518 then htmlCompatButtons[2]=true
+        elseif m==517 then htmlCompatButtons[2]=false
+        elseif m==519 or m==521 then htmlCompatButtons[3]=true
+        elseif m==520 then htmlCompatButtons[3]=false
+        elseif m==522 then htmlCompatLastWheelEventAt=nowMs() end
+
+        local payload={kind="mouse",event=eventType,x=x,y=y,button=button,wparam=tonumber(wparam) or 0}
+        if m==522 then
+            local wp=tonumber(wparam) or 0
+            local high=math.floor(wp/65536)%65536
+            if high>=32768 then high=high-65536 end
+            payload.delta=high/120
+        end
+        refocusHtmlFrame(false)
+        return postCompatInput(payload)
+    end
+    if not htmlCompatFocused then return false end
+    local m=tonumber(message) or -1
+    local eventType=(m==257 or m==261) and "up" or (m==258 and "char" or "down")
+    local keyCode=tonumber(wparam) or 0
+    local payload={kind="keyboard",event=eventType,keyCode=keyCode,charCode=m==258 and keyCode or nil}
+    if m==258 and keyCode>0 then
+        -- GTA/SA-MP commonly uses an ANSI window. WM_CHAR may therefore carry
+        -- a CP1251 byte for Cyrillic text instead of a Unicode code point.
+        -- Send an explicit UTF-8 character to CEF so Russian input is not
+        -- turned into Latin-1 glyphs while the compatibility bridge is active.
+        if keyCode>=0x80 and keyCode<=0xFF then
+            payload.text=toUtf8(string.char(keyCode))
+        else
+            payload.text=utf8FromCodepoint(keyCode)
+        end
+    end
+    if type(isKeyDown)=="function" then
+        local okCtrl,vCtrl=pcall(isKeyDown,0x11); payload.ctrl=okCtrl and vCtrl==true or false
+        local okShift,vShift=pcall(isKeyDown,0x10); payload.shift=okShift and vShift==true or false
+        local okAlt,vAlt=pcall(isKeyDown,0x12); payload.alt=okAlt and vAlt==true or false
+    end
+    refocusHtmlFrame(false)
+    return postCompatInput(payload)
+end
+
 function M.open_preview(bounds,page,options)
     if not previewOpen and (page=="buy" or page=="sell" or page=="settings" or page=="logs" or page=="marketplace" or page=="mods" or page=="storage") then currentPage=page end
     if not running then
@@ -2841,6 +3068,7 @@ function M.pump()
     if htmlOpen then
         ensureIframe()
         reclaimHtmlInputIfNeeded()
+        pumpCompatPointer()
     end
     return ok,err
 end
