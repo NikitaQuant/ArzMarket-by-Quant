@@ -6718,6 +6718,22 @@ function arzAccountBridgeTick()
     end
 end
 
+function arzRequestPremiumKeyCheck(key, onResponse, onTransportError)
+	key = tostring(key or "")
+	if key == "" then
+		if type(onTransportError) == "function" then onTransportError("empty_key") end
+		return false
+	end
+
+	local host = ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]
+	asyncHttpRequest("POST", host .. "/api/checkKey/" .. key, {}, function(response)
+		if type(onResponse) == "function" then onResponse(response) end
+	end, function(requestError)
+		if type(onTransportError) == "function" then onTransportError(requestError) end
+	end)
+	return true
+end
+
 do
     -- The setter is private to the consumed, API-validated handoff callback.
     local function sessionIsMain(session)
@@ -6762,10 +6778,25 @@ do
     function arzAccountBridgeConsumeProfileAuth()
         if ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthStarted then return end
         ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthStarted = true
+
+        local raw = arzAccountBridgeReadText(ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
+        if not raw then return end
+        ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthPending = true
+
         lua_thread.create(function()
-            local raw = arzAccountBridgeReadText(ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
-            if not raw then return end
+            local function resumeNormalPremiumCheck()
+                ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthPending = false
+                if type(ini) == "table" and type(ini.cfg) == "table" then
+                    if ini.cfg.premiumTokenAuth == 1 then
+                        isStartLoadPremium = 1
+                    elseif ini.cfg.premiumTokenAuth == 2 then
+                        isStartLoadPremium = 0
+                    end
+                end
+            end
+
             local ok, handoff = pcall(decodeJson, raw)
+            raw = nil
             local structurallyValid = ok and type(handoff) == "table"
                 and tonumber(handoff.protocol) == ARZ_ACCOUNT_BRIDGE_PROTOCOL
                 and type(handoff.session) == "string" and handoff.session ~= ""
@@ -6776,6 +6807,7 @@ do
                 and #key > 0 and #key <= 255 and not key:find("[%z\r\n]")
             if not structurallyValid then
                 pcall(os.remove, ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
+                resumeNormalPremiumCheck()
                 return
             end
             for attempt = 1, 20 do
@@ -6785,22 +6817,28 @@ do
             age = os.time() - handoff.createdAt
             if not sessionIsMain(handoff.session) or age < -5 or age > ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_TTL then
                 pcall(os.remove, ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
+                resumeNormalPremiumCheck()
                 return
             end
             -- Fail closed if consumption could not remove the plaintext key.
             local removedOk, removed = pcall(os.remove, ARZ_ACCOUNT_BRIDGE_PROFILE_AUTH_PATH)
-            if not removedOk or not removed then return end
+            if not removedOk or not removed then
+                resumeNormalPremiumCheck()
+                return
+            end
             local session = handoff.session
             handoff = nil
-            local host = ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]
+
             local function failed()
+                ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthPending = false
+                isStartLoadPremium = nil
                 sendNotify(u8:decode("Не удалось авторизовать ключ профиля из launcher."))
             end
-            -- The existing offline rejection logs its URL, so never pass a key while offline.
+
+            -- Never send the profile key while this script is intentionally offline.
             if ARZ_SCRIPT_OFFLINE then failed(); return end
-            -- Escape the path segment without changing the existing premium endpoint/transport.
-            local encodedKey = key:gsub("([^%w%-%._~])", function(c) return string.format("%%%02X", string.byte(c)) end)
-            asyncHttpRequest("POST", host .. "/api/checkKey/" .. encodedKey, {}, function(response)
+
+            arzRequestPremiumKeyCheck(key, function(response)
                 if response.status_code ~= 201 then failed(); return end
                 local decodedOk, info = pcall(decodeJson, response.text)
                 if not decodedOk or type(info) ~= "table" or info.error
@@ -6808,6 +6846,9 @@ do
                     or (info.UserTempKey ~= nil and (type(info.UserTempKey) ~= "string"
                         or info.UserTempKey:find("[%z\r\n]"))) then failed(); return end
                 if not trustedSaveProfile(session, key, info) then failed(); return end
+
+                ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthPending = false
+                isStartLoadPremium = nil
                 sendNotify(u8:decode("Ключ профиля из launcher авторизован."))
             end, failed)
         end)
@@ -8191,7 +8232,7 @@ marketState = {
 	itemsMarketData = {},
 	asyncData = {},
 	scriptVersion = {
-		"3.56",
+		"3.57",
 		false,
 		{}
 	},
@@ -16071,10 +16112,12 @@ function main()
 	deAFKMessage(debug.getinfo(1, "l"), "onScriptLoad > started")
 	deAFKMessage(debug.getinfo(1, "l"), "ini.cfg.premiumTokenAuth > " .. ini.cfg.premiumTokenAuth)
 
-	if ini.cfg.premiumTokenAuth == 1 then
-		isStartLoadPremium = 1
-	elseif ini.cfg.premiumTokenAuth == 2 then
-		isStartLoadPremium = 0
+	if not (ARZ_ACCOUNT_BRIDGE_RUNTIME and ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthPending) then
+		if ini.cfg.premiumTokenAuth == 1 then
+			isStartLoadPremium = 1
+		elseif ini.cfg.premiumTokenAuth == 2 then
+			isStartLoadPremium = 0
+		end
 	end
 
 	sampRegisterChatCommand("shelp", function(commandArguments)
@@ -16570,9 +16613,12 @@ function main()
 		if timers[33][1] == true and timers[33][2] ~= -1 then
 			timers[33][1] = false
 
-			if arzSavedCfgString("myServerId") ~= "" then
+			local statisticsServerAddress = sampGetCurrentServerAddress()
+			local statisticsServerId = serverIdByAddress[statisticsServerAddress]
+
+			if statisticsServerId ~= nil then
 				local statisticsRequestBody = encodeJson({
-					server = tonumber(arzSavedCfgString("myServerId")) or arzSavedCfgString("myServerId"),
+					server = statisticsServerId,
 					itemName = timers[33][3],
 					localName = timers[33][4],
 					price = timers[33][2],
@@ -20653,7 +20699,7 @@ function premiumPage(frame)
 				arzApplySavedAuthRuntime()
 			end
 			sendNotify(u8:decode("  Попытка авторизации..."))
-			asyncHttpRequest("POST", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/checkKey/" .. arzSavedCfgString("authPremiumTokenAuth"), {}, function(tokenCheckResponse)
+			arzRequestPremiumKeyCheck(arzSavedCfgString("authPremiumTokenAuth"), function(tokenCheckResponse)
 				if tokenCheckResponse.status_code == 201 then
 					deAFKMessage(debug.getinfo(1, "l"), "sub: " .. tokenCheckResponse.text)
 
