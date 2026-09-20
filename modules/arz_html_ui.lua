@@ -1,12 +1,14 @@
 local M = {
     api_version = 1,
-    module_version = 75,
+    module_version = 76,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
     order = 999,
     no_scroll = true
 }
+M._cefNativeInputOwned = false
+M._lastGameUiInputBlocked = false
 
 local ctx, acef, server, port, itemIcons
 local socketApi = nil
@@ -1532,49 +1534,6 @@ local function addItem(side,payload)
     return true
 end
 
-local function externalSampCursorActive()
-    if type(sampIsCursorActive)~="function" then return false end
-    local ok,active=pcall(sampIsCursorActive)
-    return ok and active==true
-end
-
-local function setCefCursor(value)
-    value=value==true
-    if value then
-        -- ArzMarket must never enable the SA-MP cursor itself. SAMPFUNCS mode 1
-        -- is CMODE_LOCKKEYS_NOCURSOR and steals keyboard input. MoonLoader's
-        -- cursor is enough for CEF and can be shown without locking controls.
-        if externalSampCursorActive() then
-            cefCursorOwned=false
-            return
-        end
-        pcall(function() if showCursor then showCursor(true,false) end end)
-        cefCursorOwned=true
-        return
-    end
-
-    -- Never disable a cursor owned by SA-MP/a game dialog.
-    if not cefCursorOwned then return end
-    pcall(function() if showCursor then showCursor(false,false) end end)
-    cefCursorOwned=false
-end
-
-local function forceDisableCefCursor()
-    if not cefCursorOwned then return end
-    pcall(function() if showCursor then showCursor(false,false) end end)
-    cefCursorOwned=false
-end
-
-local function refocusHtmlFrame(nativePointerEvents)
-    if not htmlOpen or not acef or type(acef.eval)~="function" then return end
-    -- The Arizona root CEF may be visible without being the active input target.
-    -- Do not depend on native CEF mouse delivery at all: the MoonLoader bridge
-    -- below owns hit-testing/click delivery for both the normal cursor and an
-    -- externally-owned SA-MP cursor. Keeping the iframe non-interactive at the
-    -- parent level also prevents invisible full-screen CEF from eating clicks
-    -- that belong to an in-game dialog outside the ArzMarket window.
-    pcall(acef.eval, "var f=document.getElementById('arzmarket-html-frame');if(f){f.style.visibility='visible';f.style.pointerEvents='none';try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}}")
-end
 local function gameUiNeedsCursor()
     if type(isPauseMenuActive)=="function" then
         local ok,v=pcall(isPauseMenuActive)
@@ -1590,6 +1549,84 @@ local function gameUiNeedsCursor()
     end
     return false
 end
+
+local function externalSampCursorActive()
+    if type(sampIsCursorActive)~="function" then return false end
+    local ok,active=pcall(sampIsCursorActive)
+    return ok and active==true
+end
+
+function M._setArizonaCefNativeInput(enabled)
+    enabled=enabled==true
+    if M._cefNativeInputOwned==enabled then return true end
+    if type(raknetNewBitStream)~="function"
+        or type(raknetBitStreamWriteInt8)~="function"
+        or type(raknetBitStreamWriteInt32)~="function"
+        or type(raknetBitStreamWriteInt16)~="function"
+        or type(raknetEmulPacketReceiveBitStream)~="function"
+        or type(raknetDeleteBitStream)~="function" then
+        return false
+    end
+    local bs=nil
+    local ok=pcall(function()
+        bs=raknetNewBitStream()
+        -- Arizona packet 220 / sub-id 25 is the CEF cursor/input toggle.
+        -- Keep the byte layout used by the original working ArzMarket code.
+        raknetBitStreamWriteInt8(bs,25)
+        raknetBitStreamWriteInt32(bs,0)
+        raknetBitStreamWriteInt8(bs,enabled and 128 or 0)
+        raknetBitStreamWriteInt16(bs,0)
+        raknetEmulPacketReceiveBitStream(220,bs)
+    end)
+    if bs then pcall(raknetDeleteBitStream,bs) end
+    if ok then M._cefNativeInputOwned=enabled end
+    return ok
+end
+
+local function setCefCursor(value)
+    value=value==true
+    if value then
+        -- Enable Arizona CEF's own input state. Merely showing a MoonLoader
+        -- cursor does not make the embedded browser receive mouse/key events.
+        M._setArizonaCefNativeInput(true)
+
+        -- Never manufacture a SA-MP cursor. If the game already owns one, keep
+        -- it untouched; otherwise display only MoonLoader's unlocked cursor.
+        if externalSampCursorActive() then
+            cefCursorOwned=false
+            return
+        end
+        pcall(function() if showCursor then showCursor(true,false) end end)
+        cefCursorOwned=true
+        return
+    end
+
+    -- Do not turn off a CEF/game cursor while a real game UI is active. In that
+    -- case relinquish ownership and let the game close its own input state.
+    if M._cefNativeInputOwned and not gameUiNeedsCursor() then
+        M._setArizonaCefNativeInput(false)
+    elseif gameUiNeedsCursor() then
+        M._cefNativeInputOwned=false
+    end
+    if cefCursorOwned then
+        pcall(function() if showCursor then showCursor(false,false) end end)
+        cefCursorOwned=false
+    end
+end
+
+local function forceDisableCefCursor()
+    if M._cefNativeInputOwned and not gameUiNeedsCursor() then M._setArizonaCefNativeInput(false) end
+    if cefCursorOwned then pcall(function() if showCursor then showCursor(false,false) end end) end
+    cefCursorOwned=false
+    if gameUiNeedsCursor() then M._cefNativeInputOwned=false end
+end
+
+local function refocusHtmlFrame(nativePointerEvents)
+    if not htmlOpen or not acef or type(acef.eval)~="function" then return end
+    local pointerMode=nativePointerEvents==true and "auto" or "none"
+    pcall(acef.eval, "var f=document.getElementById('arzmarket-html-frame');if(f){f.style.visibility='visible';f.style.pointerEvents='"..pointerMode.."';try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}}")
+end
+
 
 local function backgroundGameUiStealsCursor()
     if type(sampIsDialogActive)=="function" then
@@ -1611,8 +1648,20 @@ local function htmlInputBounds()
     end
     local state=type(htmlWindowState)=="table" and htmlWindowState or {}
     local x,y,w,h=tonumber(state.x),tonumber(state.y),tonumber(state.width),tonumber(state.height)
-    if not (x and y and w and h and w>0 and h>0) then
-        local margin=12
+    local margin=12
+    if x and y and w and h and w>0 and h>0 then
+        local savedW,savedH=tonumber(state.viewportWidth),tonumber(state.viewportHeight)
+        if savedW and savedH and savedW>0 and savedH>0 and (math.abs(savedW-sw)>2 or math.abs(savedH-sh)>2) then
+            local sx,sy=sw/savedW,sh/savedH
+            x,y,w,h=x*sx,y*sy,w*sx,h*sy
+        end
+        local minW=math.min(760,math.max(560,sw-margin*2))
+        local minH=math.min(500,math.max(380,sh-margin*2))
+        w=math.max(minW,math.min(w,sw-margin*2))
+        h=math.max(minH,math.min(h,sh-margin*2))
+        x=math.max(margin,math.min(x,sw-w-margin))
+        y=math.max(margin,math.min(y,sh-h-margin))
+    else
         if htmlTemporaryMode then
             w=math.min(1380,math.max(320,sw-margin*2))
             h=math.min(820,math.max(240,sh-margin*2))
@@ -1644,6 +1693,14 @@ local function compatInputNeeded()
     --   2) a standard SA-MP/game cursor owned by another UI.
     -- Lua/mimgui pages keep their own native input path.
     return htmlOpen==true
+end
+
+function M._compatFallbackMode()
+    if not htmlOpen then return false end
+    if gameUiNeedsCursor() then return true end
+    -- If SA-MP already owned the cursor before HTML was opened, leave native
+    -- game input alone and use the hit-tested compatibility bridge instead.
+    return externalSampCursorActive() and not cefCursorOwned and not M._cefNativeInputOwned
 end
 
 local function postCompatInput(payload)
@@ -1729,18 +1786,30 @@ end
 local function reclaimHtmlInputIfNeeded()
     if not htmlOpen or not acef then return end
     local now=nowMs()
-    if now-lastHtmlInputReclaim<250 then return end
+    if now-lastHtmlInputReclaim<50 then return end
     lastHtmlInputReclaim=now
 
-    -- HTML always uses the MoonLoader -> JS input bridge. If no game UI owns a
-    -- SA-MP cursor, keep the ordinary MoonLoader cursor visible. If SA-MP owns
-    -- one, leave it untouched and use its real position/buttons for the bridge.
+    local blocked=gameUiNeedsCursor()
     local inside=cursorInsideHtmlWindow()
     htmlCompatLastMouseInside=inside==true
-    if not externalSampCursorActive() and not gameUiNeedsCursor() then
-        setCefCursor(true)
+
+    if not blocked then
+        -- Re-assert native Arizona CEF input after a game dialog/chat/pause menu
+        -- releases control. This is event-transition based, not packet spam.
+        if M._lastGameUiInputBlocked or not M._cefNativeInputOwned then M._setArizonaCefNativeInput(true) end
+        if not externalSampCursorActive() then
+            pcall(function() if showCursor then showCursor(true,false) end end)
+            cefCursorOwned=true
+        end
     end
-    refocusHtmlFrame(false)
+
+    -- The iframe is full-screen only as a transport surface. Make it natively
+    -- interactive strictly while the real cursor is over the visible ArzMarket
+    -- window. Outside that rectangle clicks fall through to SA-MP/game dialogs.
+    local nativeAllowed=not M._compatFallbackMode()
+    local dragging=htmlCompatButtons[1] or htmlCompatButtons[2] or htmlCompatButtons[3]
+    refocusHtmlFrame(nativeAllowed and (inside==true or (dragging and htmlCompatFocused)))
+    M._lastGameUiInputBlocked=blocked
 end
 
 local function releaseCursorAfterHtmlClose()
@@ -1788,20 +1857,22 @@ local function recoverGameInputAfterReload()
     removeStaleCefFrames()
     cursorWasActiveBeforeHtml=false
     cefCursorOwned=false
+    M._cefNativeInputOwned=false
+    M._lastGameUiInputBlocked=false
 end
 
 local function quoteJs(v) return string.format("%q",tostring(v or "")):gsub("\r","\\r"):gsub("\n","\\n") end
 local function parentFrameBootstrap(url,replaceExisting)
     local replaceCode=replaceExisting and "var old=document.getElementById('arzmarket-html-frame');if(old)old.remove();" or ""
     return "window.__arzMarketFrameToken="..quoteJs(token)..";"..
-        "window.__arzMarketFocusFrame=function(f,activate){if(!f)return;f.style.visibility='visible';f.style.pointerEvents='none';try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}};"..
-        "if(!window.__arzMarketFrameMessageBound){window.addEventListener('message',function(e){var d=e&&e.data;if(!d||d.channel!=='arzmarket-html'||d.token!==window.__arzMarketFrameToken)return;var f=document.getElementById('arzmarket-html-frame');if(d.action==='detach'){if(f)f.remove();return;}if(d.action==='hide'){if(f){f.style.visibility='hidden';f.style.pointerEvents='none';}return;}if(d.action==='show'){if(f){f.style.visibility='visible';window.__arzMarketFocusFrame(f);}return;}if(d.action==='ready'&&f){f.setAttribute('data-ready','1');window.__arzMarketFocusFrame(f);}},false);window.__arzMarketFrameMessageBound=true;}"..
+        "window.__arzMarketFocusFrame=function(f,activate){if(!f)return;f.style.visibility='visible';f.style.pointerEvents=(activate===true?'auto':'none');try{f.focus();}catch(e){}try{if(f.contentWindow)f.contentWindow.focus();}catch(e){}};"..
+        "if(!window.__arzMarketFrameMessageBound){window.addEventListener('message',function(e){var d=e&&e.data;if(!d||d.channel!=='arzmarket-html'||d.token!==window.__arzMarketFrameToken)return;var f=document.getElementById('arzmarket-html-frame');if(d.action==='detach'){if(f)f.remove();return;}if(d.action==='hide'){if(f){f.style.visibility='hidden';f.style.pointerEvents='none';}return;}if(d.action==='show'){if(f){f.style.visibility='visible';window.__arzMarketFocusFrame(f,false);}return;}if(d.action==='ready'&&f){f.setAttribute('data-ready','1');window.__arzMarketFocusFrame(f,false);}},false);window.__arzMarketFrameMessageBound=true;}"..
         replaceCode..
         "if(!document.getElementById('arzmarket-html-frame')){var f=document.createElement('iframe');f.id='arzmarket-html-frame';f.src="..quoteJs(url)..";"..
         "f.style.position='fixed';f.style.left='0';f.style.top='0';f.style.width='100vw';f.style.height='100vh';"..
         "f.style.border='0';f.style.background='transparent';f.style.zIndex='2147483000';f.style.pointerEvents='none';f.style.visibility='hidden';"..
         "f.onload=function(){var self=this;if(self&&self.parentNode){self.style.visibility='hidden';self.style.pointerEvents='none';}};"..
-        "document.body.appendChild(f);}else{var f=document.getElementById('arzmarket-html-frame');if(f&&f.getAttribute('data-ready')==='1')window.__arzMarketFocusFrame(f);}"
+        "document.body.appendChild(f);}else{var f=document.getElementById('arzmarket-html-frame');if(f&&f.getAttribute('data-ready')==='1')window.__arzMarketFocusFrame(f,false);}"
 end
 local function previewFrameBootstrap(url,bounds,options)
     local left=math.max(0,math.floor(tonumber(bounds and bounds.x) or 0))
@@ -1914,7 +1985,7 @@ local function ensureIframe()
     lastInjectCheck=nowMs()
     local url=buildUiUrl(false)
     pcall(acef.eval,parentFrameBootstrap(url,false))
-    refocusHtmlFrame()
+    refocusHtmlFrame(false)
 end
 
 local function readFile(path,binary)
@@ -2884,6 +2955,10 @@ function M.should_capture_window_message(message)
         htmlCompatLastMouseInside=false
         return false
     end
+    -- In the normal HTML mode Windows messages must reach Arizona CEF itself.
+    -- Consuming them here was one of the reasons the iframe was visible but
+    -- unclickable. Only intercept while another SA-MP/game UI owns input.
+    if not M._compatFallbackMode() then return false end
     local kind=classifyWindowMessage(message)
     if kind=="mouse" then
         local inside=cursorInsideHtmlWindow()
@@ -2899,7 +2974,7 @@ function M.should_capture_window_message(message)
 end
 
 function M.forward_window_message(message,wparam,lparam)
-    if not compatInputNeeded() then return false end
+    if not compatInputNeeded() or not M._compatFallbackMode() then return false end
     local kind=classifyWindowMessage(message)
     if not kind then return false end
     local inside,x,y=cursorInsideHtmlWindow()

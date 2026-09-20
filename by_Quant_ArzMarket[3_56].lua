@@ -2072,6 +2072,10 @@ function arzUiExtensionsOpenHtml(page, settingsSection, options)
 		return false
 	end
 
+	-- mimgui stays active to render the background blur, but its Win32 input
+	-- handler must not consume mouse/keyboard messages before Arizona CEF sees them.
+	if imgui and imgui.DisableInput ~= nil then imgui.DisableInput = true end
+
 	if not temporary then
 		ini.cfg.interface_mode = "html"
 		ini.cfg.interface_choice_done = true
@@ -2111,8 +2115,12 @@ end
 
 function arzUiExtensionsCloseHtml()
 	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
-	if not extension or type(extension.close_html) ~= "function" then return false end
+	if not extension or type(extension.close_html) ~= "function" then
+		if imgui and imgui.DisableInput ~= nil then imgui.DisableInput = false end
+		return false
+	end
 	local ok, value = pcall(extension.close_html)
+	if imgui and imgui.DisableInput ~= nil then imgui.DisableInput = false end
 	return ok and value ~= false
 end
 
@@ -2132,6 +2140,12 @@ end
 
 function arzUiExtensionsPump()
 	local extension = ARZ_UI_EXTENSIONS and ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	local htmlNow = false
+	if extension and type(extension.is_open) == "function" then
+		local okOpen, isOpen = pcall(extension.is_open)
+		htmlNow = okOpen and isOpen == true
+	end
+	if imgui and imgui.DisableInput ~= nil then imgui.DisableInput = htmlNow end
 	if not extension or extension._disabled_runtime or type(extension.pump) ~= "function" then return true end
 	local ok, value, pumpError = xpcall(function()
 		return extension.pump()
@@ -2206,7 +2220,7 @@ end
 -- Keep marketState.scriptVersion unchanged for server compatibility.
 -- Increase ARZ_LOCAL_BUILD_ID and update the notes on every local release.
 -- ============================================================
-ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.19-r28-html-universal-input"
+ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.20-r29-html-native-input"
 ARZ_RELEASE_NOTES_PATH = getWorkingDirectory() .. "/ArzMarket/release_notes_state.json"
 ARZ_RELEASE_NOTES = {
 	build = ARZ_LOCAL_BUILD_ID,
@@ -17076,7 +17090,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.56.122"
+ARZ_UPDATE_VERSION = "3.56.123"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -23034,12 +23048,11 @@ function onWindowMessage(message, wparam, lparam)
 	-- ArzMarket consumes Escape only after the user focused ArzMarket; after a
 	-- click outside the script Escape is left to the game dialog.
 	if (message == 256 or message == 257) and wparam == 27 and htmlInterfaceOpen and not isPauseMenuActive() then
-		local sampCursor = false
-		if type(sampIsCursorActive) == "function" then
-			local okCursor, activeCursor = pcall(sampIsCursorActive)
-			sampCursor = okCursor and activeCursor == true
-		end
-		if not sampCursor or htmlCompatCapture then
+		local gameOwnsInput = false
+		if type(sampIsDialogActive) == "function" then local ok,v=pcall(sampIsDialogActive); gameOwnsInput=gameOwnsInput or (ok and v==true) end
+		if type(sampIsChatInputActive) == "function" then local ok,v=pcall(sampIsChatInputActive); gameOwnsInput=gameOwnsInput or (ok and v==true) end
+		if type(isPauseMenuActive) == "function" then local ok,v=pcall(isPauseMenuActive); gameOwnsInput=gameOwnsInput or (ok and v==true) end
+		if not gameOwnsInput or htmlCompatCapture then
 			consumeWindowMessage(true, false)
 			if message == 257 then
 				if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
@@ -35477,7 +35490,7 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
-ARZ_COMPONENTS.bootstrap.expected_bundle_version = 281
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 282
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"

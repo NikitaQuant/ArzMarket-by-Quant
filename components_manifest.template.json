@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "bundle_version": 281,
+  "bundle_version": 282,
   "base_url": "__ARZMARKET_COMPONENTS_RAW_BASE_URL__",
   "files": [
     {
@@ -545,8 +545,8 @@
     },
     {
       "path": "modules/arz_html_ui.lua",
-      "size": 146409,
-      "crc32": "5F179B8A",
+      "size": 149790,
+      "crc32": "DA698577",
       "required": true
     },
     {
