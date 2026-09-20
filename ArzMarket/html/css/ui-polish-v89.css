@@ -1,0 +1,314 @@
+/* ArzMarket HTML v89: requested layout polish for points 11-14. */
+
+/* 11. Slightly smaller global top bar and controls on every HTML page. */
+#app[data-page] .window {
+  --topbar-h: calc(70px * var(--ui-scale)) !important;
+}
+#app[data-page] .topbar {
+  height: var(--topbar-h) !important;
+  min-height: var(--topbar-h) !important;
+  padding-left: calc(20px * var(--ui-scale)) !important;
+  padding-right: calc(18px * var(--ui-scale)) !important;
+}
+#app[data-page] .body-grid {
+  height: calc(100% - var(--topbar-h)) !important;
+}
+#app[data-page] .brand {
+  gap: calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page] .brand-mark {
+  width: calc(48px * var(--ui-scale)) !important;
+  height: calc(48px * var(--ui-scale)) !important;
+}
+#app[data-page] .brand-title {
+  font-size: calc(27px * var(--ui-scale)) !important;
+  line-height: 1.05 !important;
+}
+#app[data-page] .brand-subtitle {
+  margin-top: calc(2px * var(--ui-scale)) !important;
+  font-size: calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page] .topbar-actions {
+  gap: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page] .mode-switch {
+  height: calc(38px * var(--ui-scale)) !important;
+  padding: calc(3px * var(--ui-scale)) !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page] .mode-btn {
+  min-width: calc(84px * var(--ui-scale)) !important;
+  padding: 0 calc(12px * var(--ui-scale)) !important;
+  border-radius: calc(7px * var(--ui-scale)) !important;
+  font-size: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page] .minimal-mode-switch .mode-btn {
+  min-width: calc(88px * var(--ui-scale)) !important;
+}
+#app[data-page] .window-controls {
+  gap: calc(4px * var(--ui-scale)) !important;
+}
+#app[data-page] .window-btn {
+  width: calc(32px * var(--ui-scale)) !important;
+  height: calc(32px * var(--ui-scale)) !important;
+  border-radius: calc(7px * var(--ui-scale)) !important;
+  font-size: calc(18px * var(--ui-scale)) !important;
+}
+#app[data-page] .window-btn-control {
+  font-size: calc(14px * var(--ui-scale)) !important;
+}
+
+/* 12. Minimal mode does not show the ArzMarket brand in the top-left. */
+#app.minimal-mode[data-page] .brand {
+  display: none !important;
+}
+#app.minimal-mode[data-page] .topbar {
+  justify-content: flex-end !important;
+}
+
+/* 13. Settings now participates in minimal mode too. */
+#app.minimal-mode[data-page="settings"] .sidebar-footer,
+#app.minimal-mode[data-page="settings"] .settings-status-line {
+  display: none !important;
+}
+#app.minimal-mode[data-page="settings"] .sidebar {
+  padding-top: calc(14px * var(--ui-scale)) !important;
+  padding-bottom: calc(14px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .nav-list {
+  gap: calc(5px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .nav-icon {
+  display: none !important;
+}
+#app.minimal-mode[data-page="settings"] .nav-item {
+  height: calc(45px * var(--ui-scale)) !important;
+  padding: 0 calc(13px * var(--ui-scale)) !important;
+  gap: 0 !important;
+  border-radius: calc(8px * var(--ui-scale)) !important;
+  font-size: calc(14px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .content {
+  padding: calc(9px * var(--ui-scale)) !important;
+  gap: calc(7px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-toolbar {
+  gap: calc(6px * var(--ui-scale)) !important;
+  padding: calc(6px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-tab {
+  min-height: calc(38px * var(--ui-scale)) !important;
+  padding: 0 calc(11px * var(--ui-scale)) !important;
+  font-size: calc(11.5px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-workspace {
+  border-color: #31495b !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-content {
+  gap: calc(8px * var(--ui-scale)) !important;
+  padding: calc(8px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-card-head {
+  min-height: calc(44px * var(--ui-scale)) !important;
+  padding: calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-card-head h2 {
+  font-size: calc(14.5px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-row,
+#app.minimal-mode[data-page="settings"] .settings-palette-top {
+  min-height: calc(50px * var(--ui-scale)) !important;
+  padding: calc(7px * var(--ui-scale)) calc(11px * var(--ui-scale)) !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-row-indent {
+  padding-left: calc(20px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-theme-grid {
+  gap: calc(6px * var(--ui-scale)) !important;
+  padding: calc(8px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-theme {
+  min-height: calc(48px * var(--ui-scale)) !important;
+  padding: calc(7px * var(--ui-scale)) calc(9px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-actions-row,
+#app.minimal-mode[data-page="settings"] .settings-inline-actions {
+  padding: calc(8px * var(--ui-scale)) calc(11px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-color-group {
+  margin: calc(7px * var(--ui-scale)) !important;
+}
+
+/* 14. Settings cards no longer stretch their outline across an oversized column. */
+#app[data-page="settings"] .settings-content {
+  grid-template-columns: repeat(2, minmax(0, calc(560px * var(--ui-scale)))) !important;
+  justify-content: start !important;
+}
+#app[data-page="settings"] .settings-card {
+  width: min(calc(560px * var(--ui-scale)), 100%) !important;
+  max-width: calc(560px * var(--ui-scale)) !important;
+  justify-self: start !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="settings"] .settings-card-head {
+  min-height: calc(52px * var(--ui-scale)) !important;
+  padding: calc(10px * var(--ui-scale)) calc(14px * var(--ui-scale)) !important;
+}
+#app[data-page="settings"] .settings-row,
+#app[data-page="settings"] .settings-palette-top {
+  min-height: calc(56px * var(--ui-scale)) !important;
+}
+#app[data-page="settings"] .settings-config-grid {
+  grid-template-columns: repeat(2, minmax(0, calc(560px * var(--ui-scale)))) !important;
+  justify-content: start !important;
+  width: 100% !important;
+}
+#app[data-page="settings"] .settings-config-grid .settings-card {
+  width: min(calc(560px * var(--ui-scale)), 100%) !important;
+}
+
+/* Compact/tiny windows must remain usable instead of overflowing fixed card widths. */
+#app[data-page="settings"] .window[data-ui-density="compact"] .settings-content,
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-content,
+#app[data-page="settings"] .window[data-ui-density="compact"] .settings-config-grid,
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-config-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+#app[data-page="settings"] .window[data-ui-density="compact"] .settings-card,
+#app[data-page="settings"] .window[data-ui-density="tiny"] .settings-card {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Minimal Settings keeps the denser values after the general compact-card rules above. */
+#app.minimal-mode[data-page="settings"] .settings-content,
+#app.minimal-mode[data-page="settings"] .settings-config-grid {
+  grid-template-columns: minmax(0, min(calc(520px * var(--ui-scale)), 100%)) !important;
+  justify-content: start !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-card,
+#app.minimal-mode[data-page="settings"] .settings-config-grid .settings-card {
+  width: min(calc(520px * var(--ui-scale)), 100%) !important;
+  max-width: calc(520px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-card-head {
+  min-height: calc(44px * var(--ui-scale)) !important;
+  padding: calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .settings-row,
+#app.minimal-mode[data-page="settings"] .settings-palette-top {
+  min-height: calc(50px * var(--ui-scale)) !important;
+  padding: calc(7px * var(--ui-scale)) calc(11px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="settings"] .window[data-ui-density="compact"] .settings-card,
+#app.minimal-mode[data-page="settings"] .window[data-ui-density="tiny"] .settings-card {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+
+/* Sell status toggle: centered thumb and stronger green active state. */
+#app[data-page="sell"] .sell-sale-row .toggle {
+  position: relative !important;
+  box-sizing: border-box !important;
+  width: calc(46px * var(--ui-scale)) !important;
+  height: calc(25px * var(--ui-scale)) !important;
+  padding: 0 !important;
+  border: calc(1px * var(--ui-scale)) solid #516b7d !important;
+  border-radius: calc(999px * var(--ui-scale)) !important;
+  background: #243642 !important;
+  box-shadow: inset 0 0 0 calc(1px * var(--ui-scale)) rgba(255,255,255,.02) !important;
+  overflow: hidden !important;
+  flex: 0 0 auto !important;
+}
+
+#app[data-page="sell"] .sell-sale-row .toggle::after {
+  content: "" !important;
+  position: absolute !important;
+  width: calc(17px * var(--ui-scale)) !important;
+  height: calc(17px * var(--ui-scale)) !important;
+  left: calc(4px * var(--ui-scale)) !important;
+  top: calc(4px * var(--ui-scale)) !important;
+  border-radius: 50% !important;
+  background: #a7b5bf !important;
+  box-shadow: 0 calc(1px * var(--ui-scale)) calc(3px * var(--ui-scale)) rgba(0,0,0,.32) !important;
+  transform: translateX(0) !important;
+  transition: transform .14s ease, background .14s ease, box-shadow .14s ease !important;
+}
+
+#app[data-page="sell"] .sell-sale-row .toggle.on {
+  border-color: #31d996 !important;
+  background: #119a63 !important;
+  box-shadow:
+    inset 0 0 0 calc(1px * var(--ui-scale)) rgba(71,239,171,.14),
+    0 0 calc(8px * var(--ui-scale)) rgba(26,201,128,.20) !important;
+}
+
+#app[data-page="sell"] .sell-sale-row .toggle.on::after {
+  transform: translateX(calc(21px * var(--ui-scale))) !important;
+  background: #ecfff7 !important;
+  box-shadow:
+    0 calc(1px * var(--ui-scale)) calc(3px * var(--ui-scale)) rgba(0,0,0,.24),
+    0 0 calc(6px * var(--ui-scale)) rgba(113,255,195,.34) !important;
+}
+
+
+/* Sell VC$ quick button: fixed geometry and rounded tutorial highlight. */
+#app[data-page="sell"] #sellCurrencyQuickButton {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  width: calc(64px * var(--ui-scale)) !important;
+  min-width: calc(64px * var(--ui-scale)) !important;
+  max-width: calc(64px * var(--ui-scale)) !important;
+  height: calc(46px * var(--ui-scale)) !important;
+  min-height: calc(46px * var(--ui-scale)) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-width: calc(1px * var(--ui-scale)) !important;
+  border-style: solid !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  vertical-align: middle !important;
+  transform: none !important;
+}
+
+#app[data-page="sell"] #sellCurrencyQuickButton.baron-target-highlight {
+  outline: none !important;
+  outline-offset: 0 !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+  box-shadow:
+    0 0 0 calc(3px * var(--ui-scale)) rgba(74,184,255,.86),
+    0 0 calc(16px * var(--ui-scale)) rgba(70,181,255,.34) !important;
+}
+
+#app[data-page="sell"] .window[data-ui-density="compact"] #sellCurrencyQuickButton {
+  width: calc(58px * var(--ui-scale)) !important;
+  min-width: calc(58px * var(--ui-scale)) !important;
+  max-width: calc(58px * var(--ui-scale)) !important;
+}
+
+#app[data-page="sell"] .window[data-ui-density="tiny"] #sellCurrencyQuickButton {
+  width: calc(50px * var(--ui-scale)) !important;
+  min-width: calc(50px * var(--ui-scale)) !important;
+  max-width: calc(50px * var(--ui-scale)) !important;
+}
+
+
+/* Global footer parity: hide transient runtime text and keep Arizona RP title identical on every page. */
+#app[data-page] .runtime-state {
+  display: none !important;
+}
+#app[data-page] .arizona-card-title {
+  position: relative !important;
+  z-index: 2 !important;
+  font-size: calc(18.5px * var(--ui-scale)) !important;
+  font-weight: 800 !important;
+  letter-spacing: .3px !important;
+  text-transform: none !important;
+  color: #f3f6fa !important;
+}

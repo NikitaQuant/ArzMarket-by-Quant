@@ -1,0 +1,565 @@
+/* ArzMarket HTML v59
+   Final shared visual layer. It intentionally overrides only the common shell,
+   hero, navigation, toolbars and panel chrome. Page-specific logic/layout stays
+   in the existing page stylesheets. */
+
+/* One outer window template on every page. */
+#app[data-page] .window {
+  --topbar-h: calc(81px * var(--ui-scale));
+  --sidebar-w: calc(270px * var(--ui-scale));
+  width: min(1600px, 92vw, calc(100vw - 24px)) !important;
+  height: min(900px, 88vh, calc(100vh - 24px)) !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: min(900px, calc(100vw - 16px)) !important;
+  min-height: min(580px, calc(100vh - 16px)) !important;
+  border: 1px solid #3d5569 !important;
+  border-radius: calc(20px * var(--ui-scale)) !important;
+  background: #0a1520 !important;
+  box-shadow: 0 30px 95px rgba(0,0,0,.58), inset 0 1px 0 rgba(152,188,222,.06), inset 0 0 0 1px rgba(84,130,166,.035) !important;
+}
+#app.window-management-enabled[data-page] .window {
+  max-width: none !important;
+  max-height: none !important;
+  min-width: min(760px, calc(100vw - 24px)) !important;
+  min-height: min(500px, calc(100vh - 24px)) !important;
+}
+
+/* One topbar and brand. Fixes the missing Arizona emblem on Marketplace/Mods. */
+#app[data-page] .topbar {
+  height: var(--topbar-h) !important;
+  min-height: var(--topbar-h) !important;
+  padding: 0 calc(24px * var(--ui-scale)) 0 calc(26px * var(--ui-scale)) !important;
+  border-bottom: 1px solid #304658 !important;
+  background: radial-gradient(ellipse at 53% -115%,rgba(75,132,190,.25),transparent 55%),linear-gradient(180deg,#142334 0%,#0c1925 72%,#0a1621 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(170,202,233,.045) !important;
+}
+#app[data-page] .brand { gap: calc(15px * var(--ui-scale)) !important; }
+#app[data-page] .brand-mark {
+  width: calc(59px * var(--ui-scale)) !important;
+  height: calc(59px * var(--ui-scale)) !important;
+  background: url('/static/assets/arizona-logo.webp') center/contain no-repeat !important;
+  transform: none !important;
+  font-size: 0 !important;
+  filter: saturate(.82) brightness(.93) contrast(1.02) hue-rotate(7deg) drop-shadow(0 0 calc(9px * var(--ui-scale)) rgba(71,112,218,.24)) !important;
+}
+#app[data-page] .brand-mark::before,
+#app[data-page] .brand-mark::after,
+#app[data-page] .brand-mark span { display: none !important; }
+#app[data-page] .brand-title {
+  font-size: calc(34px * var(--ui-scale)) !important;
+  line-height: 1 !important;
+  color: #f4f7fb !important;
+  font-weight: 760 !important;
+  letter-spacing: .12px !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,.035) !important;
+}
+#app[data-page] .brand-subtitle {
+  margin-top: calc(5px * var(--ui-scale)) !important;
+  font-size: calc(11.5px * var(--ui-scale)) !important;
+  color: #9eafc0 !important;
+  font-weight: 650 !important;
+  letter-spacing: calc(.45px * var(--ui-scale)) !important;
+}
+#app[data-page] .topbar-actions { gap: calc(14px * var(--ui-scale)) !important; }
+#app[data-page] .mode-switch {
+  height: calc(44px * var(--ui-scale)) !important;
+  padding: calc(4px * var(--ui-scale)) !important;
+  border: 1px solid #3a5266 !important;
+  border-radius: calc(11px * var(--ui-scale)) !important;
+  background: linear-gradient(180deg,#0d1924,#09141e) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025),0 0 0 1px rgba(0,0,0,.12) !important;
+}
+#app[data-page] .mode-btn {
+  min-width: calc(100px * var(--ui-scale)) !important;
+  padding: 0 calc(16px * var(--ui-scale)) !important;
+  border-radius: calc(8px * var(--ui-scale)) !important;
+  font-size: calc(13.5px * var(--ui-scale)) !important;
+  color: #9eb0c0 !important;
+}
+#app[data-page] .mode-btn.active {
+  background: linear-gradient(180deg,#3678df 0%,#244fae 100%) !important;
+  color: #f6f9ff !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.13),0 0 calc(17px * var(--ui-scale)) rgba(57,108,223,.24) !important;
+}
+#app[data-page] .window-controls { gap: calc(6px * var(--ui-scale)) !important; }
+#app[data-page] .window-btn {
+  width: calc(38px * var(--ui-scale)) !important;
+  height: calc(38px * var(--ui-scale)) !important;
+  position: relative !important;
+  font-size: 0 !important;
+  color: #b7c7d8 !important;
+  opacity: .95 !important;
+}
+#app[data-page] .window-btn::before,
+#app[data-page] .window-btn::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%,-50%);
+  pointer-events: none;
+}
+#app[data-page] .window-btn[data-action="window-minimize"]::before { width: 34%; height: 1px; background: #b8c7d5; }
+#app[data-page] .window-btn[data-action="window-maximize"]::before { width: 29%; height: 29%; border: 1.4px solid #b8c7d5; border-radius: 1px; }
+#app[data-page] .window-btn[data-action="close"]::before,
+#app[data-page] .window-btn[data-action="close"]::after { width: 38%; height: 1.4px; background: #b8c7d5; border-radius: 2px; }
+#app[data-page] .window-btn[data-action="close"]::before { transform: translate(-50%,-50%) rotate(45deg); }
+#app[data-page] .window-btn[data-action="close"]::after { transform: translate(-50%,-50%) rotate(-45deg); }
+#app[data-page] .window-btn:hover { background: #142330 !important; border-color: #31495d !important; }
+#app[data-page] .window-btn[data-action="close"]:hover { background: rgba(220,64,79,.17) !important; border-color: rgba(239,80,104,.35) !important; }
+
+/* One sidebar template. */
+#app[data-page] .body-grid {
+  height: calc(100% - var(--topbar-h)) !important;
+  grid-template-columns: var(--sidebar-w) 1fr !important;
+}
+#app[data-page] .sidebar {
+  padding: calc(27px * var(--ui-scale)) calc(15px * var(--ui-scale)) calc(18px * var(--ui-scale)) !important;
+  background: radial-gradient(circle at 20% 24%,rgba(51,105,154,.10),transparent 42%),linear-gradient(180deg,#0c1823 0%,#09141e 72%,#0a1520 100%) !important;
+  border-right: 1px solid #2b4051 !important;
+}
+#app[data-page] .nav-list { gap: calc(10px * var(--ui-scale)) !important; }
+#app[data-page] .nav-item {
+  height: calc(60px * var(--ui-scale)) !important;
+  gap: calc(15px * var(--ui-scale)) !important;
+  padding: 0 calc(18px * var(--ui-scale)) !important;
+  border-radius: calc(11px * var(--ui-scale)) !important;
+  font-size: calc(16.5px * var(--ui-scale)) !important;
+  color: #cbd6e2 !important;
+  font-weight: 570 !important;
+  opacity: 1 !important;
+}
+#app[data-page] .nav-icon {
+  width: calc(33px * var(--ui-scale)) !important;
+  height: calc(33px * var(--ui-scale)) !important;
+  color: #b9cef0 !important;
+}
+#app[data-page] .nav-item.disabled { opacity: .74 !important; }
+#app[data-page] .nav-item.disabled span:last-child { color: #bdcad7 !important; opacity: .90 !important; }
+#app[data-page] .nav-item.active {
+  color: #fff !important;
+  background: radial-gradient(circle at 7% 50%,rgba(78,255,178,.24),transparent 39%),linear-gradient(90deg,rgba(31,197,124,.35),rgba(18,126,86,.13)) !important;
+  border-color: rgba(75,232,162,.64) !important;
+  box-shadow: inset calc(5px * var(--ui-scale)) 0 0 #62f0b0,inset 0 0 calc(30px * var(--ui-scale)) rgba(49,221,151,.065),0 0 calc(22px * var(--ui-scale)) rgba(46,209,142,.10) !important;
+}
+#app[data-page] .nav-item.active .nav-icon {
+  color: #68f2b5 !important;
+  filter: drop-shadow(0 0 calc(6px * var(--ui-scale)) rgba(74,236,165,.32)) !important;
+}
+
+/* Same Arizona RP card everywhere. */
+#app[data-page] .sidebar-footer { gap: calc(10px * var(--ui-scale)) !important; }
+#app[data-page] .arizona-card {
+  height: calc(170px * var(--ui-scale)) !important;
+  min-height: calc(170px * var(--ui-scale)) !important;
+  padding: calc(21px * var(--ui-scale)) !important;
+  position: relative !important;
+  overflow: hidden !important;
+  border: 1px solid #41596d !important;
+  border-radius: calc(12px * var(--ui-scale)) !important;
+  background: radial-gradient(circle at 77% 69%,rgba(86,123,161,.25),transparent 43%),linear-gradient(135deg,#1b2c40 0%,#12202e 64%,#1a2b3e 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035) !important;
+}
+#app[data-page] .arizona-card-glow { display: none !important; }
+#app[data-page] .arizona-card::before {
+  content: "" !important;
+  position: absolute !important;
+  right: -3% !important;
+  bottom: -4% !important;
+  width: 54% !important;
+  height: 96% !important;
+  background: url('/static/assets/arizona-cactus.webp') right bottom/contain no-repeat !important;
+  opacity: .43 !important;
+  filter: grayscale(.62) saturate(.38) brightness(1.40) contrast(.90) !important;
+  transform: none !important;
+}
+#app[data-page] .arizona-card::after {
+  content: "Players make\A legends" !important;
+  white-space: pre !important;
+  position: absolute !important;
+  top: 51% !important;
+  left: calc(20px * var(--ui-scale)) !important;
+  bottom: auto !important;
+  max-width: 58% !important;
+  font-family: "Segoe Script","Comic Sans MS",cursive !important;
+  font-size: calc(14.5px * var(--ui-scale)) !important;
+  font-style: italic !important;
+  line-height: 1.16 !important;
+  color: rgba(202,215,232,.73) !important;
+  transform: rotate(-6deg) !important;
+  z-index: 1 !important;
+}
+#app[data-page] .arizona-card-title {
+  position: relative !important;
+  z-index: 2 !important;
+  font-size: calc(18.5px * var(--ui-scale)) !important;
+  color: #f3f6fa !important;
+}
+#app[data-page] .arizona-card-subtitle {
+  position: relative !important;
+  z-index: 2 !important;
+  margin-top: calc(7px * var(--ui-scale)) !important;
+  font-size: calc(11.5px * var(--ui-scale)) !important;
+  color: #bac7d4 !important;
+}
+#app[data-page] .runtime-state { font-size: calc(11px * var(--ui-scale)) !important; color: #b3c2cf !important; }
+#app[data-page] .version { font-size: calc(10px * var(--ui-scale)) !important; color: #9eafbf !important; }
+
+/* Content origin and hero are identical across sections. */
+#app[data-page] .content {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: calc(16px * var(--ui-scale)) !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+  background: radial-gradient(circle at 50% -22%,rgba(81,132,181,.09),transparent 42%),#0b1721 !important;
+}
+#app[data-page] .page-header {
+  min-width: 0 !important;
+  min-height: calc(123px * var(--ui-scale)) !important;
+  height: calc(123px * var(--ui-scale)) !important;
+  padding: calc(17px * var(--ui-scale)) calc(27px * var(--ui-scale)) !important;
+  gap: calc(19px * var(--ui-scale)) !important;
+  border: 1px solid #4a6275 !important;
+  border-radius: calc(14px * var(--ui-scale)) !important;
+  background: radial-gradient(circle at 44% -80%,rgba(124,166,209,.21),transparent 52%),linear-gradient(108deg,#1b2e40 0%,#142332 63%,#192b3e 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.045) !important;
+}
+#app[data-page] .page-header-icon {
+  width: calc(72px * var(--ui-scale)) !important;
+  height: calc(72px * var(--ui-scale)) !important;
+  flex: none !important;
+  display: grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(83,239,171,.76) !important;
+  border-radius: calc(12px * var(--ui-scale)) !important;
+  background-color: rgba(32,188,117,.22) !important;
+  background-image: none !important;
+  box-shadow: inset 0 0 calc(26px * var(--ui-scale)) rgba(44,225,151,.10),0 0 calc(17px * var(--ui-scale)) rgba(42,215,144,.11) !important;
+  color: #61f0b1 !important;
+  font-size: 0 !important;
+}
+#app[data-page] .page-header-icon svg {
+  display: block !important;
+  width: calc(40px * var(--ui-scale)) !important;
+  height: calc(40px * var(--ui-scale)) !important;
+  color: #61f0b1 !important;
+  stroke: currentColor !important;
+}
+#app[data-page] .page-header-copy { min-width: 0 !important; position: relative !important; z-index: 2 !important; }
+#app[data-page] .page-header h1 {
+  margin: 0 !important;
+  font-size: calc(31px * var(--ui-scale)) !important;
+  line-height: 1.04 !important;
+  font-weight: 760 !important;
+  color: #f5f8fb !important;
+}
+#app[data-page] .page-header p {
+  margin-top: calc(9px * var(--ui-scale)) !important;
+  font-size: calc(13px * var(--ui-scale)) !important;
+  line-height: 1.25 !important;
+  color: #b9c7d5 !important;
+}
+#app[data-page] .hero-watermark {
+  position: absolute !important;
+  right: calc(17px * var(--ui-scale)) !important;
+  top: calc(-27px * var(--ui-scale)) !important;
+  width: calc(176px * var(--ui-scale)) !important;
+  height: calc(176px * var(--ui-scale)) !important;
+  font-size: 0 !important;
+  color: transparent !important;
+  background: url('/static/assets/arizona-logo.webp') center/contain no-repeat !important;
+  opacity: .075 !important;
+  transform: none !important;
+  filter: saturate(.55) brightness(.72) !important;
+  pointer-events: none !important;
+}
+#app[data-page] .page-header-hint {
+  position: relative !important;
+  z-index: 2 !important;
+  flex: none !important;
+  width: calc(175px * var(--ui-scale)) !important;
+  color: #b5c3d1 !important;
+  font-size: calc(11px * var(--ui-scale)) !important;
+  line-height: 1.48 !important;
+}
+
+/* Header controls and live-state blocks use one scale. */
+#app[data-page] .badge {
+  min-height: calc(42px * var(--ui-scale)) !important;
+  padding: 0 calc(15px * var(--ui-scale)) !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+  font-size: calc(12px * var(--ui-scale)) !important;
+  font-weight: 650 !important;
+}
+#app[data-page] .badge-success {
+  color: #a4f6cf !important;
+  border-color: rgba(76,229,162,.58) !important;
+  background: linear-gradient(180deg,rgba(35,190,119,.27),rgba(24,137,87,.14)) !important;
+}
+#app[data-page] .logs-header-meta,
+#app[data-page] .storage-header-meta,
+#app[data-page] .marketplace-header-meta,
+#app[data-page] .settings-header-meta,
+#app[data-page] .mods-header-meta {
+  position: relative !important;
+  z-index: 3 !important;
+  align-items: center !important;
+}
+#app[data-page] .logs-live-state,
+#app[data-page] .storage-live-state,
+#app[data-page] .marketplace-live-state,
+#app[data-page] .settings-live-state,
+#app[data-page] .mods-live-state {
+  color: #b8c6d2 !important;
+}
+#app[data-page] .logs-live-state strong,
+#app[data-page] .storage-live-state strong,
+#app[data-page] .marketplace-live-state strong,
+#app[data-page] .settings-live-state strong,
+#app[data-page] .mods-live-state strong {
+  color: #c9d5df !important;
+  font-size: calc(11.5px * var(--ui-scale)) !important;
+  font-weight: 600 !important;
+}
+#app[data-page] .logs-live-state small,
+#app[data-page] .storage-live-state small,
+#app[data-page] .marketplace-live-state small,
+#app[data-page] .settings-live-state small,
+#app[data-page] .mods-live-state small {
+  color: #8398aa !important;
+  font-size: calc(9.5px * var(--ui-scale)) !important;
+}
+
+/* Trade header controls stay identical on Buy/Sell. */
+#app[data-page="buy"] .config-label,
+#app[data-page="sell"] .config-label {
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: calc(9px * var(--ui-scale)) !important;
+  color: #b5c3d0 !important;
+  font-size: calc(11.5px * var(--ui-scale)) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+#app[data-page="buy"] .select,
+#app[data-page="buy"] .config-select-trigger,
+#app[data-page="sell"] .select,
+#app[data-page="sell"] .config-select-trigger {
+  height: calc(42px * var(--ui-scale)) !important;
+  border: 1px solid #435d71 !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+  background: linear-gradient(180deg,#142330,#0f1d28) !important;
+  color: #e8eef4 !important;
+  font-size: calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="buy"] .save-state,
+#app[data-page="sell"] .save-state {
+  color: #b7c5d2 !important;
+  font-size: calc(10.5px * var(--ui-scale)) !important;
+}
+
+/* One single-row toolbar rhythm. Storage is intentionally two rows. */
+#app[data-page="buy"] .toolbar,
+#app[data-page="sell"] .toolbar {
+  height: calc(64px * var(--ui-scale)) !important;
+  min-height: calc(64px * var(--ui-scale)) !important;
+  padding: calc(9px * var(--ui-scale)) calc(10px * var(--ui-scale)) !important;
+  gap: calc(9px * var(--ui-scale)) !important;
+  border: 1px solid #3b5366 !important;
+  border-radius: calc(12px * var(--ui-scale)) !important;
+  background: linear-gradient(180deg,#132230,#0e1b26) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+#app[data-page="buy"] .search-wrap,
+#app[data-page="sell"] .search-wrap,
+#app[data-page="buy"] .btn,
+#app[data-page="sell"] .btn {
+  height: calc(44px * var(--ui-scale)) !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="logs"] .logs-toolbar,
+#app[data-page="marketplace"] .marketplace-toolbar,
+#app[data-page="settings"] .settings-toolbar {
+  min-height: calc(64px * var(--ui-scale)) !important;
+  height: calc(64px * var(--ui-scale)) !important;
+  border: 1px solid #3b5366 !important;
+  border-radius: calc(12px * var(--ui-scale)) !important;
+  background: linear-gradient(180deg,#132230,#0e1b26) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+#app[data-page="logs"] .logs-toolbar { padding: calc(9px * var(--ui-scale)) calc(10px * var(--ui-scale)) !important; }
+#app[data-page="logs"] .logs-search-wrap,
+#app[data-page="logs"] .logs-filter-btn,
+#app[data-page="logs"] .logs-refresh-btn,
+#app[data-page="marketplace"] .marketplace-refresh-btn,
+#app[data-page="marketplace"] .marketplace-select-btn,
+#app[data-page="marketplace"] .marketplace-sort-btn,
+#app[data-page="marketplace"] .marketplace-summary-chip,
+#app[data-page="marketplace"] .marketplace-search-wrap {
+  height: calc(44px * var(--ui-scale)) !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+}
+#app[data-page="settings"] .settings-toolbar { padding: calc(8px * var(--ui-scale)) !important; }
+#app[data-page="settings"] .settings-tab { height: calc(46px * var(--ui-scale)) !important; }
+#app[data-page="storage"] .storage-toolbar {
+  border: 1px solid #3b5366 !important;
+  border-radius: calc(12px * var(--ui-scale)) !important;
+  background: linear-gradient(180deg,#132230,#0e1b26) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+#app[data-page="storage"] .storage-search-wrap,
+#app[data-page="storage"] .storage-filter-btn,
+#app[data-page="storage"] .storage-scan-btn,
+#app[data-page="storage"] .storage-find-btn {
+  min-height: calc(44px * var(--ui-scale)) !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+}
+
+/* Make the page workspaces feel like one product. */
+#app[data-page="buy"] .table-card,
+#app[data-page="buy"] .detail-card,
+#app[data-page="sell"] .sell-panel,
+#app[data-page="logs"] .logs-table-card,
+#app[data-page="logs"] .logs-side-card,
+#app[data-page="storage"] .storage-table-card,
+#app[data-page="storage"] .storage-detail-card,
+#app[data-page="settings"] .settings-workspace,
+#app[data-page="settings"] .settings-card,
+#app[data-page="marketplace"] .marketplace-shop-card,
+#app[data-page="marketplace"] .marketplace-result-column,
+#app[data-page="marketplace"] .marketplace-shop-column,
+#app[data-page="mods"] .mods-card,
+#app[data-page="mods"] .mods-side-card {
+  border-color: #3b5366 !important;
+  border-radius: calc(12px * var(--ui-scale)) !important;
+  background: linear-gradient(180deg,#0f1d28 0%,#0a1620 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+
+/* Marketplace keeps the requested warning, but it now follows the hero rhythm. */
+#app[data-page="marketplace"] .marketplace-dev-warning {
+  align-self: center !important;
+  justify-self: end !important;
+  width: min(calc(500px * var(--ui-scale)), 100%) !important;
+  max-width: 100% !important;
+  color: #ff4148 !important;
+  font-size: calc(16px * var(--ui-scale)) !important;
+  line-height: 1.24 !important;
+  font-weight: 850 !important;
+  text-align: right !important;
+  text-shadow: 0 1px 0 rgba(0,0,0,.58),0 0 calc(8px * var(--ui-scale)) rgba(255,25,35,.10) !important;
+  position: relative !important;
+  z-index: 4 !important;
+}
+#app[data-page="marketplace"] .hero-watermark { opacity: .035 !important; }
+
+/* The pages that use CSS grid explicitly reserve the same hero height. */
+#app[data-page="settings"] .content,
+#app[data-page="marketplace"] .content,
+#app[data-page="storage"] .content {
+  grid-template-rows: calc(123px * var(--ui-scale)) auto minmax(0,1fr) !important;
+}
+#app[data-page="mods"] .content {
+  grid-template-rows: calc(123px * var(--ui-scale)) minmax(0,1fr) !important;
+}
+
+/* Responsive geometry is also shared instead of changing from page to page. */
+#app[data-page] .window[data-ui-density="compact"] { --sidebar-w: calc(225px * var(--ui-scale)) !important; }
+#app[data-page] .window[data-ui-density="tiny"] { --sidebar-w: calc(190px * var(--ui-scale)) !important; }
+#app[data-page] .window[data-ui-density="tiny"] .brand-subtitle,
+#app[data-page] .window[data-ui-density="tiny"] .page-header-hint { display: none !important; }
+#app[data-page] .window[data-ui-density="tiny"] .nav-item {
+  padding-left: calc(12px * var(--ui-scale)) !important;
+  padding-right: calc(12px * var(--ui-scale)) !important;
+}
+
+/* Shared navigation glyphs. Every page now uses the same icon set and active tint. */
+#app[data-page] .nav-icon {
+  display: block !important;
+  flex: none !important;
+  color: transparent !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  filter: none !important;
+}
+#app[data-page] .nav-icon-sell {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 13.5 12 22l-9-9V3h10z'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.25'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-icon-buy {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='2.05' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4h2l2.7 10.2a2 2 0 0 0 1.9 1.5h7.8a2 2 0 0 0 1.9-1.4L21 8H7'/%3E%3Ccircle cx='9' cy='20' r='1'/%3E%3Ccircle cx='19' cy='20' r='1'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-icon-settings {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Cpath d='M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21h-4v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3v-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.5V3h4v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v4h-.1a1.7 1.7 0 0 0-1.5 1z'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-icon-logs {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 2h9l4 4v16H6z'/%3E%3Cpath d='M14 2v5h5M9 12h6M9 16h6'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-icon-market {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 10h16l-1-5H5zM5 10v9h14v-9M8 19v-5h4v5'/%3E%3Cpath d='M3 10c0 1.3 1 2.3 2.3 2.3S7.7 11.3 7.7 10c0 1.3 1 2.3 2.3 2.3s2.3-1 2.3-2.3c0 1.3 1 2.3 2.3 2.3s2.4-1 2.4-2.3c0 1.3 1 2.3 2.3 2.3S21.7 11.3 21.7 10'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-icon-storage {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18v4H3zM5 10h14v10H5zM9 14h6'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-icon-mods {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.7 6.3a4 4 0 0 0-5 5L4 17l3 3 5.7-5.7a4 4 0 0 0 5-5l-2.5 2.5-3-3z'/%3E%3Cpath d='m5 19 2-2'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-item.active .nav-icon {
+  filter: drop-shadow(0 0 calc(5px * var(--ui-scale)) rgba(74,236,165,.30)) !important;
+}
+#app[data-page] .nav-item.active .nav-icon-sell {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 13.5 12 22l-9-9V3h10z'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.25'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-item.active .nav-icon-buy {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='2.05' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4h2l2.7 10.2a2 2 0 0 0 1.9 1.5h7.8a2 2 0 0 0 1.9-1.4L21 8H7'/%3E%3Ccircle cx='9' cy='20' r='1'/%3E%3Ccircle cx='19' cy='20' r='1'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-item.active .nav-icon-settings {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Cpath d='M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21h-4v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3v-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.5V3h4v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v4h-.1a1.7 1.7 0 0 0-1.5 1z'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-item.active .nav-icon-logs {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 2h9l4 4v16H6z'/%3E%3Cpath d='M14 2v5h5M9 12h6M9 16h6'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-item.active .nav-icon-market {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 10h16l-1-5H5zM5 10v9h14v-9M8 19v-5h4v5'/%3E%3Cpath d='M3 10c0 1.3 1 2.3 2.3 2.3S7.7 11.3 7.7 10c0 1.3 1 2.3 2.3 2.3s2.3-1 2.3-2.3c0 1.3 1 2.3 2.3 2.3s2.4-1 2.4-2.3c0 1.3 1 2.3 2.3 2.3S21.7 11.3 21.7 10'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-item.active .nav-icon-storage {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18v4H3zM5 10h14v10H5zM9 14h6'/%3E%3C/svg%3E") !important;
+}
+#app[data-page] .nav-item.active .nav-icon-mods {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.7 6.3a4 4 0 0 0-5 5L4 17l3 3 5.7-5.7a4 4 0 0 0 5-5l-2.5 2.5-3-3z'/%3E%3Cpath d='m5 19 2-2'/%3E%3C/svg%3E") !important;
+}
+
+
+/* v60 CEF resize reliability fix. */
+#app.window-management-enabled[data-page] .window-resize-handle {
+  z-index: 2147483000 !important;
+  pointer-events: auto !important;
+  display: block !important;
+}
+#app.window-management-enabled[data-page] .window-resize-handle.resize-n,
+#app.window-management-enabled[data-page] .window-resize-handle.resize-s {
+  height: 16px !important;
+}
+#app.window-management-enabled[data-page] .window-resize-handle.resize-e,
+#app.window-management-enabled[data-page] .window-resize-handle.resize-w {
+  width: 16px !important;
+}
+#app.window-management-enabled[data-page] .window-resize-handle.resize-ne,
+#app.window-management-enabled[data-page] .window-resize-handle.resize-nw,
+#app.window-management-enabled[data-page] .window-resize-handle.resize-se,
+#app.window-management-enabled[data-page] .window-resize-handle.resize-sw {
+  width: 34px !important;
+  height: 34px !important;
+}
+#app.window-management-enabled[data-page] .window-resize-handle.resize-se::after {
+  right: 7px !important;
+  bottom: 7px !important;
+  width: 13px !important;
+  height: 13px !important;
+  opacity: .9 !important;
+}
+html.window-is-resizing,
+html.window-is-resizing body {
+  cursor: nwse-resize !important;
+}

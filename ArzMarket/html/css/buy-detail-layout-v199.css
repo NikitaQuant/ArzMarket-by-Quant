@@ -1,0 +1,85 @@
+/* v199: stable Buy detail header layout without the redundant status badge. */
+#app[data-page="buy"] .detail-card {
+  overflow-x: hidden !important;
+}
+
+#app[data-page="buy"] .detail-top {
+  display: grid !important;
+  grid-template-columns: calc(76px * var(--ui-scale)) minmax(0, 1fr) !important;
+  align-items: center !important;
+  gap: calc(16px * var(--ui-scale)) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+#app[data-page="buy"] .detail-icon-box {
+  grid-column: 1 !important;
+  width: calc(76px * var(--ui-scale)) !important;
+  height: calc(76px * var(--ui-scale)) !important;
+  min-width: 0 !important;
+}
+
+#app[data-page="buy"] .detail-title-wrap {
+  grid-column: 2 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+#app[data-page="buy"] .detail-title {
+  width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  white-space: normal !important;
+  word-break: normal !important;
+  overflow-wrap: break-word !important;
+  line-height: 1.2 !important;
+}
+
+#app[data-page="buy"] .detail-kind {
+  width: 100% !important;
+  min-width: 0 !important;
+  margin-top: calc(6px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] #detailStatus {
+  display: none !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="compact"] .detail-top {
+  grid-template-columns: calc(66px * var(--ui-scale)) minmax(0, 1fr) !important;
+  gap: calc(12px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="compact"] .detail-icon-box {
+  width: calc(66px * var(--ui-scale)) !important;
+  height: calc(66px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="compact"] .detail-icon {
+  width: calc(62px * var(--ui-scale)) !important;
+  height: calc(62px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-top {
+  display: grid !important;
+  grid-template-columns: calc(58px * var(--ui-scale)) minmax(0, 1fr) !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+  align-items: center !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-title-wrap {
+  display: flex !important;
+  flex-direction: column !important;
+  min-width: 0 !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="tiny"] .detail-title {
+  width: 100% !important;
+  word-break: normal !important;
+  overflow-wrap: break-word !important;
+  line-height: 1.18 !important;
+}

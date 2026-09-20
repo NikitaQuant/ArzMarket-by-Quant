@@ -1,0 +1,78 @@
+/* v217: Buy Start copies the real rendered Sell Start geometry.
+   Sell is the reference and is not changed here.
+   Important: Buy has five visible toolbar controls because .more-actions is hidden. */
+
+/* Normal density: Sell Start is flexible between 220 and 260 logical px. */
+#app[data-page="buy"] .toolbar {
+  grid-template-columns:
+    minmax(calc(220px * var(--ui-scale)), 1fr)
+    auto
+    auto
+    calc(64px * var(--ui-scale))
+    minmax(calc(220px * var(--ui-scale)), calc(260px * var(--ui-scale))) !important;
+}
+
+#app[data-page="buy"] #startButton {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  min-width: calc(220px * var(--ui-scale)) !important;
+  max-width: calc(260px * var(--ui-scale)) !important;
+  height: calc(46px * var(--ui-scale)) !important;
+  margin-left: 0 !important;
+  padding: 0 calc(15px * var(--ui-scale)) !important;
+  border-radius: calc(9px * var(--ui-scale)) !important;
+  font-size: calc(15.5px * var(--ui-scale)) !important;
+  font-weight: 750 !important;
+  line-height: 1 !important;
+}
+
+/* Explicit placement prevents hidden .more-actions from shifting Start to an auto track. */
+#app[data-page="buy"] .search-wrap { grid-column: 1 !important; }
+#app[data-page="buy"] #averageButton { grid-column: 2 !important; }
+#app[data-page="buy"] #tradeFilterButton { grid-column: 3 !important; }
+#app[data-page="buy"] #sellCurrencyQuickButton { grid-column: 4 !important; }
+#app[data-page="buy"] #startButton { grid-column: 5 !important; }
+
+/* Compact density copies Sell: min 170, max remains 260, height 42. */
+#app[data-page="buy"] .window[data-ui-density="compact"] .toolbar {
+  grid-template-columns:
+    minmax(calc(180px * var(--ui-scale)), 1fr)
+    auto
+    auto
+    calc(58px * var(--ui-scale))
+    minmax(calc(170px * var(--ui-scale)), calc(260px * var(--ui-scale))) !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="compact"] #startButton {
+  width: 100% !important;
+  min-width: calc(170px * var(--ui-scale)) !important;
+  max-width: calc(260px * var(--ui-scale)) !important;
+  height: calc(42px * var(--ui-scale)) !important;
+}
+
+/* Tiny density copies Sell: 145..180, height 40. If Auto prices is hidden,
+   use four real columns so Start still occupies the last one. */
+#app[data-page="buy"] .window[data-ui-density="tiny"] .toolbar {
+  grid-template-columns:
+    minmax(calc(145px * var(--ui-scale)), 1fr)
+    auto
+    calc(50px * var(--ui-scale))
+    minmax(calc(145px * var(--ui-scale)), calc(180px * var(--ui-scale))) !important;
+}
+
+#app[data-page="buy"] .window[data-ui-density="tiny"] .search-wrap { grid-column: 1 !important; }
+#app[data-page="buy"] .window[data-ui-density="tiny"] #averageButton { display: none !important; }
+#app[data-page="buy"] .window[data-ui-density="tiny"] #tradeFilterButton { grid-column: 2 !important; }
+#app[data-page="buy"] .window[data-ui-density="tiny"] #sellCurrencyQuickButton { grid-column: 3 !important; }
+#app[data-page="buy"] .window[data-ui-density="tiny"] #startButton {
+  grid-column: 4 !important;
+  width: 100% !important;
+  min-width: calc(145px * var(--ui-scale)) !important;
+  max-width: calc(180px * var(--ui-scale)) !important;
+  height: calc(40px * var(--ui-scale)) !important;
+}
+
+#app[data-page="buy"] #startButton::before {
+  content: none !important;
+  display: none !important;
+}

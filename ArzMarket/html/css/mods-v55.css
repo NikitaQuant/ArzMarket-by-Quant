@@ -1,0 +1,423 @@
+/* ArzMarket HTML v43: Mods outer shell matches the current Sell page 1:1.
+   Mods-specific toolbar/workspace remains unchanged. */
+
+/* Exact window geometry used by Sell. */
+#app[data-page="mods"] .window {
+  --topbar-h: calc(81px * var(--ui-scale));
+  --sidebar-w: calc(270px * var(--ui-scale));
+  width: min(1600px, 92vw, calc(100vw - 24px)) !important;
+  height: min(900px, 88vh, calc(100vh - 24px)) !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: min(900px, calc(100vw - 16px)) !important;
+  min-height: min(580px, calc(100vh - 16px)) !important;
+  border: 1px solid #354b5d !important;
+  border-radius: calc(20px * var(--ui-scale)) !important;
+  background: #08121b !important;
+  box-shadow: 0 30px 95px rgba(0,0,0,.58), inset 0 0 0 1px rgba(92,138,170,.055) !important;
+}
+
+#app.window-management-enabled[data-page="mods"] .window {
+  max-width: none !important;
+  max-height: none !important;
+  min-width: min(760px, calc(100vw - 24px)) !important;
+  min-height: min(500px, calc(100vh - 24px)) !important;
+}
+
+/* Topbar must not shrink when switching Sell -> Mods. */
+#app[data-page="mods"] .topbar {
+  height: var(--topbar-h) !important;
+  min-height: var(--topbar-h) !important;
+  padding: 0 calc(24px * var(--ui-scale)) 0 calc(26px * var(--ui-scale)) !important;
+  border-bottom-color: #354a5c !important;
+  background: radial-gradient(circle at 48% -145%,rgba(88,137,193,.24),transparent 53%),linear-gradient(180deg,#132230 0%,#0b1722 100%) !important;
+}
+#app[data-page="mods"] .topbar-actions { gap:calc(14px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .brand { gap:calc(15px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .brand-mark {
+  width:calc(59px * var(--ui-scale)) !important;
+  height:calc(59px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .brand-title {
+  font-size:calc(34px * var(--ui-scale)) !important;
+  font-weight:760 !important;
+  letter-spacing:.12px !important;
+}
+#app[data-page="mods"] .brand-subtitle {
+  margin-top:calc(5px * var(--ui-scale)) !important;
+  font-size:calc(11.5px * var(--ui-scale)) !important;
+  color:#acbbca !important;
+}
+#app[data-page="mods"] .mode-switch {
+  height:calc(44px * var(--ui-scale)) !important;
+  padding:calc(4px * var(--ui-scale)) !important;
+  border-radius:calc(11px * var(--ui-scale)) !important;
+  border-color:#40586b !important;
+  background:#0a141e !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.025),0 0 calc(12px * var(--ui-scale)) rgba(20,67,117,.10) !important;
+}
+#app[data-page="mods"] .mode-btn {
+  min-width:calc(100px * var(--ui-scale)) !important;
+  padding:0 calc(16px * var(--ui-scale)) !important;
+  border-radius:calc(8px * var(--ui-scale)) !important;
+  font-size:calc(13.5px * var(--ui-scale)) !important;
+  color:#a9b8c8 !important;
+}
+#app[data-page="mods"] .mode-btn.active {
+  background:linear-gradient(180deg,#397ce3,#2857bc) !important;
+  color:#fff !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.17),0 0 calc(18px * var(--ui-scale)) rgba(56,119,235,.27) !important;
+}
+#app[data-page="mods"] .window-controls { gap:calc(6px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .window-btn {
+  width:calc(38px * var(--ui-scale)) !important;
+  height:calc(38px * var(--ui-scale)) !important;
+  opacity:.95 !important;
+}
+#app[data-page="mods"] .window-btn-control { font-size:calc(16px * var(--ui-scale)) !important; }
+
+/* Sidebar geometry copied from Sell. */
+#app[data-page="mods"] .body-grid {
+  height:calc(100% - var(--topbar-h)) !important;
+  grid-template-columns:var(--sidebar-w) 1fr !important;
+}
+#app[data-page="mods"] .sidebar {
+  padding:calc(27px * var(--ui-scale)) calc(15px * var(--ui-scale)) calc(18px * var(--ui-scale)) !important;
+  background:radial-gradient(circle at 24% 26%,rgba(55,108,157,.12),transparent 43%),linear-gradient(180deg,#0c1823 0%,#09141e 72%,#0b1721 100%) !important;
+  border-right-color:#304657 !important;
+}
+#app[data-page="mods"] .nav-list { gap:calc(10px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .nav-item {
+  height:calc(60px * var(--ui-scale)) !important;
+  gap:calc(15px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  border-radius:calc(11px * var(--ui-scale)) !important;
+  font-size:calc(16.5px * var(--ui-scale)) !important;
+  color:#cbd6e2 !important;
+  font-weight:570 !important;
+}
+#app[data-page="mods"] .nav-icon {
+  width:calc(33px * var(--ui-scale)) !important;
+  height:calc(33px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .nav-item.active {
+  background:radial-gradient(circle at 7% 50%,rgba(88,255,185,.30),transparent 41%),linear-gradient(90deg,rgba(29,205,128,.38),rgba(16,117,79,.13)) !important;
+  border-color:rgba(84,239,169,.72) !important;
+  box-shadow:inset calc(5px * var(--ui-scale)) 0 0 #6af3b6,inset 0 0 calc(32px * var(--ui-scale)) rgba(51,222,151,.075),0 0 calc(24px * var(--ui-scale)) rgba(44,218,143,.13) !important;
+  color:#effff8 !important;
+}
+#app[data-page="mods"] .sidebar-footer { gap:calc(10px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .arizona-card {
+  height:calc(170px * var(--ui-scale)) !important;
+  min-height:calc(170px * var(--ui-scale)) !important;
+  padding:calc(21px * var(--ui-scale)) !important;
+  border-radius:calc(12px * var(--ui-scale)) !important;
+}
+
+/* The content must start at the same coordinates as Sell. */
+#app[data-page="mods"] .content {
+  display:grid !important;
+  padding:calc(16px * var(--ui-scale)) !important;
+  gap:calc(10px * var(--ui-scale)) !important;
+  grid-template-rows:calc(123px * var(--ui-scale)) minmax(0,1fr) !important;
+  background:radial-gradient(circle at 50% -22%,rgba(81,132,181,.09),transparent 42%),#0b1721 !important;
+}
+
+/* Same hero dimensions and text scale as the current Sell hero.
+   Mods keeps its own four-column grid for Base / status / hint. */
+#app[data-page="mods"] .page-header {
+  min-height:calc(123px * var(--ui-scale)) !important;
+  height:calc(123px * var(--ui-scale)) !important;
+  padding:calc(17px * var(--ui-scale)) calc(27px * var(--ui-scale)) !important;
+  column-gap:calc(19px * var(--ui-scale)) !important;
+  border:1px solid #4a6275 !important;
+  border-radius:calc(14px * var(--ui-scale)) !important;
+  background:radial-gradient(circle at 44% -80%,rgba(124,166,209,.21),transparent 52%),linear-gradient(108deg,#1b2e40 0%,#142332 63%,#192b3e 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045) !important;
+}
+#app[data-page="mods"] .page-header-icon {
+  width:calc(72px * var(--ui-scale)) !important;
+  height:calc(72px * var(--ui-scale)) !important;
+  border-radius:calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .page-header h1 {
+  font-size:calc(31px * var(--ui-scale)) !important;
+  line-height:1.04 !important;
+  font-weight:760 !important;
+}
+#app[data-page="mods"] .page-header p {
+  margin-top:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .page-header-hint {
+  width:calc(175px * var(--ui-scale)) !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  line-height:1.55 !important;
+}
+
+/* Match the resize hit areas too so a page switch does not change window behaviour. */
+#app[data-page="mods"] .window-resize-handle.resize-n,
+#app[data-page="mods"] .window-resize-handle.resize-s { height:16px !important; }
+#app[data-page="mods"] .window-resize-handle.resize-e,
+#app[data-page="mods"] .window-resize-handle.resize-w { width:16px !important; }
+#app[data-page="mods"] .window-resize-handle.resize-ne,
+#app[data-page="mods"] .window-resize-handle.resize-nw,
+#app[data-page="mods"] .window-resize-handle.resize-se,
+#app[data-page="mods"] .window-resize-handle.resize-sw {
+  width:28px !important;
+  height:28px !important;
+}
+
+/* Same responsive shell breakpoints as Sell. */
+#app[data-page="mods"] .window[data-ui-density="compact"] { --sidebar-w:calc(225px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .window[data-ui-density="tiny"] { --sidebar-w:calc(190px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .window[data-ui-density="tiny"] .brand-subtitle,
+#app[data-page="mods"] .window[data-ui-density="tiny"] .page-header-hint { display:none !important; }
+#app[data-page="mods"] .window[data-ui-density="tiny"] .nav-item {
+  padding-left:calc(12px * var(--ui-scale)) !important;
+  padding-right:calc(12px * var(--ui-scale)) !important;
+}
+
+
+
+/* Modifications page visibility and unique icon. */
+.nav-icon-mods {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8caf0' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.7 6.3a4 4 0 0 0-5 5L4 17l3 3 5.7-5.7a4 4 0 0 0 5-5l-2.5 2.5-3-3z'/%3E%3Cpath d='m5 19 2-2'/%3E%3C/svg%3E") !important;
+  background-position:center !important;
+  background-repeat:no-repeat !important;
+  background-size:contain !important;
+}
+#app[data-page="mods"] .nav-item.active .nav-icon-mods {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367f0b4' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.7 6.3a4 4 0 0 0-5 5L4 17l3 3 5.7-5.7a4 4 0 0 0 5-5l-2.5 2.5-3-3z'/%3E%3Cpath d='m5 19 2-2'/%3E%3C/svg%3E") !important;
+  filter:drop-shadow(0 0 calc(5px * var(--ui-scale)) rgba(74,236,165,.3)) !important;
+}
+
+#app[data-page="mods"] .toolbar,
+#app[data-page="mods"] .workspace,
+#app[data-page="mods"] .sell-workspace,
+#app[data-page="mods"] #logsToolbar,
+#app[data-page="mods"] #logsWorkspace,
+#app[data-page="mods"] #marketplaceToolbar,
+#app[data-page="mods"] #marketplaceWorkspace,
+#app[data-page="mods"] #storageToolbar,
+#app[data-page="mods"] #storageWorkspace,
+#app[data-page="mods"] #settingsToolbar,
+#app[data-page="mods"] #settingsWorkspace { display:none !important; }
+
+#app[data-page="mods"] .mods-header-meta {
+  display:flex;
+  align-items:center;
+  gap:calc(14px * var(--ui-scale));
+  margin-left:auto;
+  margin-right:calc(190px * var(--ui-scale));
+  min-width:0;
+}
+#app[data-page="mods"] .mods-header-meta.hidden { display:none !important; }
+#app[data-page="mods"] .mods-live-state {
+  display:flex; align-items:center; gap:calc(9px * var(--ui-scale)); color:#b7c6d4;
+  min-width:calc(250px * var(--ui-scale));
+}
+#app[data-page="mods"] .mods-live-state > span:last-child { display:flex; flex-direction:column; gap:calc(3px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-live-state strong { font-size:calc(12.5px * var(--ui-scale)); color:#d9e5ef; font-weight:650; }
+#app[data-page="mods"] .mods-live-state small { font-size:calc(10px * var(--ui-scale)); color:#71889b; }
+#app[data-page="mods"] .mods-badge-dot { width:7px; height:7px; border-radius:50%; background:#3ce59b; box-shadow:0 0 9px rgba(60,229,155,.55); }
+
+#app[data-page="mods"] .page-header-icon {
+  color:#62efb2 !important;
+  background:rgba(24,180,116,.17) !important;
+  border:1px solid rgba(73,237,166,.65) !important;
+  display:grid !important; place-items:center !important;
+}
+#app[data-page="mods"] .page-header-icon svg { display:block !important; width:56%; height:56%; }
+
+#app[data-page="mods"] .mods-workspace {
+  min-height:0;
+  height:100%;
+  overflow:hidden;
+}
+#app[data-page="mods"] .mods-workspace.hidden { display:none !important; }
+#app[data-page="mods"] .mods-grid {
+  height:100%; min-height:0; display:grid;
+  grid-template-columns:minmax(0,1.28fr) minmax(360px,.82fr);
+  gap:calc(12px * var(--ui-scale));
+}
+#app[data-page="mods"] .mods-side-column {
+  min-height:0; display:grid; grid-template-rows:minmax(0,1fr) auto; gap:calc(12px * var(--ui-scale));
+}
+#app[data-page="mods"] .mods-card {
+  min-height:0;
+  border:1px solid #324b5d;
+  border-radius:calc(13px * var(--ui-scale));
+  background:linear-gradient(180deg,#10202c,#0c1923);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);
+  overflow:hidden;
+}
+#app[data-page="mods"] .mods-performance-card,
+#app[data-page="mods"] .mods-cycle-card { overflow:auto; scrollbar-width:thin; }
+#app[data-page="mods"] .mods-card-head {
+  min-height:calc(70px * var(--ui-scale)); padding:calc(17px * var(--ui-scale)) calc(20px * var(--ui-scale));
+  display:flex; align-items:center; justify-content:space-between; gap:16px;
+  border-bottom:1px solid #2c4353;
+  background:linear-gradient(180deg,rgba(28,49,65,.65),rgba(14,29,40,.5));
+}
+#app[data-page="mods"] .mods-card-head h2 { margin:0; color:#f0f5f9; font-size:calc(19px * var(--ui-scale)); font-weight:760; }
+#app[data-page="mods"] .mods-card-head p { margin:calc(5px * var(--ui-scale)) 0 0; color:#7f93a4; font-size:calc(11.5px * var(--ui-scale)); line-height:1.35; }
+#app[data-page="mods"] .mods-state-badge {
+  flex:none; padding:calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale)); border-radius:9px;
+  border:1px solid #345164; background:#112531; color:#9eb2c2; font-size:calc(11px * var(--ui-scale)); font-weight:650;
+}
+#app[data-page="mods"] .mods-state-badge.active { border-color:rgba(55,226,151,.58); color:#5eedae; background:rgba(20,139,91,.16); }
+
+#app[data-page="mods"] .mods-runtime-stats {
+  display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:calc(9px * var(--ui-scale));
+  padding:calc(14px * var(--ui-scale)) calc(18px * var(--ui-scale)); border-bottom:1px solid #263d4d;
+}
+#app[data-page="mods"] .mods-runtime-stats > div,
+#app[data-page="mods"] .mods-cycle-stats > div {
+  border:1px solid #2d4657; border-radius:10px; background:#0d1c27; padding:calc(11px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  display:flex; flex-direction:column; gap:5px;
+}
+#app[data-page="mods"] .mods-runtime-stats span,
+#app[data-page="mods"] .mods-cycle-stats span { color:#71889b; font-size:calc(10px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-runtime-stats strong { color:#e8f1f7; font-size:calc(17px * var(--ui-scale)); }
+
+#app[data-page="mods"] .mods-control-list { padding:0 calc(18px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-control-row,
+#app[data-page="mods"] .mods-range-row {
+  min-height:calc(72px * var(--ui-scale)); display:flex; align-items:center; justify-content:space-between; gap:calc(18px * var(--ui-scale));
+  border-bottom:1px solid #263d4d;
+}
+#app[data-page="mods"] .mods-control-row > div:first-child,
+#app[data-page="mods"] .mods-range-row > div:first-child { min-width:0; display:flex; flex-direction:column; gap:calc(5px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-control-row strong,
+#app[data-page="mods"] .mods-range-row strong { color:#e6edf3; font-size:calc(13px * var(--ui-scale)); font-weight:660; }
+#app[data-page="mods"] .mods-control-row small,
+#app[data-page="mods"] .mods-range-row small { color:#71889b; font-size:calc(10.5px * var(--ui-scale)); line-height:1.4; }
+#app[data-page="mods"] .mods-toggle {
+  flex:none; width:calc(50px * var(--ui-scale)); height:calc(28px * var(--ui-scale)); padding:3px; border-radius:999px;
+  border:1px solid #395466; background:#172b37; cursor:pointer; transition:.16s ease;
+}
+#app[data-page="mods"] .mods-toggle span { display:block; width:calc(20px * var(--ui-scale)); height:calc(20px * var(--ui-scale)); border-radius:50%; background:#9babb7; transition:.16s ease; }
+#app[data-page="mods"] .mods-toggle.on { background:linear-gradient(90deg,#159663,#1abe7c); border-color:#39dda0; box-shadow:0 0 14px rgba(39,213,145,.15); }
+#app[data-page="mods"] .mods-toggle.on span { transform:translateX(calc(20px * var(--ui-scale))); background:#eafff6; }
+
+#app[data-page="mods"] .mods-range-control { flex:none; width:min(48%,calc(310px * var(--ui-scale))); display:grid; grid-template-columns:1fr calc(52px * var(--ui-scale)); gap:10px; align-items:center; }
+#app[data-page="mods"] .mods-range-control input[type="range"] { width:100%; accent-color:#31d894; }
+#app[data-page="mods"] .mods-range-control span { display:grid; place-items:center; height:calc(34px * var(--ui-scale)); border:1px solid #355065; border-radius:8px; background:#112431; color:#6cf0b4; font-size:calc(12px * var(--ui-scale)); font-weight:720; }
+#app[data-page="mods"] .mods-info-note { margin:calc(16px * var(--ui-scale)) calc(18px * var(--ui-scale)); padding:calc(12px * var(--ui-scale)); border:1px solid #29475b; border-radius:10px; background:#0d202c; display:flex; gap:10px; align-items:flex-start; }
+#app[data-page="mods"] .mods-info-note > span { width:21px; height:21px; border-radius:50%; display:grid; place-items:center; color:#67baf7; border:1px solid #3e84b4; flex:none; }
+#app[data-page="mods"] .mods-info-note p { margin:0; color:#7d93a5; font-size:calc(10.5px * var(--ui-scale)); line-height:1.45; }
+
+#app[data-page="mods"] .mods-cycle-toggle { margin:0 calc(18px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-cycle-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:calc(8px * var(--ui-scale)); padding:calc(14px * var(--ui-scale)) calc(18px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-cycle-stats strong { color:#64eeb1; font-size:calc(16px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-cycle-status { margin:0 calc(18px * var(--ui-scale)) calc(12px * var(--ui-scale)); padding:calc(11px * var(--ui-scale)); border:1px solid #2d4657; border-radius:10px; background:#0d1c27; display:flex; align-items:center; gap:10px; }
+#app[data-page="mods"] .mods-cycle-status > div { display:flex; flex-direction:column; gap:3px; }
+#app[data-page="mods"] .mods-cycle-status strong { color:#cdd9e3; font-size:calc(12px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-cycle-status small { color:#70879a; font-size:calc(10px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-cycle-status.active .status-dot { background:#38e29a; box-shadow:0 0 10px rgba(56,226,154,.6); }
+#app[data-page="mods"] .mods-primary-action,
+#app[data-page="mods"] .mods-secondary-action { border:1px solid #36d596; border-radius:10px; cursor:pointer; font-weight:720; }
+#app[data-page="mods"] .mods-primary-action { width:calc(100% - 36px * var(--ui-scale)); margin:0 calc(18px * var(--ui-scale)); height:calc(48px * var(--ui-scale)); color:#071b13; background:linear-gradient(180deg,#48e3a6,#21bd7d); font-size:calc(13px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-primary-action:disabled { opacity:.45; cursor:not-allowed; }
+#app[data-page="mods"] .mods-primary-action.danger { color:#ffe8eb; border-color:#e55f72; background:linear-gradient(180deg,#943445,#702634); }
+#app[data-page="mods"] .mods-warning-note { margin:calc(12px * var(--ui-scale)) calc(18px * var(--ui-scale)) calc(16px * var(--ui-scale)); padding:calc(11px * var(--ui-scale)); border:1px solid rgba(229,180,74,.24); border-radius:10px; background:rgba(141,101,24,.08); display:flex; flex-direction:column; gap:4px; }
+#app[data-page="mods"] .mods-warning-note strong { color:#d9bd79; font-size:calc(10.5px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-warning-note span { color:#8e846c; font-size:calc(9.8px * var(--ui-scale)); line-height:1.4; }
+
+#app[data-page="mods"] .mods-community-card { padding:calc(14px * var(--ui-scale)) calc(16px * var(--ui-scale)); display:flex; align-items:center; justify-content:space-between; gap:14px; overflow:visible; }
+#app[data-page="mods"] .mods-community-copy { display:flex; align-items:center; gap:12px; min-width:0; }
+#app[data-page="mods"] .mods-community-icon { width:38px; height:38px; flex:none; display:grid; place-items:center; border-radius:10px; color:#5cebad; border:1px solid #2e8c68; background:#102b24; font-size:20px; }
+#app[data-page="mods"] .mods-community-card h3 { margin:0; color:#e5eef5; font-size:calc(12.5px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-community-card p { margin:4px 0 0; color:#71889a; font-size:calc(10px * var(--ui-scale)); }
+#app[data-page="mods"] .mods-secondary-action { flex:none; height:38px; padding:0 14px; color:#56e7a9; background:#10261f; }
+
+@media (max-width:1200px) {
+  #app[data-page="mods"] .mods-grid { grid-template-columns:1fr; overflow:auto; }
+  #app[data-page="mods"] .mods-side-column { grid-template-rows:auto auto; }
+  #app[data-page="mods"] .mods-performance-card, #app[data-page="mods"] .mods-cycle-card { overflow:visible; }
+  #app[data-page="mods"] .mods-header-meta { margin-right:0; }
+}
+#app[data-page="mods"] .window[data-ui-density="tiny"] .mods-live-state small,
+#app[data-page="mods"] .window[data-ui-density="tiny"] .mods-card-head p,
+#app[data-page="mods"] .window[data-ui-density="tiny"] .mods-control-row small,
+#app[data-page="mods"] .window[data-ui-density="tiny"] .mods-range-row small { display:none; }
+#app[data-page="mods"] .badge-warning {
+  border-color:rgba(245,188,75,.55) !important;
+  background:rgba(164,112,22,.17) !important;
+  color:#ffd77d !important;
+}
+
+/* v68 Mods cleanup: single vertical flow, no FPS/player UI, larger primary text. */
+#app[data-page="mods"] .page-subtitle,
+#app[data-page="mods"] .page-header-hint,
+#app[data-page="mods"] .mods-header-meta { display:none !important; }
+
+#app[data-page="mods"] .mods-workspace { overflow:hidden !important; }
+#app[data-page="mods"] .mods-grid {
+  height:100% !important;
+  min-height:0 !important;
+  display:flex !important;
+  flex-direction:column !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+  overflow-y:auto !important;
+  overflow-x:hidden !important;
+  padding-right:calc(3px * var(--ui-scale));
+  scrollbar-width:thin;
+}
+#app[data-page="mods"] .mods-side-column { display:contents !important; }
+#app[data-page="mods"] .mods-card { flex:0 0 auto; }
+#app[data-page="mods"] .mods-performance-card,
+#app[data-page="mods"] .mods-cycle-card { overflow:visible !important; }
+
+#app[data-page="mods"] .mods-card-head {
+  min-height:calc(60px * var(--ui-scale)) !important;
+  padding:calc(14px * var(--ui-scale)) calc(20px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-card-head h2 { font-size:calc(21px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-control-row { min-height:calc(64px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-control-row strong { font-size:calc(14.5px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-cycle-stats span { font-size:calc(11.5px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-cycle-stats strong { font-size:calc(17.5px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-cycle-status strong { font-size:calc(13.5px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-primary-action { font-size:calc(14px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-warning-note strong { font-size:calc(11.5px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-community-card h3 { font-size:calc(14px * var(--ui-scale)) !important; }
+#app[data-page="mods"] .mods-secondary-action { font-size:calc(13.5px * var(--ui-scale)) !important; }
+
+
+
+/* v88: compact Modifications cards. */
+#app[data-page="mods"] .mods-performance-card {
+  width:min(calc(520px * var(--ui-scale)),100%) !important;
+  align-self:flex-start !important;
+}
+#app[data-page="mods"] .mods-performance-card .mods-card-head {
+  min-height:calc(48px * var(--ui-scale)) !important;
+  padding:calc(10px * var(--ui-scale)) calc(16px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-performance-card .mods-control-row {
+  min-height:calc(52px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-cycle-card {
+  width:min(calc(580px * var(--ui-scale)),100%) !important;
+  align-self:flex-start !important;
+  overflow:visible !important;
+}
+#app[data-page="mods"] .mods-cycle-card .mods-card-head {
+  min-height:calc(48px * var(--ui-scale)) !important;
+  padding:calc(10px * var(--ui-scale)) calc(16px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-cycle-toggle {
+  margin:0 calc(16px * var(--ui-scale)) !important;
+  min-height:calc(52px * var(--ui-scale)) !important;
+}
+#app[data-page="mods"] .mods-cycle-list-button {
+  width:auto !important;
+  min-width:calc(220px * var(--ui-scale)) !important;
+  max-width:calc(310px * var(--ui-scale)) !important;
+  height:calc(38px * var(--ui-scale)) !important;
+  margin:calc(12px * var(--ui-scale)) calc(16px * var(--ui-scale)) calc(16px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  font-size:calc(12.5px * var(--ui-scale)) !important;
+}

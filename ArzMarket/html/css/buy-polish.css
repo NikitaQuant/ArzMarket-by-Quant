@@ -1,0 +1,282 @@
+/* Final visual pass for the Buy page reference. Renderer only, no trade logic here. */
+
+.page-header-hint {
+  display: none;
+}
+
+#app[data-page="buy"] .page-header-hint {
+  display: block;
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 180px;
+  margin-left: 8px;
+  color: #8394a9;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+#app[data-page="buy"] .page-header-hint span {
+  display: block;
+}
+
+#app[data-page="buy"] .toolbar #addButton::before {
+  content: "+";
+  display: inline-block;
+  margin-right: 9px;
+  font-size: 22px;
+  line-height: 0;
+  font-weight: 300;
+  vertical-align: -2px;
+}
+
+#app[data-page="buy"] .toolbar #averageButton::before {
+  content: "▥";
+  display: inline-block;
+  margin-right: 9px;
+  color: #b7c8dc;
+  font-size: 15px;
+}
+
+#app[data-page="buy"] #startButton::before {
+  content: "▶";
+  display: inline-block;
+  margin-right: 12px;
+  font-size: 14px;
+}
+
+#app[data-page="buy"] .table-card {
+  display: flex;
+  flex-direction: column;
+}
+
+#app[data-page="buy"] .table-scroll {
+  flex: 1;
+}
+
+#app[data-page="buy"] .empty-state {
+  inset: 48px 0 44px;
+}
+
+#app[data-page="buy"] .buy-table-footer {
+  flex: none;
+  min-height: 43px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 18px;
+  border-top: 1px solid #20313f;
+  background: linear-gradient(180deg, #0d1720, #0b141d);
+  color: #9aacbf;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+#app[data-page="buy"] .buy-table-footer-left,
+#app[data-page="buy"] .buy-table-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+#app[data-page="buy"] .buy-table-footer .value-green {
+  color: #43e89c;
+}
+
+#app[data-page="buy"] .buy-table-footer .divider {
+  width: 1px;
+  height: 15px;
+  background: #314353;
+}
+
+#app[data-page="buy"] .row-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 112px;
+}
+
+#app[data-page="buy"] .row-status-label {
+  color: #b4c1ce;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+#app[data-page="buy"] .disabled-row .row-status-label {
+  color: #7d8b99;
+}
+
+#app[data-page="buy"] .detail-title-wrap {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: center;
+}
+
+#app[data-page="buy"] .detail-title {
+  grid-column: 1;
+  margin-bottom: 0;
+}
+
+#app[data-page="buy"] .detail-kind {
+  grid-column: 1;
+  margin-top: 5px;
+  color: #8999ac;
+  font-size: 11px;
+}
+
+#app[data-page="buy"] .detail-title-wrap > .badge {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+#app[data-page="buy"] .detail-tabs {
+  gap: 4px;
+}
+
+#app[data-page="buy"] .detail-tab {
+  border: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  border-radius: 7px;
+  color: #8798aa;
+  cursor: pointer;
+}
+
+#app[data-page="buy"] .detail-tab.active {
+  color: #8ef0bf;
+  border-color: rgba(41, 213, 143, .52);
+  background: linear-gradient(180deg, rgba(41, 213, 143, .17), rgba(41, 213, 143, .075));
+  box-shadow: inset 0 0 16px rgba(41, 213, 143, .035);
+}
+
+#app[data-page="buy"] .detail-fields {
+  gap: 10px;
+  padding-top: 14px;
+}
+
+#app[data-page="buy"] .buy-main-fields,
+#app[data-page="buy"] .buy-extra-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#app[data-page="buy"] .buy-extra-fields.hidden,
+#app[data-page="buy"] .buy-main-fields.hidden {
+  display: none;
+}
+
+#app[data-page="buy"] .buy-main-fields > .field,
+#app[data-page="buy"] .buy-extra-fields > .field {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+#app[data-page="buy"] .buy-main-fields > .field > .field-label,
+#app[data-page="buy"] .buy-extra-fields > .field > .field-label {
+  color: #a6b6c8;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+#app[data-page="buy"] .buy-main-fields .field-input,
+#app[data-page="buy"] .buy-extra-fields .field-input {
+  height: 39px;
+  padding: 0 12px;
+  border-color: #2a3c4b;
+  border-radius: 8px;
+  background: #111b25;
+  color: #e5ebf1;
+  font-size: 12px;
+}
+
+#app[data-page="buy"] .buy-main-fields .field-input:disabled,
+#app[data-page="buy"] .buy-extra-fields .field-input:disabled {
+  opacity: 1;
+  color: #9aabba;
+  background: #0d1720;
+}
+
+#app[data-page="buy"] .buy-main-fields > .field-toggle-row,
+#app[data-page="buy"] .buy-extra-fields > .field-toggle-row {
+  min-height: 41px;
+  padding: 0 12px;
+  color: #a6b6c8;
+  font-size: 11px;
+  background: #0f1922;
+}
+
+#app[data-page="buy"] .buy-readonly-name {
+  cursor: default;
+}
+
+#app[data-page="buy"] .autosave-note {
+  margin-top: 17px;
+  min-height: 64px;
+  padding: 12px 14px;
+  align-items: flex-start;
+  color: #8fa1b4;
+  border-color: #2a3a48;
+  background: #111b25;
+}
+
+#app[data-page="buy"] .autosave-note::before {
+  content: "i";
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid #3e86f5;
+  border-radius: 50%;
+  color: #5c9aff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#app[data-page="buy"] .autosave-note .status-dot {
+  display: none;
+}
+
+#app[data-page="buy"] .autosave-note span:last-child {
+  line-height: 1.55;
+}
+
+#app[data-page="buy"] .autosave-note span:last-child::after {
+  content: "\AДанные применяются сразу после редактирования";
+  white-space: pre;
+  display: block;
+  color: #718397;
+  margin-top: 2px;
+}
+
+@media (max-width: 1280px) {
+  #app[data-page="buy"] .page-header-hint {
+    display: none;
+  }
+
+  #app[data-page="buy"] .row-status-label {
+    display: none;
+  }
+
+  #app[data-page="buy"] .row-status {
+    min-width: 44px;
+  }
+
+  #app[data-page="buy"] .buy-table-footer-right {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 1100px) {
+  #app[data-page="buy"] .buy-table-footer-right .secondary-stat {
+    display: none;
+  }
+}

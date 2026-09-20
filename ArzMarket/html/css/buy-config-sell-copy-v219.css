@@ -1,0 +1,26 @@
+/* v219: Buy config selector follows the restored original Sell selector.
+   Sell itself is not modified here. Normal density is already identical through
+   theme-system-v158 + buy-header-meta-sell-parity-v194. These density rules
+   mirror the remaining Sell cascade exactly. */
+
+/* Sell compact cascade: width/min-width become 108, while the original
+   flex-basis and max-width from the normal themed selector remain 190/220. */
+#app[data-html-theme][data-page="buy"] .window[data-ui-density="compact"] .config-label {
+  min-width: calc(250px * var(--ui-scale)) !important;
+}
+
+#app[data-html-theme][data-page="buy"] .window[data-ui-density="compact"] .config-select-trigger {
+  flex: 0 0 calc(190px * var(--ui-scale)) !important;
+  width: calc(108px * var(--ui-scale)) !important;
+  min-width: calc(108px * var(--ui-scale)) !important;
+  max-width: calc(220px * var(--ui-scale)) !important;
+}
+
+/* Sell tiny cascade: only width/min-width are reduced to 92. The original
+   190 flex-basis and 220 max-width stay in force, exactly as on Sell. */
+#app[data-html-theme][data-page="buy"] .window[data-ui-density="tiny"] .config-select-trigger {
+  flex: 0 0 calc(190px * var(--ui-scale)) !important;
+  width: calc(92px * var(--ui-scale)) !important;
+  min-width: calc(92px * var(--ui-scale)) !important;
+  max-width: calc(220px * var(--ui-scale)) !important;
+}

@@ -1,0 +1,318 @@
+#app.minimal-mode:not([data-page="settings"]) .brand-mark,
+#app.minimal-mode:not([data-page="settings"]) .brand-subtitle,
+#app.minimal-mode:not([data-page="settings"]) .sidebar-footer,
+#app.minimal-mode:not([data-page="settings"]) .page-header-icon,
+#app.minimal-mode:not([data-page="settings"]) .page-header p,
+#app.minimal-mode:not([data-page="settings"]) .page-header-hint,
+#app.minimal-mode:not([data-page="settings"]) .hero-watermark {
+  display:none !important;
+}
+#app.minimal-mode:not([data-page="settings"]) .brand { gap:0 !important; }
+#app.minimal-mode:not([data-page="settings"]) .brand-title {
+  font-size:calc(25px * var(--ui-scale)) !important;
+}
+#app.minimal-mode:not([data-page="settings"]) .content {
+  gap:calc(8px * var(--ui-scale)) !important;
+}
+#app.minimal-mode:not([data-page="settings"]) .page-header {
+  min-height:calc(72px * var(--ui-scale)) !important;
+  height:calc(72px * var(--ui-scale)) !important;
+  padding:calc(12px * var(--ui-scale)) calc(18px * var(--ui-scale)) !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+  background:linear-gradient(108deg,#172939 0%,#12212f 68%,#16283a 100%) !important;
+}
+#app.minimal-mode:not([data-page="settings"]) .page-header-copy {
+  min-width:0 !important;
+  flex:1 1 auto !important;
+}
+#app.minimal-mode:not([data-page="settings"]) .page-header h1 {
+  font-size:calc(25px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="logs"] .logs-header-meta,
+#app.minimal-mode[data-page="storage"] .storage-header-meta,
+#app.minimal-mode[data-page="marketplace"] .marketplace-header-meta,
+#app.minimal-mode[data-page="mods"] .mods-header-meta {
+  display:none !important;
+}
+#app.minimal-mode[data-page="buy"] .page-header-meta,
+#app.minimal-mode[data-page="sell"] .page-header-meta {
+  margin-left:auto !important;
+  display:flex !important;
+  align-items:center !important;
+}
+#app.minimal-mode[data-page="buy"] #automationBadge,
+#app.minimal-mode[data-page="buy"] #saveBadge,
+#app.minimal-mode[data-page="sell"] #automationBadge,
+#app.minimal-mode[data-page="sell"] #saveBadge {
+  display:none !important;
+}
+#app.minimal-mode[data-page="buy"] .config-label,
+#app.minimal-mode[data-page="sell"] .config-label {
+  margin:0 !important;
+}
+
+#app.minimal-mode[data-page="storage"] .content,
+#app.minimal-mode[data-page="marketplace"] .content {
+  grid-template-rows:calc(72px * var(--ui-scale)) auto minmax(0,1fr) !important;
+}
+#app.minimal-mode[data-page="mods"] .content {
+  grid-template-rows:calc(72px * var(--ui-scale)) minmax(0,1fr) !important;
+}
+
+#app.minimal-mode[data-page="buy"] #averageButton,
+#app.minimal-mode[data-page="buy"] #tradeFilterButton,
+#app.minimal-mode[data-page="buy"] #tradeFilterPanel,
+#app.minimal-mode[data-page="buy"] #undoButton,
+#app.minimal-mode[data-page="buy"] #clearButton,
+#app.minimal-mode[data-page="buy"] #budgetButton,
+#app.minimal-mode[data-page="buy"] #pricesButton,
+#app.minimal-mode[data-page="buy"] .category-group-header,
+#app.minimal-mode[data-page="buy"] .item-meta,
+#app.minimal-mode[data-page="buy"] #detailStatus,
+#app.minimal-mode[data-page="buy"] .detail-tabs,
+#app.minimal-mode[data-page="buy"] .autosave-note,
+#app.minimal-mode[data-page="buy"] .trade-category-field {
+  display:none !important;
+}
+#app.minimal-mode[data-page="buy"] .toolbar {
+  min-height:calc(58px * var(--ui-scale)) !important;
+  height:calc(58px * var(--ui-scale)) !important;
+  padding:calc(7px * var(--ui-scale)) calc(9px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="buy"] .workspace {
+  grid-template-columns:minmax(0,1fr) clamp(calc(250px * var(--ui-scale)),24%,calc(315px * var(--ui-scale))) !important;
+}
+#app.minimal-mode[data-page="buy"] .item-cell,
+#app.minimal-mode[data-page="buy"] .detail-top {
+  gap:calc(8px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="buy"] .detail-card {
+  padding:calc(12px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="buy"] .more-actions-panel {
+  min-width:calc(190px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="sell"] #addButton,
+#app.minimal-mode[data-page="sell"] #averageButton,
+#app.minimal-mode[data-page="sell"] #tradeFilterButton,
+#app.minimal-mode[data-page="sell"] #tradeFilterPanel,
+#app.minimal-mode[data-page="sell"] .more-actions,
+#app.minimal-mode[data-page="sell"] .sell-title-summary,
+#app.minimal-mode[data-page="sell"] .category-group-header,
+#app.minimal-mode[data-page="sell"] .sell-sale-kind {
+  display:none !important;
+}
+#app.minimal-mode[data-page="sell"] .toolbar {
+  min-height:calc(58px * var(--ui-scale)) !important;
+  height:calc(58px * var(--ui-scale)) !important;
+  padding:calc(7px * var(--ui-scale)) calc(9px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="sell"] .sell-inventory-row,
+#app.minimal-mode[data-page="sell"] .sell-sale-row {
+  min-height:calc(50px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="sell"] .sell-sale-item {
+  gap:calc(7px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="logs"] .logs-header-meta,
+#app.minimal-mode[data-page="logs"] #logsRefreshButton,
+#app.minimal-mode[data-page="logs"] .logs-side-column,
+#app.minimal-mode[data-page="logs"] .logs-description small,
+#app.minimal-mode[data-page="logs"] .logs-table-footer > div:first-child,
+#app.minimal-mode[data-page="logs"] .logs-table-footer > div:last-child {
+  display:none !important;
+}
+#app.minimal-mode[data-page="logs"] .logs-workspace {
+  grid-template-columns:minmax(0,1fr) !important;
+}
+#app.minimal-mode[data-page="logs"] .logs-table-footer {
+  justify-content:center !important;
+}
+#app.minimal-mode[data-page="logs"] .logs-row {
+  cursor:default !important;
+}
+#app.minimal-mode[data-page="logs"] .logs-row.selected {
+  background:transparent !important;
+  box-shadow:none !important;
+}
+#app.minimal-mode[data-page="logs"] .logs-toolbar {
+  grid-template-columns:minmax(220px,1fr) auto auto auto !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-header-meta,
+#app.minimal-mode[data-page="storage"] .storage-table-footer,
+#app.minimal-mode[data-page="storage"] .storage-table-head > div:nth-child(2),
+#app.minimal-mode[data-page="storage"] .storage-table-head > div:nth-child(6),
+#app.minimal-mode[data-page="storage"] .storage-row > div:nth-child(2),
+#app.minimal-mode[data-page="storage"] .storage-row > div:nth-child(6),
+#app.minimal-mode[data-page="storage"] .storage-item-sub,
+#app.minimal-mode[data-page="storage"] .storage-found-badge,
+#app.minimal-mode[data-page="storage"] .storage-detail-tabs,
+#app.minimal-mode[data-page="storage"] #storageInfoPanel,
+#app.minimal-mode[data-page="storage"] .storage-auto-note,
+#app.minimal-mode[data-page="storage"] .storage-total-card,
+#app.minimal-mode[data-page="storage"] #storageDetailType,
+#app.minimal-mode[data-page="storage"] .storage-location-icon {
+  display:none !important;
+}
+#app.minimal-mode[data-page="storage"] .storage-table-card {
+  grid-template-rows:calc(46px * var(--ui-scale)) minmax(0,1fr) !important;
+}
+#app.minimal-mode[data-page="storage"] .storage-table-head,
+#app.minimal-mode[data-page="storage"] .storage-row {
+  grid-template-columns:minmax(240px,1.65fr) minmax(80px,.40fr) minmax(125px,.70fr) minmax(145px,.80fr) !important;
+}
+#app.minimal-mode[data-page="storage"] .storage-workspace {
+  grid-template-columns:minmax(0,2.7fr) minmax(calc(270px * var(--ui-scale)),.78fr) !important;
+}
+#app.minimal-mode[data-page="storage"] .storage-item-cell {
+  gap:calc(11px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="storage"] #storageDistributionPanel {
+  display:block !important;
+}
+#app.minimal-mode[data-page="storage"] .storage-location-row {
+  grid-template-columns:minmax(0,1fr) auto !important;
+  padding-left:calc(13px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="marketplace"] .marketplace-header-meta,
+#app.minimal-mode[data-page="marketplace"] .marketplace-summary-chip,
+#app.minimal-mode[data-page="marketplace"] .marketplace-card-avatar,
+#app.minimal-mode[data-page="marketplace"] .marketplace-premium-badge,
+#app.minimal-mode[data-page="marketplace"] .marketplace-card-stats,
+#app.minimal-mode[data-page="marketplace"] .marketplace-card-meta > div:nth-child(2),
+#app.minimal-mode[data-page="marketplace"] .marketplace-card-view,
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-avatar,
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-summary small,
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-meta span:last-child,
+#app.minimal-mode[data-page="marketplace"] .marketplace-result-column > header > strong,
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-column > header > span {
+  display:none !important;
+}
+#app.minimal-mode[data-page="marketplace"] .page-header {
+  min-height:calc(86px * var(--ui-scale)) !important;
+  height:calc(86px * var(--ui-scale)) !important;
+  padding:calc(10px * var(--ui-scale)) calc(18px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .content {
+  grid-template-rows:calc(86px * var(--ui-scale)) auto minmax(0,1fr) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-dev-warning {
+  width:min(calc(560px * var(--ui-scale)),58%) !important;
+  font-size:calc(11.5px * var(--ui-scale)) !important;
+  line-height:1.25 !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-toolbar {
+  grid-template-columns:auto minmax(260px,1fr) calc(190px * var(--ui-scale)) calc(130px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-card {
+  min-height:calc(92px * var(--ui-scale)) !important;
+  display:block !important;
+  padding:calc(13px * var(--ui-scale)) calc(15px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-card.minimal-card-action {
+  cursor:pointer !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-card.minimal-card-action:focus-visible {
+  outline:2px solid #42dca0 !important;
+  outline-offset:2px !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-card-owner {
+  margin-top:calc(8px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-card-meta {
+  justify-content:flex-start !important;
+  margin-top:calc(8px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-offer-main,
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-item-main {
+  gap:calc(9px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-head {
+  min-height:calc(68px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-summary h2 {
+  margin:0 0 calc(5px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="mods"] .mods-cycle-stats,
+#app.minimal-mode[data-page="mods"] .mods-cycle-status:not(.active),
+#app.minimal-mode[data-page="mods"] .mods-community-card {
+  display:none !important;
+}
+#app.minimal-mode[data-page="mods"] .mods-grid {
+  gap:calc(8px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="mods"] .mods-card-head {
+  min-height:calc(48px * var(--ui-scale)) !important;
+  padding:calc(10px * var(--ui-scale)) calc(18px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="mods"] .mods-card-head h2 {
+  font-size:calc(17px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="mods"] .mods-control-row {
+  min-height:calc(56px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="mods"] .mods-cycle-status.active {
+  margin-top:calc(12px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode:not([data-page="settings"]) .avg-price-tooltip {
+  display:none !important;
+}
+
+
+/* v69 minimal mode final density fixes. Settings intentionally remain untouched. */
+#app.minimal-mode:not([data-page="settings"]) .search-wrap kbd,
+#app.minimal-mode:not([data-page="settings"]) .logs-search-wrap kbd,
+#app.minimal-mode:not([data-page="settings"]) .storage-search-wrap kbd,
+#app.minimal-mode:not([data-page="settings"]) .marketplace-search-wrap kbd,
+#app.minimal-mode:not([data-page="settings"]) .detail-empty small,
+#app.minimal-mode:not([data-page="settings"]) .modal-head p {
+  display:none !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-detail-top {
+  grid-template-columns:calc(66px * var(--ui-scale)) minmax(0,1fr) !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+}
+#app.minimal-mode[data-page="storage"] .storage-detail-top h3 {
+  font-size:calc(16px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="marketplace"] .marketplace-shop-card.premium {
+  border-color:#314b5f !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025) !important;
+}
+
+#app.minimal-mode[data-page="mods"] .mods-performance-card,
+#app.minimal-mode[data-page="mods"] .mods-cycle-card {
+  background:#0c1923 !important;
+}
+
+
+/* v70: minimalism selector uses the same segmented control as HTML/Lua. */
+#app[data-page] .minimal-mode-switch {
+  flex-shrink:0 !important;
+}
+#app[data-page] .window[data-ui-density="tiny"] .minimal-mode-switch .mode-btn {
+  min-width:calc(74px * var(--ui-scale)) !important;
+  padding:0 calc(9px * var(--ui-scale)) !important;
+  font-size:calc(11.5px * var(--ui-scale)) !important;
+}
+
+
+/* v88: minimal mode removes the large page hero completely. */
+#app.minimal-mode:not([data-page="settings"]) .page-header {
+  display:none !important;
+}
+#app.minimal-mode[data-page="marketplace"] .content,
+#app.minimal-mode[data-page="storage"] .content {
+  grid-template-rows:auto minmax(0,1fr) !important;
+}
+#app.minimal-mode[data-page="mods"] .content {
+  grid-template-rows:minmax(0,1fr) !important;
+}

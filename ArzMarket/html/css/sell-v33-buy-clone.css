@@ -1,0 +1,622 @@
+/* ArzMarket HTML v33: Sell uses the Buy visual system.
+   Keep only Sell-specific data/controls: inventory, sell list, inline edit, scan and start. */
+
+/* Buy and Sell must share the exact same page rhythm. */
+#app[data-page="sell"] .content {
+  padding:calc(16px * var(--ui-scale)) !important;
+  gap:calc(10px * var(--ui-scale)) !important;
+  background:radial-gradient(circle at 50% -22%,rgba(81,132,181,.09),transparent 42%),#0b1721 !important;
+}
+#app[data-page="sell"] .page-header {
+  min-height:calc(123px * var(--ui-scale)) !important;
+  height:calc(123px * var(--ui-scale)) !important;
+  padding:calc(17px * var(--ui-scale)) calc(27px * var(--ui-scale)) !important;
+  gap:calc(19px * var(--ui-scale)) !important;
+  border:1px solid #4a6275 !important;
+  border-radius:calc(14px * var(--ui-scale)) !important;
+  background:radial-gradient(circle at 44% -80%,rgba(124,166,209,.21),transparent 52%),linear-gradient(108deg,#1b2e40 0%,#142332 63%,#192b3e 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045) !important;
+}
+#app[data-page="sell"] .page-header-icon {
+  width:calc(72px * var(--ui-scale)) !important;
+  height:calc(72px * var(--ui-scale)) !important;
+  flex:none !important;
+  border:1px solid var(--am-accent-medium) !important;
+  border-radius:calc(12px * var(--ui-scale)) !important;
+  background-color:var(--am-accent-soft) !important;
+  box-shadow:inset 0 0 calc(26px * var(--ui-scale)) var(--am-accent-soft),0 0 calc(17px * var(--ui-scale)) var(--am-accent-glow) !important;
+}
+#app[data-page="sell"] .page-header-icon svg {
+  display:block !important;
+  width:calc(40px * var(--ui-scale)) !important;
+  height:calc(40px * var(--ui-scale)) !important;
+  color:var(--am-accent-2) !important;
+}
+#app[data-page="sell"] .page-header-copy { min-width:calc(295px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .page-header h1 {
+  font-size:calc(31px * var(--ui-scale)) !important;
+  line-height:1.04 !important;
+  font-weight:760 !important;
+  color:#f5f8fb !important;
+}
+#app[data-page="sell"] .page-header p {
+  margin-top:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  color:#b9c7d5 !important;
+}
+#app[data-page="sell"] .page-header-meta {
+  margin-left:auto !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .config-label {
+  flex-direction:row !important;
+  align-items:center !important;
+  gap:calc(10px * var(--ui-scale)) !important;
+  color:#aebdcc !important;
+  font-size:calc(12px * var(--ui-scale)) !important;
+  text-transform:none !important;
+  letter-spacing:0 !important;
+}
+#app[data-page="sell"] .config-caption { white-space:nowrap !important; font-size:calc(11px * var(--ui-scale)) !important; color:#c1ccd7 !important; }
+#app[data-page="sell"] .select,
+#app[data-page="sell"] .config-select-trigger {
+  width:calc(220px * var(--ui-scale)) !important;
+  height:calc(44px * var(--ui-scale)) !important;
+  padding:0 calc(32px * var(--ui-scale)) 0 calc(14px * var(--ui-scale)) !important;
+  border:1px solid #4d6577 !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  color:#e6ecf2 !important;
+  background:#0d1822 !important;
+}
+#app[data-page="sell"] .badge {
+  min-height:calc(44px * var(--ui-scale)) !important;
+  padding:0 calc(16px * var(--ui-scale)) !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  font-weight:650 !important;
+}
+#app[data-page="sell"] .badge-success {
+  color:#a4f6cf !important;
+  border-color:rgba(76,229,162,.65) !important;
+  background:linear-gradient(180deg,rgba(35,190,119,.29),rgba(24,137,87,.15)) !important;
+}
+#app[data-page="sell"] .save-state {
+  min-width:calc(180px * var(--ui-scale)) !important;
+  height:auto !important;
+  position:relative !important;
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:flex-start !important;
+  gap:calc(2px * var(--ui-scale)) !important;
+  padding-left:calc(14px * var(--ui-scale)) !important;
+  color:#c1ceda !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .save-state::before {
+  content:"" !important;
+  position:absolute !important;
+  left:0 !important;
+  top:calc(4px * var(--ui-scale)) !important;
+  width:calc(9px * var(--ui-scale)) !important;
+  height:calc(9px * var(--ui-scale)) !important;
+  border-radius:50% !important;
+  background:#36dd95 !important;
+  box-shadow:0 0 calc(9px * var(--ui-scale)) rgba(54,221,149,.72) !important;
+}
+#app[data-page="sell"] .save-state::after {
+  content:"Изменения сохраняются автоматически" !important;
+  margin-top:calc(3px * var(--ui-scale)) !important;
+  color:#94a7b8 !important;
+  font-size:calc(10px * var(--ui-scale)) !important;
+  white-space:nowrap !important;
+}
+#app[data-page="sell"] .page-header-hint {
+  flex:none !important;
+  width:calc(175px * var(--ui-scale)) !important;
+  margin-left:calc(4px * var(--ui-scale)) !important;
+  color:#b5c3d1 !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  line-height:1.42 !important;
+}
+#app[data-page="sell"] .hero-watermark {
+  right:calc(17px * var(--ui-scale)) !important;
+  top:calc(-44px * var(--ui-scale)) !important;
+  font-size:calc(175px * var(--ui-scale)) !important;
+  opacity:.13 !important;
+  color:rgba(72,126,181,.10) !important;
+  filter:hue-rotate(9deg) saturate(.48) brightness(.83) contrast(1.04) !important;
+}
+
+/* The exact Buy toolbar is reused on Sell. Only the second action changes to inventory scan. */
+#app[data-page="sell"] .toolbar {
+  display:flex !important;
+  flex:none !important;
+  position:relative !important;
+  overflow:visible !important;
+  height:calc(74px * var(--ui-scale)) !important;
+  padding:calc(9px * var(--ui-scale)) calc(11px * var(--ui-scale)) !important;
+  gap:calc(11px * var(--ui-scale)) !important;
+  align-items:center !important;
+  border:1px solid #465e71 !important;
+  border-radius:calc(12px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#152634,#101d29) !important;
+}
+#app[data-page="sell"] .search-wrap {
+  height:calc(46px * var(--ui-scale)) !important;
+  min-width:calc(240px * var(--ui-scale)) !important;
+  max-width:calc(500px * var(--ui-scale)) !important;
+  flex:1 1 calc(500px * var(--ui-scale)) !important;
+  padding:0 calc(14px * var(--ui-scale)) !important;
+  border:1px solid #4b6376 !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#152633,#101e29) !important;
+}
+#app[data-page="sell"] .search-wrap input {
+  font-size:calc(13px * var(--ui-scale)) !important;
+  color:#e4ebf1 !important;
+}
+#app[data-page="sell"] .search-wrap input::placeholder { color:#9eb0c1 !important; }
+#app[data-page="sell"] kbd { font-size:calc(10px * var(--ui-scale)) !important; color:#afc0d0 !important; border-color:#4b6275 !important; }
+#app[data-page="sell"] .toolbar .btn,
+#app[data-page="sell"] .toolbar .more-actions > summary {
+  height:calc(46px * var(--ui-scale)) !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  font-weight:650 !important;
+}
+#app[data-page="sell"] .toolbar .btn-secondary,
+#app[data-page="sell"] .toolbar .more-actions > summary {
+  border-color:#4b6376 !important;
+  background:linear-gradient(180deg,#152633,#101e29) !important;
+  color:#e0e7ed !important;
+}
+#app[data-page="sell"] #addButton { min-width:calc(150px * var(--ui-scale)) !important; }
+#app[data-page="sell"] #sellScanMainButton { min-width:calc(190px * var(--ui-scale)) !important; }
+#app[data-page="sell"] #tradeFilterButton { min-width:calc(140px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .more-actions > summary {
+  min-width:calc(56px * var(--ui-scale)) !important;
+  width:calc(56px * var(--ui-scale)) !important;
+  padding:0 !important;
+  font-size:0 !important;
+}
+#app[data-page="sell"] .more-actions > summary::after {
+  content:"•••" !important;
+  font-size:calc(15px * var(--ui-scale)) !important;
+  letter-spacing:2px !important;
+  color:#c1cddd !important;
+}
+#app[data-page="sell"] #startButton {
+  min-width:calc(280px * var(--ui-scale)) !important;
+  max-width:calc(320px * var(--ui-scale)) !important;
+  width:100% !important;
+  margin-left:auto !important;
+  font-size:calc(15.5px * var(--ui-scale)) !important;
+  font-weight:750 !important;
+  color:#f7fff9 !important;
+  border-color:var(--am-accent-medium) !important;
+  background:linear-gradient(180deg,var(--am-accent-2) 0%,var(--am-accent) 54%,var(--am-accent-dark) 100%) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.34),inset 0 -1px 0 rgba(0,0,0,.14),0 0 calc(24px * var(--ui-scale)) var(--am-accent-glow) !important;
+}
+#app[data-page="sell"] #sellScanMainButton.active-action {
+  color:var(--am-accent-2) !important;
+  border-color:var(--am-accent-medium) !important;
+  background:linear-gradient(180deg,var(--am-accent-medium),var(--am-accent-soft)) !important;
+}
+
+/* No separate Sell information card. Two Buy-style cards fill the whole workspace. */
+#app[data-page="sell"] .workspace { display:none !important; }
+#app[data-page="sell"] .sell-workspace {
+  flex:1 !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  display:grid !important;
+  grid-template-columns:minmax(calc(330px * var(--ui-scale)), .72fr) minmax(calc(610px * var(--ui-scale)), 1.55fr) !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-panel {
+  min-width:0 !important;
+  min-height:0 !important;
+  display:flex !important;
+  flex-direction:column !important;
+  overflow:hidden !important;
+  border:1px solid #425a6c !important;
+  border-radius:calc(13px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#101e2a,#0c1822) !important;
+  box-shadow:none !important;
+}
+#app[data-page="sell"] .sell-card-head.sell-clone-titlebar {
+  min-height:calc(50px * var(--ui-scale)) !important;
+  height:calc(50px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  display:flex !important;
+  align-items:center !important;
+  border:0 !important;
+  border-bottom:1px solid #536b7d !important;
+  background:linear-gradient(180deg,#192c3c,#152635) !important;
+}
+#app[data-page="sell"] .sell-card-head.sell-clone-titlebar h2 {
+  margin:0 !important;
+  font-size:calc(14.5px * var(--ui-scale)) !important;
+  line-height:1 !important;
+  font-weight:700 !important;
+  color:#f2f6f9 !important;
+}
+
+/* Inventory rows are the same size and hierarchy as Buy trade rows. */
+#app[data-page="sell"] .sell-inventory-list,
+#app[data-page="sell"] .sell-sale-list {
+  flex:1 !important;
+  min-height:0 !important;
+  overflow:auto !important;
+  scrollbar-width:thin !important;
+  scrollbar-color:#30485a #0b1721 !important;
+}
+#app[data-page="sell"] .sell-inventory-list::-webkit-scrollbar,
+#app[data-page="sell"] .sell-sale-list::-webkit-scrollbar { width:calc(6px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .sell-inventory-list::-webkit-scrollbar-thumb,
+#app[data-page="sell"] .sell-sale-list::-webkit-scrollbar-thumb { background:#30485a !important; border-radius:999px !important; }
+#app[data-page="sell"] .sell-inventory-row {
+  min-height:calc(66px * var(--ui-scale)) !important;
+  display:grid !important;
+  grid-template-columns:calc(48px * var(--ui-scale)) minmax(0,1fr) auto calc(40px * var(--ui-scale)) !important;
+  align-items:center !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  border:0 !important;
+  border-bottom:1px solid #2a3e4d !important;
+  border-radius:0 !important;
+  background:transparent !important;
+  color:#d4dee6 !important;
+  cursor:pointer !important;
+}
+#app[data-page="sell"] .sell-inventory-row:hover { background:#142634 !important; }
+#app[data-page="sell"] .sell-inventory-row.selected {
+  background:linear-gradient(90deg,rgba(62,137,211,.40),rgba(46,102,161,.15)) !important;
+  box-shadow:inset calc(3px * var(--ui-scale)) 0 0 #70b7ff,inset 0 0 calc(32px * var(--ui-scale)) rgba(75,146,214,.07) !important;
+}
+#app[data-page="sell"] .sell-inventory-thumb-box,
+#app[data-page="sell"] .sell-sale-thumb-box {
+  width:calc(48px * var(--ui-scale)) !important;
+  height:calc(48px * var(--ui-scale)) !important;
+  display:grid !important;
+  place-items:center !important;
+  overflow:hidden !important;
+  border:1px solid #475f71 !important;
+  border-radius:calc(9px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#192b39,#12212d) !important;
+}
+#app[data-page="sell"] .sell-inventory-thumb,
+#app[data-page="sell"] .sell-sale-thumb {
+  width:calc(44px * var(--ui-scale)) !important;
+  height:calc(44px * var(--ui-scale)) !important;
+  object-fit:contain !important;
+}
+#app[data-page="sell"] .sell-inventory-copy {
+  min-width:0 !important;
+  min-height:0 !important;
+  display:flex !important;
+  align-items:center !important;
+}
+#app[data-page="sell"] .sell-inventory-name,
+#app[data-page="sell"] .sell-sale-name {
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
+  font-size:calc(14.5px * var(--ui-scale)) !important;
+  font-weight:620 !important;
+  color:#f5f7fa !important;
+}
+#app[data-page="sell"] .sell-inventory-count {
+  min-width:calc(28px * var(--ui-scale)) !important;
+  font-size:calc(13.5px * var(--ui-scale)) !important;
+  color:#d7e0e8 !important;
+  text-align:right !important;
+}
+#app[data-page="sell"] .sell-inventory-add {
+  width:calc(40px * var(--ui-scale)) !important;
+  height:calc(40px * var(--ui-scale)) !important;
+  display:grid !important;
+  place-items:center !important;
+  padding:0 !important;
+  border:1px solid #4b6376 !important;
+  border-radius:calc(8px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#172b3a,#11202c) !important;
+  color:#e7eff5 !important;
+  font-size:0 !important;
+}
+#app[data-page="sell"] .sell-inventory-add::before {
+  content:"+" !important;
+  font-size:calc(25px * var(--ui-scale)) !important;
+  line-height:1 !important;
+  font-weight:350 !important;
+  color:#dce8f0 !important;
+}
+#app[data-page="sell"] .sell-inventory-add:hover:not(:disabled) {
+  border-color:#5d7a91 !important;
+  background:linear-gradient(180deg,#1c3546,#142635) !important;
+}
+#app[data-page="sell"] .sell-inventory-add.added {
+  border-color:rgba(54,221,149,.52) !important;
+  background:rgba(28,185,112,.12) !important;
+}
+#app[data-page="sell"] .sell-inventory-add.added::before { color:var(--am-accent-2) !important; }
+
+/* Sell table copies Buy table geometry, with inline fields kept because Sell has no details card. */
+#app[data-page="sell"] .sell-table-head,
+#app[data-page="sell"] .sell-sale-row {
+  display:grid !important;
+  grid-template-columns:minmax(calc(220px * var(--ui-scale)),2.25fr) minmax(calc(128px * var(--ui-scale)),1.02fr) minmax(calc(82px * var(--ui-scale)),.65fr) minmax(calc(78px * var(--ui-scale)),.66fr) calc(82px * var(--ui-scale)) calc(42px * var(--ui-scale)) !important;
+  column-gap:calc(8px * var(--ui-scale)) !important;
+  align-items:center !important;
+}
+#app[data-page="sell"] .sell-table-head {
+  flex:none !important;
+  min-height:calc(50px * var(--ui-scale)) !important;
+  height:calc(50px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  border-bottom:1px solid #536b7d !important;
+  background:linear-gradient(180deg,#192c3c,#152635) !important;
+  color:#d8e2eb !important;
+}
+#app[data-page="sell"] .sell-table-head button {
+  min-width:0 !important;
+  padding:0 !important;
+  border:0 !important;
+  background:transparent !important;
+  color:#d8e2eb !important;
+  font:inherit !important;
+  font-size:calc(12.5px * var(--ui-scale)) !important;
+  font-weight:610 !important;
+  text-align:left !important;
+  cursor:pointer !important;
+}
+#app[data-page="sell"] .sell-table-head button span { color:#86a0b6 !important; }
+#app[data-page="sell"] .sell-table-head button.active { color:#7cf0bb !important; }
+#app[data-page="sell"] .sell-sale-row {
+  min-height:calc(66px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  border:0 !important;
+  border-bottom:1px solid #2a3e4d !important;
+  background:transparent !important;
+  color:#d4dee6 !important;
+  font-size:calc(13px * var(--ui-scale)) !important;
+  cursor:pointer !important;
+}
+#app[data-page="sell"] .sell-sale-row:hover { background:#142634 !important; }
+#app[data-page="sell"] .sell-sale-row.selected {
+  background:linear-gradient(90deg,rgba(62,137,211,.40),rgba(46,102,161,.15)) !important;
+  box-shadow:inset calc(3px * var(--ui-scale)) 0 0 #70b7ff,inset 0 0 calc(32px * var(--ui-scale)) rgba(75,146,214,.07) !important;
+}
+#app[data-page="sell"] .sell-sale-row.disabled-row { opacity:.56 !important; }
+#app[data-page="sell"] .sell-sale-item {
+  min-width:0 !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-copy { min-width:0 !important; }
+#app[data-page="sell"] .sell-sale-kind {
+  margin-top:calc(4px * var(--ui-scale)) !important;
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
+  font-size:calc(11px * var(--ui-scale)) !important;
+  color:#aebdcc !important;
+}
+#app[data-page="sell"] .sell-sale-input-cell {
+  min-width:0 !important;
+  height:calc(38px * var(--ui-scale)) !important;
+  display:flex !important;
+  align-items:center !important;
+  overflow:hidden !important;
+  border:1px solid #3d566a !important;
+  border-radius:calc(7px * var(--ui-scale)) !important;
+  background:linear-gradient(180deg,#152735,#10202c) !important;
+}
+#app[data-page="sell"] .sell-inline-prefix {
+  flex:none !important;
+  padding-left:calc(10px * var(--ui-scale)) !important;
+  font-size:calc(12px * var(--ui-scale)) !important;
+  color:#b9c9d6 !important;
+}
+#app[data-page="sell"] .sell-inline-input {
+  min-width:0 !important;
+  width:100% !important;
+  height:calc(36px * var(--ui-scale)) !important;
+  padding:0 calc(8px * var(--ui-scale)) !important;
+  border:1px solid #3d566a !important;
+  border-radius:calc(7px * var(--ui-scale)) !important;
+  outline:none !important;
+  background:linear-gradient(180deg,#152735,#10202c) !important;
+  color:#f0f4f7 !important;
+  font-size:calc(12.5px * var(--ui-scale)) !important;
+  font-family:inherit !important;
+}
+#app[data-page="sell"] .sell-price-cell .sell-inline-input {
+  height:100% !important;
+  border:0 !important;
+  border-radius:0 !important;
+  background:transparent !important;
+}
+#app[data-page="sell"] .sell-inline-input:focus,
+#app[data-page="sell"] .sell-sale-input-cell:focus-within {
+  border-color:#4a8bc2 !important;
+  box-shadow:0 0 0 1px rgba(70,145,207,.16) !important;
+}
+#app[data-page="sell"] .sell-sale-remaining {
+  font-size:calc(13.5px * var(--ui-scale)) !important;
+  color:var(--am-accent-2) !important;
+}
+#app[data-page="sell"] .sell-sale-status {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+}
+#app[data-page="sell"] .toggle {
+  width:calc(46px * var(--ui-scale)) !important;
+  height:calc(25px * var(--ui-scale)) !important;
+  border-color:#587184 !important;
+}
+#app[data-page="sell"] .toggle::after {
+  width:calc(17px * var(--ui-scale)) !important;
+  height:calc(17px * var(--ui-scale)) !important;
+  background:#e6eef4 !important;
+}
+#app[data-page="sell"] .toggle.on::after { transform:translateX(calc(21px * var(--ui-scale))) !important; }
+#app[data-page="sell"] .sell-sale-trash {
+  width:calc(40px * var(--ui-scale)) !important;
+  height:calc(40px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-sale-trash::before {
+  width:calc(18px * var(--ui-scale)) !important;
+  height:calc(18px * var(--ui-scale)) !important;
+}
+
+/* Same category blocks as Buy. */
+#app[data-page="sell"] .category-group-header {
+  min-height:calc(28px * var(--ui-scale)) !important;
+  padding:0 calc(10px * var(--ui-scale)) !important;
+}
+
+/* Buy-like compact footer instead of the old large Sell statistics block. */
+#app[data-page="sell"] .sell-summary.sell-clone-footer {
+  flex:none !important;
+  min-height:calc(42px * var(--ui-scale)) !important;
+  height:calc(42px * var(--ui-scale)) !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:flex-end !important;
+  gap:calc(18px * var(--ui-scale)) !important;
+  padding:0 calc(18px * var(--ui-scale)) !important;
+  border:0 !important;
+  border-top:1px solid #455d6f !important;
+  background:linear-gradient(180deg,#13222f,#101c27) !important;
+  color:#c8d4df !important;
+  font-size:calc(11.5px * var(--ui-scale)) !important;
+  white-space:nowrap !important;
+}
+#app[data-page="sell"] .sell-summary.sell-clone-footer strong { color:#64e8aa !important; font-weight:700 !important; }
+#app[data-page="sell"] .sell-mini-empty {
+  position:absolute !important;
+  inset:calc(50px * var(--ui-scale)) 0 0 0 !important;
+  display:grid !important;
+  place-items:center !important;
+  padding:calc(24px * var(--ui-scale)) !important;
+  color:#7f93a3 !important;
+  font-size:calc(12px * var(--ui-scale)) !important;
+  pointer-events:none !important;
+}
+#app[data-page="sell"] .sell-mini-empty.hidden { display:none !important; }
+#app[data-page="sell"] .sell-panel { position:relative !important; }
+
+/* Keep the same density breakpoints as Buy instead of a separate Sell scale. */
+#app[data-page="sell"] .window[data-ui-density="compact"] .page-header {
+  min-height:calc(108px * var(--ui-scale)) !important;
+  height:calc(108px * var(--ui-scale)) !important;
+  padding-left:calc(20px * var(--ui-scale)) !important;
+  padding-right:calc(20px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="compact"] .page-header-hint,
+#app[data-page="sell"] .window[data-ui-density="compact"] .save-state::after { display:none !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] .page-header-copy { min-width:calc(245px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] .toolbar {
+  height:calc(66px * var(--ui-scale)) !important;
+  gap:calc(8px * var(--ui-scale)) !important;
+  padding:calc(8px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="compact"] .toolbar .btn,
+#app[data-page="sell"] .window[data-ui-density="compact"] .toolbar .more-actions > summary,
+#app[data-page="sell"] .window[data-ui-density="compact"] .search-wrap { height:calc(42px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] #addButton { min-width:calc(120px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] #sellScanMainButton { min-width:calc(145px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] #tradeFilterButton { min-width:calc(105px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] #startButton { min-width:calc(190px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-workspace {
+  grid-template-columns:minmax(calc(285px * var(--ui-scale)), .68fr) minmax(calc(480px * var(--ui-scale)), 1.5fr) !important;
+  gap:calc(10px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-table-head,
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-sale-row {
+  grid-template-columns:minmax(calc(170px * var(--ui-scale)),2fr) minmax(calc(102px * var(--ui-scale)),.95fr) calc(72px * var(--ui-scale)) calc(65px * var(--ui-scale)) calc(70px * var(--ui-scale)) calc(36px * var(--ui-scale)) !important;
+}
+
+#app[data-page="sell"] .window[data-ui-density="tiny"] .page-header {
+  min-height:calc(92px * var(--ui-scale)) !important;
+  height:calc(92px * var(--ui-scale)) !important;
+  padding:calc(12px * var(--ui-scale)) calc(15px * var(--ui-scale)) !important;
+  gap:calc(12px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .page-header-icon {
+  width:calc(58px * var(--ui-scale)) !important;
+  height:calc(58px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .page-header h1 { font-size:calc(26px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .page-header-hint,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .save-state { display:none !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .config-label { display:none !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .toolbar {
+  height:calc(60px * var(--ui-scale)) !important;
+  gap:calc(6px * var(--ui-scale)) !important;
+  padding:calc(7px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .search-wrap { min-width:0 !important; height:calc(40px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .toolbar .btn,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .toolbar .more-actions > summary { height:calc(40px * var(--ui-scale)) !important; min-width:calc(44px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] #sellScanMainButton { min-width:calc(115px * var(--ui-scale)) !important; font-size:calc(10.5px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] #tradeFilterButton { width:calc(46px * var(--ui-scale)) !important; min-width:calc(46px * var(--ui-scale)) !important; padding:0 !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] #tradeFilterButton > span:last-child { display:none !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] #startButton { min-width:calc(145px * var(--ui-scale)) !important; max-width:calc(180px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-workspace {
+  grid-template-columns:minmax(calc(230px * var(--ui-scale)), .65fr) minmax(calc(390px * var(--ui-scale)), 1.48fr) !important;
+  gap:calc(8px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-card-head.sell-clone-titlebar,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-table-head { min-height:calc(43px * var(--ui-scale)) !important; height:calc(43px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-inventory-row,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-sale-row { min-height:calc(56px * var(--ui-scale)) !important; }
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-table-head,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-sale-row {
+  grid-template-columns:minmax(calc(145px * var(--ui-scale)),1.8fr) minmax(calc(90px * var(--ui-scale)),.9fr) calc(62px * var(--ui-scale)) calc(58px * var(--ui-scale)) calc(60px * var(--ui-scale)) calc(32px * var(--ui-scale)) !important;
+}
+
+/* Sell-only quantity control: keep the native "maximum" behavior without restoring the removed details card. */
+#app[data-page="sell"] .sell-table-head,
+#app[data-page="sell"] .sell-sale-row {
+  grid-template-columns:minmax(calc(220px * var(--ui-scale)),2.25fr) minmax(calc(128px * var(--ui-scale)),1.02fr) minmax(calc(118px * var(--ui-scale)),.92fr) minmax(calc(78px * var(--ui-scale)),.66fr) calc(82px * var(--ui-scale)) calc(42px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .sell-count-cell {
+  min-width:0 !important;
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) auto !important;
+  gap:calc(5px * var(--ui-scale)) !important;
+  align-items:center !important;
+}
+#app[data-page="sell"] .sell-max-toggle {
+  height:calc(34px * var(--ui-scale)) !important;
+  min-width:calc(42px * var(--ui-scale)) !important;
+  padding:0 calc(6px * var(--ui-scale)) !important;
+  border:1px solid #3d566a !important;
+  border-radius:calc(6px * var(--ui-scale)) !important;
+  background:#11212d !important;
+  color:#8ea3b4 !important;
+  font:inherit !important;
+  font-size:calc(9.5px * var(--ui-scale)) !important;
+  cursor:pointer !important;
+}
+#app[data-page="sell"] .sell-max-toggle.active {
+  color:#7cf0bb !important;
+  border-color:rgba(54,221,153,.55) !important;
+  background:rgba(28,185,112,.14) !important;
+}
+#app[data-page="sell"] .sell-max-toggle:disabled { opacity:.45 !important; cursor:default !important; }
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-table-head,
+#app[data-page="sell"] .window[data-ui-density="compact"] .sell-sale-row {
+  grid-template-columns:minmax(calc(170px * var(--ui-scale)),2fr) minmax(calc(102px * var(--ui-scale)),.95fr) minmax(calc(102px * var(--ui-scale)),.86fr) calc(65px * var(--ui-scale)) calc(70px * var(--ui-scale)) calc(36px * var(--ui-scale)) !important;
+}
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-table-head,
+#app[data-page="sell"] .window[data-ui-density="tiny"] .sell-sale-row {
+  grid-template-columns:minmax(calc(145px * var(--ui-scale)),1.8fr) minmax(calc(90px * var(--ui-scale)),.9fr) minmax(calc(88px * var(--ui-scale)),.82fr) calc(58px * var(--ui-scale)) calc(60px * var(--ui-scale)) calc(32px * var(--ui-scale)) !important;
+}
