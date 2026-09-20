@@ -1,7 +1,0 @@
-/* v205: keep only the Buy autosave text parity fix.
-   Start button parity is handled by v204 using the original Sell geometry. */
-#app[data-page="buy"] .save-state,
-#app[data-page="buy"] .window[data-ui-density="compact"] .save-state,
-#app[data-page="buy"] .window[data-ui-density="tiny"] .page-header-meta .save-state {
-  font-size: calc(10.5px * var(--ui-scale)) !important;
-}
