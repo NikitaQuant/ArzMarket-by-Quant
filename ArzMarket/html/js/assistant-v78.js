@@ -158,7 +158,7 @@
 
     const promoStyle = document.createElement('style');
     promoStyle.textContent = `
-      .baron-promo-backdrop { position:fixed; inset:0; z-index:2147483600; display:flex; align-items:center; justify-content:center; background:rgba(4, 8, 14, .78); backdrop-filter:blur(2px); }
+      .baron-promo-backdrop { position:fixed; inset:0; z-index:2147483600; display:flex; align-items:center; justify-content:center; background:rgba(4, 8, 14, .86); }
       .baron-promo-backdrop.hidden { display:none; }
       .baron-promo-card { width:min(740px, calc(100vw - 16px)); height:min(960px, calc(100vh - 16px)); background:transparent url('/static/assets/baron/promo_panel.png?v=103') center/100% 100% no-repeat; border:0; border-radius:0; box-shadow:none; padding:72px 70px 58px; box-sizing:border-box; display:flex; flex-direction:column; }
       .baron-promo-body { flex:1 1 auto; min-height:0; overflow:auto; padding:2px 10px 0 4px; scrollbar-width:thin; }
@@ -818,8 +818,8 @@
     }
 
     function tick(ts) {
-      raf = requestAnimationFrame(tick);
-      if (!snapshot?.active) return;
+      raf = 0;
+      if (!snapshot?.active || document.visibilityState === 'hidden') return;
 
       if (snapshot.messageVisible !== false) {
         if (!lastTypeAt) lastTypeAt = ts;
@@ -836,6 +836,18 @@
       updateChoiceNoButtonState(ts);
       updateMotionTarget(ts);
       animateMotion(ts);
+      raf = requestAnimationFrame(tick);
+    }
+
+    function startTicking() {
+      if (!raf && snapshot?.active && document.visibilityState !== 'hidden') {
+        raf = requestAnimationFrame(tick);
+      }
+    }
+
+    function stopTicking() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
     }
 
     function render(next) {
@@ -846,6 +858,7 @@
       if (snapshot.step) app?.setAttribute('data-baron-step', String(snapshot.step));
       else app?.removeAttribute('data-baron-step');
       if (!snapshot.active) {
+        stopTicking();
         root.classList.add('hidden');
         mascot.classList.add('hidden');
         promoBackdrop.classList.add('hidden');
@@ -915,9 +928,13 @@
       if (snapshot.messageVisible !== false) applyBubbleMetrics();
       renderActions();
       updateMotionTarget(performance.now());
+      startTicking();
     }
 
-    raf = requestAnimationFrame(tick);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') stopTicking();
+      else startTicking();
+    });
     window.addEventListener('resize', () => {
       if (snapshot?.active && snapshot.messageVisible !== false) applyBubbleMetrics();
       updateMotionTarget(performance.now());
@@ -927,8 +944,9 @@
       render,
       event(name, payload = {}) { return runAction('event', {...payload, name}); },
       resized() { runAction('event', {name:'resize_changed'}); },
+      isAnimating() { return raf !== 0; },
       destroy() {
-        cancelAnimationFrame(raf);
+        stopTicking();
         clearTarget();
         mascot.remove();
         root.remove();

@@ -178,7 +178,7 @@ kbd { padding:2px 6px; border:1px solid #253543; border-radius:5px; background:#
 .field-toggle-row { min-height:34px; display:flex; align-items:center; justify-content:space-between; border:1px solid #213440; border-radius:7px; padding:0 10px; background:#0a131b; color:#91a0aa; font-size:10px; }
 .autosave-note { margin-top:15px; display:flex; align-items:center; gap:8px; padding:10px; border:1px solid rgba(41,213,143,.14); border-radius:8px; background:rgba(41,213,143,.045); color:#6f8f81; font-size:9px; }
 
-.modal-backdrop { position:absolute; inset:0; z-index:20; display:grid; place-items:center; background:rgba(0,0,0,.62); backdrop-filter:blur(2px); }
+.modal-backdrop { position:absolute; inset:0; z-index:20; display:grid; place-items:center; background:rgba(0,0,0,.72); }
 .modal { width:min(620px,calc(100vw - 80px)); height:min(590px,calc(100vh - 80px)); display:flex; flex-direction:column; border:1px solid #2c4251; border-radius:12px; background:#09121a; box-shadow:0 30px 90px rgba(0,0,0,.55); padding:14px; }
 .modal-head { display:flex; align-items:flex-start; justify-content:space-between; padding:3px 4px 12px; }
 .modal h2 { margin:0; font-size:17px; }

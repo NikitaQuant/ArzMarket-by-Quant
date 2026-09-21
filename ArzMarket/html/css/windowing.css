@@ -132,3 +132,28 @@ html.preview-mode #app .window {
   transform:none !important;
 }
 html.preview-mode .game-dim { background:#071018 !important; }
+
+/* Large collections are paint-contained even below the JS windowing threshold. */
+.trade-row,
+.sell-sale-row,
+.sell-inventory-row,
+.storage-row,
+.marketplace-offer-row,
+.marketplace-shop-item,
+.picker-row,
+.global-search-row {
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: auto 60px;
+}
+
+.virtual-list-spacer {
+  display:block !important;
+  flex:0 0 auto !important;
+  width:100% !important;
+  min-height:0 !important;
+  padding:0 !important;
+  margin:0 !important;
+  border:0 !important;
+  pointer-events:none !important;
+}

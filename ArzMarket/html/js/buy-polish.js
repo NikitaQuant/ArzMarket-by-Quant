@@ -227,32 +227,16 @@
     setTimeout(sync, 0);
   }
 
+  // app.js owns all UI renders. An explicit post-render hook avoids keeping six
+  // MutationObservers attached to large, frequently replaced list subtrees.
+  window.__arzMarketBuyPolishSync = scheduleSync;
+
   detailTabs.addEventListener('click', event => {
     const button = event.target.closest('[data-buy-tab]');
     if (!button || !isBuy()) return;
     detailTab = button.dataset.buyTab === 'extra' ? 'extra' : 'main';
     applyDetailTab();
   });
-
-  const tableObserver = new MutationObserver(scheduleSync);
-  tableObserver.observe(tableRows, {subtree: true, childList: true, attributes: true, attributeFilter: ['class']});
-
-  const detailFieldsObserver = new MutationObserver(scheduleSync);
-  detailFieldsObserver.observe(detailFields, {subtree: true, childList: true});
-
-  const detailContentObserver = new MutationObserver(scheduleSync);
-  detailContentObserver.observe(detailContent, {attributes: true, attributeFilter: ['class']});
-
-  const detailHeaderObserver = new MutationObserver(scheduleSync);
-  detailHeaderObserver.observe(detailName, {childList: true, characterData: true, subtree: true});
-
-  if (startButton) {
-    const startObserver = new MutationObserver(scheduleSync);
-    startObserver.observe(startButton, {childList: true, characterData: true, subtree: true});
-  }
-
-  const pageObserver = new MutationObserver(scheduleSync);
-  pageObserver.observe(app, {attributes: true, attributeFilter: ['data-page']});
 
   scheduleSync();
 })();

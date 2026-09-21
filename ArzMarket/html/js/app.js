@@ -46,6 +46,32 @@
     minimalMode: false,
     minimalModeHydrated: false
   };
+  let perfEnabled = urlParams.get('perf') === '1';
+  const perfMetrics = {
+    startedAt: performance.now(), apiRequests: 0, luaToHtmlMessages: 0,
+    htmlToLuaMessages: 0, jsonEncode: 0, jsonDecode: 0,
+    fullRenders: 0, listRenders: 0, totalRenderMs: 0, maxRenderMs: 0
+  };
+  let activeSmoothScrollLoops = 0;
+  window.__ARZMARKET_PERF__ = () => ({
+    enabled: perfEnabled,
+    elapsedMs: Math.round(performance.now() - perfMetrics.startedAt),
+    ...perfMetrics,
+    averageRenderMs: perfMetrics.fullRenders ? Number((perfMetrics.totalRenderMs / perfMetrics.fullRenders).toFixed(3)) : 0,
+    domNodes: document.getElementsByTagName('*').length,
+    activeIntervals: 0,
+    activeAnimationLoops: activeSmoothScrollLoops + (baronAssistantUi?.isAnimating?.() ? 1 : 0)
+  });
+  window.__ARZMARKET_PERF_LUA__ = () => perfEnabled
+    ? api('/api/perf').then(result => result.performance || result)
+    : Promise.resolve({enabled:false});
+  window.__ARZMARKET_PERF_ENABLE__ = enabled => {
+    perfEnabled = enabled === true;
+    perfMetrics.startedAt = performance.now();
+    for (const key of ['apiRequests','luaToHtmlMessages','htmlToLuaMessages','jsonEncode','jsonDecode','fullRenders','listRenders','totalRenderMs','maxRenderMs']) perfMetrics[key] = 0;
+    return perfEnabled;
+  };
+  function perfListRender() { if (perfEnabled) perfMetrics.listRenders += 1; }
 
   // Non-native presets keep the ArzMarket layer hierarchy: neutral dark base,
   // clearly separated panels/surfaces, and theme identity mainly in accents.
@@ -386,6 +412,214 @@
     if (activePopupSelect.anchor?.contains(event.target) || activePopupSelect.menu?.contains(event.target)) return;
     closePopupSelect();
   }, true);
+  // SA-MP cursor compatibility. When a native SA-MP dialog owns the visible
+  // cursor, MoonLoader forwards only events that happen over the ArzMarket
+  // window. Native browser input remains the default path in every other case.
+  const hostInputState = {
+    downTarget:null,
+    lastTrusted:null,
+    lastSynthetic:null,
+    buttonsMask:0,
+    lastTrustedKey:null,
+    lastSyntheticKey:null,
+    lastTrustedText:null,
+    lastSyntheticText:null
+  };
+  function hostInputButtonMask(button) { return button === 0 ? 1 : button === 1 ? 4 : 2; }
+  function hostInputNear(a, b) { return a && b && Math.abs(Number(a.x)-Number(b.x)) <= 3 && Math.abs(Number(a.y)-Number(b.y)) <= 3 && Number(a.button ?? 0) === Number(b.button ?? 0); }
+  function hostInputStamp(type, event) { return {type,x:Number(event?.clientX)||0,y:Number(event?.clientY)||0,button:Number(event?.button)||0,at:performance.now()}; }
+  function hostInputTrustedRecently(type, x, y, button) {
+    const last = hostInputState.lastTrusted;
+    return !!(last && last.type === type && performance.now() - last.at < 80 && hostInputNear(last,{x,y,button}));
+  }
+  ['mousedown','mouseup','click','wheel'].forEach(type => document.addEventListener(type, event => {
+    if (!event.isTrusted) return;
+    const current = hostInputStamp(type,event);
+    const bit = hostInputButtonMask(Number(event.button) || 0);
+    if (type === 'mousedown') hostInputState.buttonsMask |= bit;
+    else if (type === 'mouseup') hostInputState.buttonsMask &= ~bit;
+    const synthetic = hostInputState.lastSynthetic;
+    if (synthetic && synthetic.type === type && performance.now() - synthetic.at < 80 && hostInputNear(synthetic,current)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    hostInputState.lastTrusted = current;
+  }, true));
+  function hostInputKeyCode(event) { return Number(event?.keyCode || event?.which || 0); }
+  function hostInputTrustedKeyRecently(type, code) {
+    const last = hostInputState.lastTrustedKey;
+    return !!(last && last.type === type && Number(last.code) === Number(code) && performance.now() - last.at < 80);
+  }
+  ['keydown','keyup'].forEach(type => document.addEventListener(type, event => {
+    if (!event.isTrusted) return;
+    const current = {type,code:hostInputKeyCode(event),at:performance.now()};
+    const synthetic = hostInputState.lastSyntheticKey;
+    if (synthetic && synthetic.type === type && synthetic.code === current.code && performance.now() - synthetic.at < 80) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    hostInputState.lastTrustedKey = current;
+  }, true));
+  document.addEventListener('beforeinput', event => {
+    if (!event.isTrusted) return;
+    const text = typeof event.data === 'string' ? event.data : '';
+    const synthetic = hostInputState.lastSyntheticText;
+    if (synthetic && synthetic.text === text && performance.now() - synthetic.at < 80) {
+      if (event.cancelable) event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    hostInputState.lastTrustedText = {text,at:performance.now()};
+  }, true);
+  function hostInputKeyName(code) {
+    const names = {8:'Backspace',9:'Tab',13:'Enter',16:'Shift',17:'Control',18:'Alt',27:'Escape',32:' ',33:'PageUp',34:'PageDown',35:'End',36:'Home',37:'ArrowLeft',38:'ArrowUp',39:'ArrowRight',40:'ArrowDown',45:'Insert',46:'Delete'};
+    if (names[code]) return names[code];
+    if (code >= 48 && code <= 57) return String.fromCharCode(code);
+    if (code >= 65 && code <= 90) return String.fromCharCode(code);
+    return '';
+  }
+  function hostInputFocusable(node) {
+    if (!node || node === document.body || node === document.documentElement) return false;
+    const tag = String(node.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button' || tag === 'a' || node.isContentEditable || Number(node.tabIndex) >= 0;
+  }
+  function hostInputFocus(node) {
+    let target = node;
+    while (target && target !== document.body && !hostInputFocusable(target)) target = target.parentElement;
+    try { (target || node)?.focus?.({preventScroll:true}); } catch (_) { try { (target || node)?.focus?.(); } catch (_) {} }
+    try { window.focus(); } catch (_) {}
+    return target || node;
+  }
+  function hostInputDispatchMouse(data) {
+    const x = Number(data.x), y = Number(data.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit) return;
+    const button = Number.isFinite(Number(data.button)) ? Number(data.button) : 0;
+    const bit = hostInputButtonMask(button);
+    let buttons = hostInputState.buttonsMask;
+    if (data.event === 'down') buttons |= bit;
+    else if (data.event === 'up') buttons &= ~bit;
+    const common = {bubbles:true,cancelable:true,view:window,clientX:x,clientY:y,screenX:x,screenY:y,button,buttons};
+    if (data.event === 'move') {
+      try { hit.dispatchEvent(new MouseEvent('mousemove', common)); } catch (_) {}
+      try { hit.dispatchEvent(new PointerEvent('pointermove', Object.assign({pointerId:1,pointerType:'mouse',isPrimary:true}, common))); } catch (_) {}
+      return;
+    }
+    if (data.event === 'wheel') {
+      const delta = Number(data.delta) || 0;
+      if (hostInputTrustedRecently('wheel',x,y,button)) return;
+      hostInputState.lastSynthetic = {type:'wheel',x,y,button,at:performance.now()};
+      try { hit.dispatchEvent(new WheelEvent('wheel', Object.assign({deltaMode:WheelEvent.DOM_DELTA_LINE,deltaY:-delta}, common))); } catch (_) {}
+      return;
+    }
+    if (data.event === 'down') {
+      hostInputState.buttonsMask = buttons;
+      if (hostInputTrustedRecently('mousedown',x,y,button)) return;
+      const target = hostInputFocus(hit);
+      hostInputState.downTarget = target || hit;
+      hostInputState.lastSynthetic = {type:'mousedown',x,y,button,at:performance.now()};
+      try { (target || hit).dispatchEvent(new PointerEvent('pointerdown', Object.assign({pointerId:1,pointerType:'mouse',isPrimary:true}, common))); } catch (_) {}
+      try { (target || hit).dispatchEvent(new MouseEvent('mousedown', common)); } catch (_) {}
+      return;
+    }
+    if (data.event === 'up') {
+      hostInputState.buttonsMask = buttons;
+      if (hostInputTrustedRecently('mouseup',x,y,button)) { hostInputState.downTarget = null; return; }
+      const target = hit || hostInputState.downTarget;
+      hostInputState.lastSynthetic = {type:'mouseup',x,y,button,at:performance.now()};
+      try { target.dispatchEvent(new PointerEvent('pointerup', Object.assign({pointerId:1,pointerType:'mouse',isPrimary:true}, common))); } catch (_) {}
+      try { target.dispatchEvent(new MouseEvent('mouseup', common)); } catch (_) {}
+      const down = hostInputState.downTarget;
+      hostInputState.downTarget = null;
+      if (button === 0 && down && (down === target || down.contains?.(target) || target.contains?.(down))) {
+        if (!hostInputTrustedRecently('click',x,y,button)) {
+          hostInputState.lastSynthetic = {type:'click',x,y,button,at:performance.now()};
+          try { target.dispatchEvent(new MouseEvent('click', Object.assign({}, common, {buttons:0}))); } catch (_) { try { target.click?.(); } catch (_) {} }
+        }
+      }
+    }
+  }
+  function hostInputEditCharacter(target, charCode) {
+    if (!target || !Number.isFinite(charCode) || charCode <= 0) return false;
+    const text = String.fromCharCode(charCode);
+    const trusted = hostInputState.lastTrustedText;
+    if (trusted && trusted.text === text && performance.now() - trusted.at < 80) return true;
+    hostInputState.lastSyntheticText = {text,at:performance.now()};
+    const tag = String(target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+      if (target.disabled || target.readOnly) return false;
+      const start = Number.isFinite(target.selectionStart) ? target.selectionStart : String(target.value || '').length;
+      const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+      try { target.setRangeText(text, start, end, 'end'); }
+      catch (_) { target.value = String(target.value || '').slice(0,start) + text + String(target.value || '').slice(end); }
+      try { target.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text})); } catch (_) { target.dispatchEvent(new Event('input',{bubbles:true})); }
+      return true;
+    }
+    if (target.isContentEditable) {
+      try { document.execCommand('insertText', false, text); return true; } catch (_) {}
+    }
+    return false;
+  }
+  function hostInputEditControl(target, code) {
+    const tag = String(target?.tagName || '').toLowerCase();
+    if ((tag !== 'input' && tag !== 'textarea') || target.disabled || target.readOnly) return false;
+    const value = String(target.value || '');
+    let start = Number.isFinite(target.selectionStart) ? target.selectionStart : value.length;
+    let end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+    if (code === 8 && start === end && start > 0) start -= 1;
+    else if (code === 46 && start === end && end < value.length) end += 1;
+    else if (code !== 8 && code !== 46) return false;
+    try { target.setRangeText('', start, end, 'end'); }
+    catch (_) { target.value = value.slice(0,start) + value.slice(end); }
+    try { target.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:code===8?'deleteContentBackward':'deleteContentForward',data:null})); } catch (_) { target.dispatchEvent(new Event('input',{bubbles:true})); }
+    return true;
+  }
+  function hostInputDispatchKeyboard(data) {
+    const target = document.activeElement || document.body;
+    const code = Number(data.keyCode) || 0;
+    if (data.event === 'char') {
+      const explicitText = typeof data.text === 'string' ? data.text : '';
+      if (explicitText) {
+        const trusted = hostInputState.lastTrustedText;
+        if (trusted && trusted.text === explicitText && performance.now() - trusted.at < 80) return;
+        hostInputState.lastSyntheticText = {text:explicitText,at:performance.now()};
+        const tag = String(target?.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea') {
+          if (!target.disabled && !target.readOnly) {
+            const start = Number.isFinite(target.selectionStart) ? target.selectionStart : String(target.value || '').length;
+            const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+            try { target.setRangeText(explicitText, start, end, 'end'); }
+            catch (_) { target.value = String(target.value || '').slice(0,start) + explicitText + String(target.value || '').slice(end); }
+            try { target.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:explicitText})); } catch (_) { target.dispatchEvent(new Event('input',{bubbles:true})); }
+          }
+        } else if (target?.isContentEditable) {
+          try { document.execCommand('insertText', false, explicitText); } catch (_) {}
+        }
+        return;
+      }
+      hostInputEditCharacter(target, Number(data.charCode) || code);
+      return;
+    }
+    const type = data.event === 'up' ? 'keyup' : 'keydown';
+    if (hostInputTrustedKeyRecently(type,code)) return;
+    hostInputState.lastSyntheticKey = {type,code,at:performance.now()};
+    if (data.event === 'down') hostInputEditControl(target, code);
+    const key = hostInputKeyName(code);
+    try {
+      target.dispatchEvent(new KeyboardEvent(type,{bubbles:true,cancelable:true,key,code:key,which:code,keyCode:code,ctrlKey:data.ctrl===true,shiftKey:data.shift===true,altKey:data.alt===true}));
+    } catch (_) {}
+  }
+  window.addEventListener('message', event => {
+    const data = event?.data;
+    if (!data || data.channel !== 'arzmarket-host-input') return;
+    if (event.source && event.source !== window.parent) return;
+    if (data.kind === 'mouse') hostInputDispatchMouse(data);
+    else if (data.kind === 'keyboard') hostInputDispatchKeyboard(data);
+  }, false);
+
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && activePopupSelect) {
       closePopupSelect();
@@ -563,19 +797,34 @@
   }
 
   async function api(path, options = {}) {
+    if (perfEnabled) {
+      perfMetrics.apiRequests += 1;
+      if (path === '/api/action') { perfMetrics.htmlToLuaMessages += 1; perfMetrics.jsonEncode += 1; }
+    }
     const headers = Object.assign({}, options.headers || {}, {'X-ArzMarket-Token': token});
     if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-    const response = await fetch(path, Object.assign({}, options, {headers, cache: 'no-store'}));
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs || 5000));
+    const fetchOptions = Object.assign({}, options);
+    delete fetchOptions.timeoutMs;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutId = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+    let response;
+    try {
+      response = await fetch(path, Object.assign({}, fetchOptions, {headers, cache: 'no-store', signal: controller ? controller.signal : options.signal}));
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    }
     if (response.status === 204) return {unchanged: true};
     const raw = await response.text();
     let data;
-    try { data = raw ? JSON.parse(raw) : {}; }
+    try { if (perfEnabled && raw) perfMetrics.jsonDecode += 1; data = raw ? JSON.parse(raw) : {}; }
     catch (_) { data = {ok: false, error: raw || `HTTP ${response.status}`}; }
     if (!response.ok) {
       const err = new Error(data?.error || `HTTP ${response.status}`);
       err.status = response.status;
       throw err;
     }
+    if (perfEnabled && path.startsWith('/api/state')) perfMetrics.luaToHtmlMessages += 1;
     return data;
   }
 
@@ -1337,7 +1586,7 @@
     const task = (async () => {
       try {
         const since = force ? 0 : Number(state.pageRevision[page] || 0);
-        const result = await api(`/api/state?page=${encodeURIComponent(page)}&since=${since}`);
+        const result = await api(`/api/state?page=${encodeURIComponent(page)}&since=${since}`, page === 'marketplace' ? {timeoutMs: 15000} : {});
         if (!result.unchanged) applyPageState(page, result, force);
         else if (state.page === page) {
           refs.runtimeText.textContent = 'Система готова';
@@ -1738,6 +1987,55 @@
   }
 
   const smoothScrollStates = new WeakMap();
+  const virtualListStates = new WeakMap();
+
+  function renderVirtualList(node, items, createRow, estimatedRowHeight = 60, threshold = 120) {
+    if (!node) return;
+    let virtual = virtualListStates.get(node);
+    if (!virtual) {
+      virtual = {items:[], createRow:null, rowHeight:estimatedRowHeight, threshold, raf:0, start:-1, end:-1};
+      virtualListStates.set(node, virtual);
+      node.addEventListener('scroll', () => {
+        if (virtual.items.length <= virtual.threshold || virtual.raf) return;
+        virtual.raf = requestAnimationFrame(() => { virtual.raf = 0; drawVirtualList(node, virtual); });
+      }, {passive:true});
+    }
+    virtual.items = Array.isArray(items) ? items : [];
+    virtual.createRow = createRow;
+    virtual.rowHeight = Math.max(1, Number(estimatedRowHeight) || 60);
+    virtual.threshold = Math.max(40, Number(threshold) || 120);
+    virtual.start = -1;
+    virtual.end = -1;
+    drawVirtualList(node, virtual, true);
+  }
+
+  function drawVirtualList(node, virtual, force = false) {
+    const items = virtual.items;
+    let start = 0;
+    let end = items.length;
+    if (items.length > virtual.threshold) {
+      const visible = Math.max(1, Math.ceil(Math.max(node.clientHeight, virtual.rowHeight * 8) / virtual.rowHeight));
+      const overscan = Math.max(8, Math.ceil(visible * 0.75));
+      start = Math.max(0, Math.floor(node.scrollTop / virtual.rowHeight) - overscan);
+      end = Math.min(items.length, start + visible + overscan * 2);
+    }
+    if (!force && start === virtual.start && end === virtual.end) return;
+    virtual.start = start;
+    virtual.end = end;
+    const fragment = document.createDocumentFragment();
+    if (start > 0) {
+      const top = div('', 'virtual-list-spacer');
+      top.style.height = `${start * virtual.rowHeight}px`;
+      fragment.append(top);
+    }
+    for (let index = start; index < end; index += 1) fragment.append(virtual.createRow(items[index], index));
+    if (end < items.length) {
+      const bottom = div('', 'virtual-list-spacer');
+      bottom.style.height = `${(items.length - end) * virtual.rowHeight}px`;
+      fragment.append(bottom);
+    }
+    node.replaceChildren(fragment);
+  }
 
   function installWheelScroller(node) {
     if (!node || node.dataset.wheelScrollBound === '1') return;
@@ -1748,7 +2046,10 @@
 
     const clampTarget = value => Math.max(0, Math.min(Math.max(0, node.scrollHeight - node.clientHeight), value));
     const stopAnimation = () => {
-      if (scrollState.raf) cancelAnimationFrame(scrollState.raf);
+      if (scrollState.raf) {
+        cancelAnimationFrame(scrollState.raf);
+        activeSmoothScrollLoops = Math.max(0, activeSmoothScrollLoops - 1);
+      }
       scrollState.raf = 0;
       scrollState.lastTime = 0;
       scrollState.target = clampTarget(node.scrollTop);
@@ -1766,6 +2067,7 @@
         scrollState.internal = false;
         scrollState.raf = 0;
         scrollState.lastTime = 0;
+        activeSmoothScrollLoops = Math.max(0, activeSmoothScrollLoops - 1);
         return;
       }
 
@@ -1795,6 +2097,7 @@
       event.stopPropagation();
       if (!scrollState.raf) {
         scrollState.lastTime = 0;
+        activeSmoothScrollLoops += 1;
         scrollState.raf = requestAnimationFrame(step);
       }
     }, {passive:false, capture:true});
@@ -1844,6 +2147,7 @@
   });
 
   function renderHeader() {
+    queueMicrotask(() => window.__arzMarketBuyPolishSync?.());
     const settings = state.page === 'settings';
     const logs = state.page === 'logs';
     const storage = state.page === 'storage';
@@ -2002,6 +2306,8 @@
   }
 
   function renderTable() {
+    queueMicrotask(() => window.__arzMarketBuyPolishSync?.());
+    perfListRender();
     const buy = state.page === 'buy';
     const locked = tradeBusy();
     refs.tableHead.className = `table-head ${state.page}`;
@@ -2283,6 +2589,7 @@
   }
 
   function renderDetails() {
+    queueMicrotask(() => window.__arzMarketBuyPolishSync?.());
     const item = state.selectedItem;
     if (activePopupSelect?.kind === 'item-category' && activePopupSelect.anchor?.isConnected && item) return;
     refs.detailEmpty.classList.toggle('hidden', !!item);
@@ -2431,16 +2738,15 @@
   }
 
   function renderSellInventory() {
+    perfListRender();
     if (!refs.sellInventoryRows) return;
     const source = Array.isArray(state.data?.data?.source) ? state.data.data.source : [];
     const q = normalizeName(state.search);
     const items = q ? source.filter(item => normalizeName(item.name).includes(q)) : source;
     const existing = new Map(asArray(state.data?.data?.items).map(item => [normalizeName(item.name), item]));
-    refs.sellInventoryRows.innerHTML = '';
     refs.sellInventoryEmpty.classList.toggle('hidden', items.length !== 0);
 
-    const fragment = document.createDocumentFragment();
-    for (const sourceItem of items) {
+    const createRow = sourceItem => {
       const row = document.createElement('div');
       row.className = 'sell-inventory-row';
       const configured = existing.get(normalizeName(sourceItem.name));
@@ -2498,12 +2804,13 @@
       });
       if (thumbBox) row.append(thumbBox);
       row.append(copy, count, add);
-      fragment.append(row);
-    }
-    refs.sellInventoryRows.append(fragment);
+      return row;
+    };
+    renderVirtualList(refs.sellInventoryRows, items, createRow, 60 * interfaceScaleFactor(), 100);
   }
 
   function renderSellItems() {
+    perfListRender();
     if (!refs.sellSaleRows) return;
     updateSellSortHeaders();
     const locked = tradeBusy();
@@ -2933,6 +3240,7 @@
   }
 
   function renderLogs() {
+    perfListRender();
     refs.logsToolbar?.classList.remove('hidden');
     refs.logsWorkspace?.classList.remove('hidden');
     renderLogsToolbar();
@@ -3045,19 +3353,23 @@
     if (info) renderStorageAveragePrices(item);
   }
   function renderStorage() {
+    perfListRender();
     const items=storageFilteredItems();
     if (!items.some(item=>item.key===state.storage.selectedKey)) state.storage.selectedKey=items[0]?.key || null;
-    refs.storageRows.innerHTML='';
     const uniquePlaces=new Set(); let total=0;
     for (const item of items) {
       total += Number(item.viewCount || 0); for (const loc of item.viewLocations || []) uniquePlaces.add(loc.key);
+    }
+    const createRow = item => {
       const place=storagePlaceSummary(item), row=div('',`storage-row ${item.key===state.storage.selectedKey?'selected':''}`.trim());
       const itemCell=div('','storage-item-cell');
       { const img=document.createElement('img'); img.alt=''; setIcon(img,item,48); itemCell.append(img); }
       const copy=div('','storage-item-copy'); copy.append(div(item.name || '-','storage-item-name'),div(item.type_label || 'Прочее','storage-item-sub')); bindAveragePriceHover(copy,item); itemCell.append(copy);
       row.append(itemCell,div(item.type_label || 'Прочее'),div(money(item.viewCount || 0),'storage-count-cell'),div(place.place),div(place.object),div(formatStorageTime(item.viewUpdated),'storage-updated-cell'));
-      row.addEventListener('click',()=>{state.storage.selectedKey=item.key;renderStorage();}); refs.storageRows.append(row);
-    }
+      row.addEventListener('click',()=>{state.storage.selectedKey=item.key;renderStorage();});
+      return row;
+    };
+    renderVirtualList(refs.storageRows, items, createRow, 59 * interfaceScaleFactor(), 120);
     refs.storageEmpty.classList.toggle('hidden',items.length>0); refs.storageFoundCount.textContent=money(items.length); refs.storageTotalCount.textContent=money(total); refs.storagePlacesCount.textContent=money(uniquePlaces.size);
     renderStorageDetail(items.find(item=>item.key===state.storage.selectedKey) || null); installWheelScroller(refs.storageRows);
     refs.storageTypeButton.textContent=storageTypeOptions().find(x=>x.value===state.storage.type)?.label || 'Все типы';
@@ -3185,22 +3497,21 @@
   }
   function renderMarketplaceSearch() {
     const results=marketplaceSearchResults();
-    refs.marketplaceBuyResults.innerHTML=''; refs.marketplaceSellResults.innerHTML='';
-    for (const row of results.buy) refs.marketplaceBuyResults.append(marketplaceOfferCard(row.shop,row.offer,'buy'));
-    for (const row of results.sell) refs.marketplaceSellResults.append(marketplaceOfferCard(row.shop,row.offer,'sell'));
+    renderVirtualList(refs.marketplaceBuyResults,results.buy,row=>marketplaceOfferCard(row.shop,row.offer,'buy'),66*interfaceScaleFactor(),100);
+    renderVirtualList(refs.marketplaceSellResults,results.sell,row=>marketplaceOfferCard(row.shop,row.offer,'sell'),66*interfaceScaleFactor(),100);
     refs.marketplaceBuyCount.textContent=money(results.buy.length); refs.marketplaceSellCount.textContent=money(results.sell.length);
     refs.marketplaceBuyEmpty.classList.toggle('hidden',results.buy.length>0); refs.marketplaceSellEmpty.classList.toggle('hidden',results.sell.length>0);
     installWheelScroller(refs.marketplaceBuyResults); installWheelScroller(refs.marketplaceSellResults);
   }
   function renderMarketplaceShopItems(node,items,shop) {
-    node.innerHTML='';
-    if(!items.length){node.append(div('Список пуст.','marketplace-shop-items-empty'));return;}
-    for(const offer of items){
+    if(!items.length){node.replaceChildren(div('Список пуст.','marketplace-shop-items-empty'));return;}
+    const createRow = offer => {
       const row=div('', 'marketplace-shop-item'); const left=div('', 'marketplace-shop-item-main');
       { const box=div('', 'marketplace-shop-item-icon'); const img=document.createElement('img'); img.alt=''; setIcon(img,offer,48); box.append(img); left.append(box); }
       const copy=div('', 'marketplace-shop-item-copy'); copy.append(div(offer.name || 'Неизвестный предмет','marketplace-shop-item-name'),div(`${money(offer.count||0)} шт.`,'marketplace-shop-item-count')); bindAveragePriceHover(copy,offer);
-      left.append(copy); row.append(left,div(`${money(offer.price||0)} ${marketplaceCurrency(shop.serverId)}`,'marketplace-shop-item-price')); node.append(row);
-    }
+      left.append(copy); row.append(left,div(`${money(offer.price||0)} ${marketplaceCurrency(shop.serverId)}`,'marketplace-shop-item-price')); return row;
+    };
+    renderVirtualList(node,items,createRow,60*interfaceScaleFactor(),120);
     installWheelScroller(node);
   }
   function renderMarketplaceShop(shop) {
@@ -3212,6 +3523,7 @@
     renderMarketplaceShopItems(refs.marketplaceShopBuyRows,buy,shop); renderMarketplaceShopItems(refs.marketplaceShopSellRows,sell,shop);
   }
   function renderMarketplace() {
+    perfListRender();
     const data=marketplaceData(); const status=String(data.status || 'loading');
     refs.marketplaceShopCount.textContent=money(Number(data.shopCount ?? marketplaceShops().length));
     refs.marketplaceServerButton.textContent=data.selectedName || 'Все сервера';
@@ -3751,6 +4063,16 @@
   }
 
   function render() {
+    if (perfEnabled) {
+      const started = performance.now();
+      perfMetrics.fullRenders += 1;
+      queueMicrotask(() => {
+        const elapsed = performance.now() - started;
+        perfMetrics.totalRenderMs += elapsed;
+        perfMetrics.maxRenderMs = Math.max(perfMetrics.maxRenderMs, elapsed);
+      });
+    }
+    queueMicrotask(() => window.__arzMarketBuyPolishSync?.());
     renderHeader();
     const settings = state.page === 'settings';
     const logs = state.page === 'logs';
@@ -3906,6 +4228,7 @@
   }
 
   function renderPicker() {
+    perfListRender();
     const source = asArray(state.data?.data?.source);
     const existing = new Set(asArray(state.data?.data?.items).map(item => normalizeName(item.name)));
     const q = normalizeName(state.pickerSearch);
@@ -3913,9 +4236,7 @@
       .filter(item => !existing.has(normalizeName(item.name)) && (!q || normalizeName(item.name).includes(q)))
       .slice(0, 400);
 
-    refs.pickerRows.innerHTML = '';
-    const fragment = document.createDocumentFragment();
-    for (const item of filtered) {
+    const createRow = item => {
       const row = div('', 'picker-row');
       const left = div('', 'item-cell');
       const box = div('', 'item-thumb-box');
@@ -3940,9 +4261,9 @@
           showToast(`Не удалось добавить: ${message}`, 'error');
         }
       });
-      fragment.append(row);
-    }
-    refs.pickerRows.append(fragment);
+      return row;
+    };
+    renderVirtualList(refs.pickerRows, filtered, createRow, 60 * interfaceScaleFactor(), 100);
   }
 
   function emptyPageState(page, previousWindow) {
@@ -4064,10 +4385,16 @@
     renderMods();
   });
 
+  let listSearchTimer = 0;
+  const scheduleListSearch = callback => {
+    window.clearTimeout(listSearchTimer);
+    listSearchTimer = window.setTimeout(() => { listSearchTimer = 0; callback(); }, 100);
+  };
+
   refs.marketplaceSearchInput?.addEventListener('input',()=>{
     state.marketplace.search=refs.marketplaceSearchInput.value;
     state.marketplace.selectedShopKey=null;
-    renderMarketplace();
+    scheduleListSearch(renderMarketplace);
   });
   refs.marketplaceRefreshButton?.addEventListener('click',async()=>{
     try{refs.marketplaceRefreshButton.disabled=true; await action('marketplace.refresh',{page:'marketplace'}); showToast('Обновляю список лавок','success'); setTimeout(()=>refresh(true,'marketplace'),250);}catch(err){showToast(`Маркетплейс: ${err.message}`,'error');}finally{refs.marketplaceRefreshButton.disabled=false;}
@@ -4095,7 +4422,7 @@
     baronAssistantUi?.event('settings_section_changed', {section});
   });
 
-  refs.storageSearchInput?.addEventListener('input',()=>{state.storage.search=refs.storageSearchInput.value;renderStorage();});
+  refs.storageSearchInput?.addEventListener('input',()=>{state.storage.search=refs.storageSearchInput.value;scheduleListSearch(renderStorage);});
   refs.storageFindButton?.addEventListener('click',()=>{state.storage.search=refs.storageSearchInput.value;renderStorage();});
   refs.storageTypeButton?.addEventListener('click',event=>{event.preventDefault();openPopupSelect(refs.storageTypeButton,storageTypeOptions(),state.storage.type,value=>{state.storage.type=value||'all';renderStorage();},'storage-type');});
   refs.storagePlaceTabs?.addEventListener('click',event=>{const btn=event.target.closest('[data-storage-place]');if(!btn)return;state.storage.place=btn.dataset.storagePlace||'all';state.storage.selectedKey=null;renderStorage();});
@@ -4105,7 +4432,7 @@
 
   refs.sellInventorySearch?.addEventListener('input', () => {
     state.sellInventorySearch = refs.sellInventorySearch.value;
-    renderSellInventory();
+    scheduleListSearch(renderSellInventory);
   });
 
   refs.sellScanButton?.addEventListener('click', () => {
@@ -4268,11 +4595,10 @@
     state.search = refs.searchInput.value;
     if (state.page === 'sell') {
       state.sellInventorySearch = state.search;
-      renderSellWorkspace();
+      scheduleListSearch(renderSellWorkspace);
       refs.globalSearchResults.classList.add('hidden');
     } else {
-      renderTable();
-      renderGlobalSearchResults();
+      scheduleListSearch(() => { renderTable(); renderGlobalSearchResults(); });
     }
   });
   refs.searchInput.addEventListener('blur', () => {
@@ -4400,7 +4726,7 @@
   });
   refs.pickerSearch.addEventListener('input', () => {
     state.pickerSearch = refs.pickerSearch.value;
-    renderPicker();
+    scheduleListSearch(renderPicker);
   });
   refs.pickerBackdrop.addEventListener('click', event => { if (event.target === refs.pickerBackdrop) closePicker(); });
   refs.averageButton.addEventListener('click', async () => {
@@ -4529,6 +4855,16 @@
   }
   // Do not paint a temporary buy/sell shell on boot. The interface stays hidden
   // until the first real Lua state arrives, which prevents the foreign first window.
-  refresh(true);
-  window.setInterval(() => refresh(false), 650);
+  refresh(true).catch(() => null);
+  (async function pollBridge() {
+    while (true) {
+      const common = state.data?.common || {};
+      const busy = common.tradeBusy === true || common.automation === true || common.scanning === true
+        || (state.page === 'marketplace' && state.data?.data?.status === 'loading');
+      const minimized = document.querySelector('.window')?.classList.contains('window-minimized') === true;
+      const delay = document.visibilityState === 'hidden' ? 10000 : busy ? 750 : minimized ? 6000 : 4000;
+      await new Promise(resolve => window.setTimeout(resolve, delay));
+      try { await refresh(false); } catch (_) {}
+    }
+  })();
 })();

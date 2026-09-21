@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "bundle_version": 276,
+  "bundle_version": 283,
   "base_url": "__ARZMARKET_COMPONENTS_RAW_BASE_URL__",
   "files": [
     {
@@ -269,8 +269,8 @@
     },
     {
       "path": "ArzMarket/html/css/marketplace-v47.css",
-      "size": 31532,
-      "crc32": "45603063",
+      "size": 31506,
+      "crc32": "EEECE710",
       "required": true
     },
     {
@@ -389,8 +389,8 @@
     },
     {
       "path": "ArzMarket/html/css/style.css",
-      "size": 20781,
-      "crc32": "3C01722A",
+      "size": 20754,
+      "crc32": "F4BB0884",
       "required": true
     },
     {
@@ -473,32 +473,32 @@
     },
     {
       "path": "ArzMarket/html/css/windowing.css",
-      "size": 3085,
-      "crc32": "C8699C1E",
+      "size": 3650,
+      "crc32": "118688AF",
       "required": true
     },
     {
       "path": "ArzMarket/html/index.html",
       "size": 38297,
-      "crc32": "0F509391",
+      "crc32": "91B29032",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/app.js",
-      "size": 238822,
-      "crc32": "0C3AD659",
+      "size": 257215,
+      "crc32": "2A7BD855",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/assistant-v78.js",
-      "size": 44204,
-      "crc32": "2AEFB9B0",
+      "size": 44687,
+      "crc32": "9DF7608F",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/buy-polish.js",
-      "size": 8802,
-      "crc32": "E28D266D",
+      "size": 8030,
+      "crc32": "E4B8CA2A",
       "required": true
     },
     {
@@ -545,8 +545,8 @@
     },
     {
       "path": "modules/arz_html_ui.lua",
-      "size": 136011,
-      "crc32": "BEFB20E5",
+      "size": 151901,
+      "crc32": "ABEE5A99",
       "required": true
     },
     {

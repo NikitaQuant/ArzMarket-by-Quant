@@ -341,7 +341,7 @@
 #app[data-page="marketplace"] .marketplace-shop-item-price{color:#59dfad;font-size:calc(11px * var(--ui-scale));font-weight:700;white-space:nowrap}
 #app[data-page="marketplace"] .marketplace-shop-items-empty{height:100%;display:grid;place-items:center;color:#748a99;font-size:calc(11px * var(--ui-scale))}
 
-#app[data-page="marketplace"] .marketplace-status{position:absolute;inset:0;z-index:4;display:grid;place-items:center;background:rgba(8,18,27,.42);backdrop-filter:blur(2px)}
+#app[data-page="marketplace"] .marketplace-status{position:absolute;inset:0;z-index:4;display:grid;place-items:center;background:rgba(8,18,27,.72)}
 #app[data-page="marketplace"] .marketplace-status.hidden{display:none!important}
 #app[data-page="marketplace"] .marketplace-status-card{width:min(calc(600px * var(--ui-scale)),86%);display:grid;grid-template-columns:auto 1fr;gap:calc(18px * var(--ui-scale));align-items:start;padding:calc(24px * var(--ui-scale));border:1px solid #365166;border-radius:calc(14px * var(--ui-scale));background:linear-gradient(180deg,#132837,#0c1c27);box-shadow:0 calc(18px * var(--ui-scale)) calc(60px * var(--ui-scale)) rgba(0,0,0,.35)}
 #app[data-page="marketplace"] .marketplace-status-icon{width:calc(60px * var(--ui-scale));height:calc(60px * var(--ui-scale));display:grid;place-items:center;border:1px solid #2e926e;border-radius:calc(12px * var(--ui-scale));background:rgba(40,211,147,.08);color:#50dfa8}
