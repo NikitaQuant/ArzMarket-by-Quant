@@ -17434,7 +17434,11 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
+<<<<<<< HEAD:by_Quant_ArzMarket[3_57].lua
 ARZ_UPDATE_VERSION = "3.57.129"
+=======
+ARZ_UPDATE_VERSION = "3.56.123"
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520:by_Quant_ArzMarket[3_56].lua
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -35788,7 +35792,11 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
+<<<<<<< HEAD:by_Quant_ArzMarket[3_57].lua
 ARZ_COMPONENTS.bootstrap.expected_bundle_version = 287
+=======
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 282
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520:by_Quant_ArzMarket[3_56].lua
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"

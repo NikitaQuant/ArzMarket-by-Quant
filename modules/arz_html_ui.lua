@@ -1,6 +1,10 @@
 local M = {
     api_version = 1,
+<<<<<<< HEAD
     module_version = 77,
+=======
+    module_version = 76,
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -2949,7 +2953,11 @@ function M.open_html(page,settingsSection,options)
         if not ok then if ctx and ctx.notify then pcall(ctx.notify,"HTML интерфейс недоступен: "..tostring(err)) end; return false end
     end
     if not acef or type(acef.eval)~="function" then
+<<<<<<< HEAD
         if not previewOpen then __arzHtmlStopServer() end
+=======
+        if not previewOpen then stopServer() end
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
         if ctx and ctx.notify then pcall(ctx.notify,"CEF API недоступен. Lua интерфейс продолжает работать.") end
         return false
     end
@@ -2963,7 +2971,11 @@ function M.open_html(page,settingsSection,options)
     end
     if not ok then
         htmlTemporaryMode=false
+<<<<<<< HEAD
         if not previewOpen then __arzHtmlStopServer() end
+=======
+        if not previewOpen then stopServer() end
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
     end
     if not ok and ctx and ctx.notify then pcall(ctx.notify,"Не удалось открыть CEF интерфейс. Используйте Lua режим.") end
     return ok
@@ -3097,23 +3109,39 @@ function M.open_preview(bounds,page,options)
         if not ok then return false,err end
     end
     if not acef or type(acef.eval)~="function" then
+<<<<<<< HEAD
         if not htmlOpen then __arzHtmlStopServer() end
         return false,"cef_unavailable"
     end
     local ok,err=injectPreviewIframe(bounds,options)
     if not ok and not htmlOpen then __arzHtmlStopServer() end
+=======
+        if not htmlOpen then stopServer() end
+        return false,"cef_unavailable"
+    end
+    local ok,err=injectPreviewIframe(bounds,options)
+    if not ok and not htmlOpen then stopServer() end
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
     return ok,err
 end
 function M.close_preview()
     removePreviewIframe()
+<<<<<<< HEAD
     if not htmlOpen and not previewOpen then __arzHtmlStopServer() end
+=======
+    if not htmlOpen and not previewOpen then stopServer() end
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
     return true
 end
 function M.close_html()
     suppressAutoOpen=true
     removeIframe()
     removePreviewIframe()
+<<<<<<< HEAD
     if not htmlOpen and not previewOpen then __arzHtmlStopServer() end
+=======
+    if not htmlOpen and not previewOpen then stopServer() end
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
     return true
 end
 function M.init(context)
@@ -3178,12 +3206,16 @@ function M.render(context)
 end
 function M.pump()
     if not running then return true end
+<<<<<<< HEAD
     local now=nowMs()
     local ok,err=true,nil
     if now-lastServiceAt>=8 then
         lastServiceAt=now
         ok,err=__arzHtmlSafeService(serverGeneration)
     end
+=======
+    local ok,err=safeService(serverGeneration)
+>>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
     if htmlOpen then
         ensureIframe()
         reclaimHtmlInputIfNeeded()
