@@ -1225,17 +1225,14 @@ function arzRenderMainDonorLauncherDownloadCard()
 		end
 	end
 
-	local border = type(menuThemeConfig) == "table" and type(menuThemeConfig.Border) == "table"
-		and menuThemeConfig.Border or { 0.35, 0.35, 0.35, 0.65 }
-
 	imgui.GetWindowDrawList():AddRect(
 		cursorScreenPos,
 		imgui.ImVec2(cursorScreenPos.x + cardWidth, cursorScreenPos.y + cardHeight),
 		imgui.GetColorU32Vec4(imgui.ImVec4(
-			tonumber(border[1]) or 0.35,
-			tonumber(border[2]) or 0.35,
-			tonumber(border[3]) or 0.35,
-			tonumber(border[4]) or 0.65
+			menuThemeConfig.Border[1],
+			menuThemeConfig.Border[2],
+			menuThemeConfig.Border[3],
+			menuThemeConfig.Border[4]
 		)),
 		5,
 		0,
@@ -5383,8 +5380,42 @@ ARZ_INI_LOCK_SNAPSHOT = nil
 -- SA-MP/RakNet traffic is intentionally not affected because it belongs to the game connection.
 ARZ_SCRIPT_OFFLINE_FLAG_PATH = "moonloader/config/ArzMarket/offline_mode.flag"
 ARZ_SCRIPT_OFFLINE = doesFileExist(ARZ_SCRIPT_OFFLINE_FLAG_PATH)
+ARZ_FIRST_BOOTSTRAP_OFFLINE_WAS_ALREADY_ENABLED = ARZ_SCRIPT_OFFLINE == true
 ARZ_SCRIPT_OFFLINE_LAST_NOTICE = 0
 ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD = downloadUrlToFile
+
+-- First installation bootstrap gate. While this session is active, ArzMarket
+-- must not contact ArzMarket API or Telegram endpoints. Only the dedicated
+-- GitHub bootstrap downloads are allowed until the managed loader verifies
+-- the main Lua and all required components are ready.
+ARZ_FIRST_BOOTSTRAP_PENDING_PATH = "moonloader/config/ArzMarket/first_bootstrap_pending.ini"
+ARZ_FIRST_BOOTSTRAP_COMPLETED_PATH = "moonloader/config/ArzMarket/first_bootstrap_completed.flag"
+ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH = "moonloader/config/ArzMarket/managed_loader_verified.ini"
+ARZ_FIRST_BOOTSTRAP_FAILED_PATH = "moonloader/config/ArzMarket/managed_loader_failed.ini"
+ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME = "ArzMarket_Loader_by_Quant_Managed.lua"
+ARZ_FIRST_BOOTSTRAP_OLD_LOADER_NAME = "ArzMarket_Loader_by_Quant.lua"
+ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/ArzMarket_Loader_by_Quant_Managed.lua"
+ARZ_FIRST_BOOTSTRAP_MIN_MANAGED_LOADER_VERSION = "0.52"
+ARZ_FIRST_BOOTSTRAP_ACTIVE = doesFileExist(ARZ_FIRST_BOOTSTRAP_PENDING_PATH)
+
+-- Fail closed before main() on a machine that has never completed bootstrap.
+-- This protects even a direct launch of the main Lua without the bootstrap loader.
+if not doesFileExist(ARZ_FIRST_BOOTSTRAP_COMPLETED_PATH) then
+	local configRoot = "moonloader/config"
+	local configArzMarket = configRoot .. "/ArzMarket"
+	if not doesDirectoryExist(configRoot) then pcall(createDirectory, configRoot) end
+	if not doesDirectoryExist(configArzMarket) then pcall(createDirectory, configArzMarket) end
+	if not doesFileExist(ARZ_SCRIPT_OFFLINE_FLAG_PATH) then
+		local bootstrapOfflineFile = io.open(ARZ_SCRIPT_OFFLINE_FLAG_PATH, "wb")
+		if bootstrapOfflineFile then
+			bootstrapOfflineFile:write("1")
+			bootstrapOfflineFile:flush()
+			bootstrapOfflineFile:close()
+		end
+	end
+	ARZ_SCRIPT_OFFLINE = doesFileExist(ARZ_SCRIPT_OFFLINE_FLAG_PATH)
+	ARZ_FIRST_BOOTSTRAP_ACTIVE = true
+end
 
 -- ============================================================
 -- ArzMarket isolated proxy transport.
@@ -6107,6 +6138,319 @@ function arzScriptOfflineReject(kind, target)
 	return true
 end
 
+function arzFirstBootstrapReadKeyValue(path)
+	local result = {}
+	local file = io.open(path, "rb")
+	if not file then return result end
+	local raw = file:read("*a") or ""
+	file:close()
+	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
+		line = tostring(line or ""):gsub("\r$", "")
+		local key, value = line:match("^([%w_]+)=(.*)$")
+		if key then result[key] = value end
+	end
+	return result
+end
+
+function arzFirstBootstrapAtomicWrite(path, content)
+	local tempPath = tostring(path) .. ".tmp"
+	pcall(os.remove, tempPath)
+	local file = io.open(tempPath, "wb")
+	if not file then return false end
+	local ok = pcall(function()
+		file:write(tostring(content or ""))
+		file:flush()
+	end)
+	pcall(file.close, file)
+	if not ok then
+		pcall(os.remove, tempPath)
+		return false
+	end
+	pcall(os.remove, path)
+	local renamed = os.rename(tempPath, path)
+	if not renamed then
+		pcall(os.remove, tempPath)
+		return false
+	end
+	return true
+end
+
+function arzFirstBootstrapIsAllowedGithubUrl(url)
+	url = tostring(url or "")
+	return url:find("https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/", 1, true) == 1
+		or url:find("https://api.github.com/repos/NikitaQuant/ArzMarket-by-Quant/", 1, true) == 1
+end
+
+function arzFirstBootstrapNativeDownload(url, path, timeoutSeconds)
+	if not ARZ_FIRST_BOOTSTRAP_ACTIVE then return false, "bootstrap_not_active" end
+	if not arzFirstBootstrapIsAllowedGithubUrl(url) then
+		return false, "bootstrap_url_blocked"
+	end
+	if type(ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD) ~= "function" then
+		return false, "native_downloader_unavailable"
+	end
+
+	pcall(os.remove, path)
+	local finished = false
+	local success = false
+	local downloadStatus = require("moonloader").download_status
+	local separator = tostring(url):find("?", 1, true) and "&" or "?"
+	local finalUrl = tostring(url) .. separator .. "_arz_first_bootstrap=" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+	local ok, downloadId = pcall(ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD, finalUrl, path, function(_, status)
+		if status == downloadStatus.STATUSEX_ENDDOWNLOAD then
+			success = doesFileExist(path)
+			finished = true
+		elseif tonumber(status) and tonumber(status) < 0 then
+			finished = true
+		end
+	end)
+	if not ok or downloadId == nil or downloadId == -1 then
+		pcall(os.remove, path)
+		return false, "download_not_started"
+	end
+
+	local startedAt = os.time()
+	local timeout = tonumber(timeoutSeconds) or 30
+	while not finished and os.time() - startedAt < timeout do wait(25) end
+	if not finished or not success then
+		pcall(os.remove, path)
+		return false, finished and "download_failed" or "download_timeout"
+	end
+	wait(100)
+	local file = io.open(path, "rb")
+	if not file then return false, "download_missing" end
+	local size = file:seek("end") or 0
+	file:close()
+	if tonumber(size) <= 0 then
+		pcall(os.remove, path)
+		return false, "download_empty"
+	end
+	return true
+end
+
+function arzFirstBootstrapExtractLoaderVersion(path)
+	local file = io.open(path, "rb")
+	if not file then return nil end
+	local raw = file:read("*a") or ""
+	file:close()
+	return raw:match("LOADER_VERSION%s*=%s*['\"]([^'\"]+)['\"]")
+		or raw:match("script_version%s*%(%s*['\"]([^'\"]+)['\"]%s*%)")
+end
+
+function arzFirstBootstrapCompareVersions(left, right)
+	local a, b = {}, {}
+	for value in tostring(left or ""):gmatch("%d+") do a[#a + 1] = tonumber(value) or 0 end
+	for value in tostring(right or ""):gmatch("%d+") do b[#b + 1] = tonumber(value) or 0 end
+	if #a == 0 or #b == 0 then return nil end
+	local count = math.max(#a, #b)
+	for index = 1, count do
+		local av, bv = a[index] or 0, b[index] or 0
+		if av > bv then return 1 end
+		if av < bv then return -1 end
+	end
+	return 0
+end
+
+function arzFirstBootstrapValidateManagedLoader(path)
+	local chunk, syntaxError = loadfile(path)
+	if not chunk then return false, "managed_loader_invalid:" .. tostring(syntaxError) end
+
+	local file = io.open(path, "rb")
+	if not file then return false, "managed_loader_unreadable" end
+	local raw = file:read("*a") or ""
+	file:close()
+	if #raw < 8000 then return false, "managed_loader_too_small" end
+
+	for _, marker in ipairs({
+		"managedBootstrapVerification",
+		"selfUpdateManagedLoader",
+		"MANAGED_LOADER_URL",
+		"FIRST_BOOTSTRAP_PENDING_PATH",
+		"validateArzMarketFile",
+	}) do
+		if not raw:find(marker, 1, true) then
+			return false, "managed_loader_structure_missing:" .. marker
+		end
+	end
+
+	local remoteVersion = arzFirstBootstrapExtractLoaderVersion(path)
+	if not remoteVersion or remoteVersion == "" then
+		return false, "managed_loader_version_missing"
+	end
+	local versionComparison = arzFirstBootstrapCompareVersions(remoteVersion, ARZ_FIRST_BOOTSTRAP_MIN_MANAGED_LOADER_VERSION)
+	if versionComparison == nil or versionComparison < 0 then
+		return false, "managed_loader_version_too_old:" .. tostring(remoteVersion)
+	end
+	return true, remoteVersion
+end
+
+function arzFirstBootstrapFindLoadedScript(filename)
+	if type(script) ~= "table" or type(script.list) ~= "function" then return nil end
+	for _, scriptObject in ipairs(script.list()) do
+		local currentName = tostring(scriptObject.filename or (tostring(scriptObject.path or ""):match("([^\\/]+)$") or ""))
+		if currentName == filename then return scriptObject end
+	end
+	return nil
+end
+
+function arzFirstBootstrapInstallManagedLoader(pending)
+	local session = tostring(pending and pending.session or "")
+	if session == "" then return false, "pending_session_missing" end
+	if not arzScriptOfflineSet(true) then return false, "offline_enable_failed" end
+	ARZ_FIRST_BOOTSTRAP_ACTIVE = true
+
+	local managedPath = getWorkingDirectory() .. "\\" .. ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME
+	local tempPath = managedPath .. ".bootstrap.download"
+	local downloaded, downloadError = arzFirstBootstrapNativeDownload(ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_URL, tempPath, 45)
+	if not downloaded then return false, "managed_loader_" .. tostring(downloadError) end
+
+	local managedValid, managedVersionOrError = arzFirstBootstrapValidateManagedLoader(tempPath)
+	if not managedValid then
+		pcall(os.remove, tempPath)
+		return false, tostring(managedVersionOrError)
+	end
+	local remoteVersion = managedVersionOrError
+
+	local loadedManaged = arzFirstBootstrapFindLoadedScript(ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME)
+	if loadedManaged then
+		pcall(function() loadedManaged:unload() end)
+		wait(50)
+	end
+
+	local backupPath = managedPath .. ".bootstrap_previous"
+	pcall(os.remove, backupPath)
+	if doesFileExist(managedPath) then
+		local backedUp, backupError = os.rename(managedPath, backupPath)
+		if not backedUp then
+			pcall(os.remove, tempPath)
+			return false, "managed_loader_backup_failed:" .. tostring(backupError)
+		end
+	end
+
+	local installed, installError = os.rename(tempPath, managedPath)
+	if not installed then
+		if doesFileExist(backupPath) then pcall(os.rename, backupPath, managedPath) end
+		pcall(os.remove, tempPath)
+		return false, "managed_loader_install_failed:" .. tostring(installError)
+	end
+
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+	local loaded = script.load(managedPath)
+	if not loaded then
+		pcall(os.remove, managedPath)
+		if doesFileExist(backupPath) then pcall(os.rename, backupPath, managedPath) end
+		return false, "managed_loader_load_failed"
+	end
+	pcall(os.remove, backupPath)
+
+	local oldLoaderPath = getWorkingDirectory() .. "\\" .. ARZ_FIRST_BOOTSTRAP_OLD_LOADER_NAME
+	if doesFileExist(oldLoaderPath) then
+		pcall(os.remove, oldLoaderPath)
+	end
+	print("[ArzMarket][Bootstrap] managed loader installed v" .. tostring(remoteVersion))
+	return true, remoteVersion
+end
+
+function arzFirstBootstrapWaitManagedVerification(pending, timeoutSeconds)
+	local expectedSession = tostring(pending and pending.session or "")
+	if expectedSession == "" then return false, "pending_session_missing" end
+	local startedAt = os.time()
+	local timeout = tonumber(timeoutSeconds) or 90
+	while os.time() - startedAt < timeout do
+		if doesFileExist(ARZ_FIRST_BOOTSTRAP_FAILED_PATH) then
+			local failed = arzFirstBootstrapReadKeyValue(ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+			if tostring(failed.session or "") == expectedSession then
+				return false, tostring(failed.reason or "managed_loader_verification_failed")
+			end
+		end
+		if doesFileExist(ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH) then
+			local verified = arzFirstBootstrapReadKeyValue(ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
+			if tostring(verified.session or "") == expectedSession and tostring(verified.success or "") == "1" then
+				return true, tostring(verified.loader_version or "")
+			end
+		end
+		wait(50)
+	end
+	return false, "managed_loader_verification_timeout"
+end
+
+function arzFirstBootstrapEnsurePendingForInitialLoader()
+	if doesFileExist(ARZ_FIRST_BOOTSTRAP_PENDING_PATH) then
+		if not arzScriptOfflineSet(true) then return false, "offline_enable_failed" end
+		ARZ_FIRST_BOOTSTRAP_ACTIVE = true
+		return true
+	end
+
+	local managedPath = getWorkingDirectory() .. "\\" .. ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME
+	if doesFileExist(ARZ_FIRST_BOOTSTRAP_COMPLETED_PATH) then
+		local managedValid = false
+		if doesFileExist(managedPath) then
+			managedValid = select(1, arzFirstBootstrapValidateManagedLoader(managedPath)) == true
+		end
+		if managedValid then return true end
+
+		-- A completed installation without a valid managed loader cannot self-update safely.
+		-- Re-enter isolated bootstrap and restore the managed loader before normal network starts.
+		pcall(os.remove, ARZ_FIRST_BOOTSTRAP_COMPLETED_PATH)
+	end
+
+	local offlineBefore = ARZ_FIRST_BOOTSTRAP_OFFLINE_WAS_ALREADY_ENABLED == true and "1" or "0"
+	local session = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+
+	local content = table.concat({
+		"protocol=1",
+		"session=" .. session,
+		"created_at=" .. tostring(os.time()),
+		"offline_before=" .. offlineBefore,
+		"arz_version=" .. tostring(ARZ_UPDATE_VERSION or ""),
+		"bootstrap_loader=" .. ARZ_FIRST_BOOTSTRAP_OLD_LOADER_NAME,
+		"managed_loader=" .. ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME,
+		"",
+	}, "\r\n")
+
+	if not arzFirstBootstrapAtomicWrite(ARZ_FIRST_BOOTSTRAP_PENDING_PATH, content) then
+		return false, "pending_write_failed"
+	end
+	if not arzScriptOfflineSet(true) then
+		pcall(os.remove, ARZ_FIRST_BOOTSTRAP_PENDING_PATH)
+		return false, "offline_enable_failed"
+	end
+	ARZ_FIRST_BOOTSTRAP_ACTIVE = true
+	print("[ArzMarket][Bootstrap] isolated bootstrap created, session=" .. session)
+	return true, session
+end
+
+function arzFirstBootstrapComplete(pending)
+	local session = tostring(pending and pending.session or "")
+	local content = table.concat({
+		"protocol=1",
+		"session=" .. session,
+		"completed_at=" .. tostring(os.time()),
+		"managed_loader=" .. ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME,
+		"",
+	}, "\r\n")
+	if not arzFirstBootstrapAtomicWrite(ARZ_FIRST_BOOTSTRAP_COMPLETED_PATH, content) then
+		return false, "completion_marker_write_failed"
+	end
+
+	local offlineBefore = tostring(pending and pending.offline_before or "0") == "1"
+	if not offlineBefore and not arzScriptOfflineSet(false) then
+		-- Do not leave a false completed marker if isolation could not be disabled.
+		pcall(os.remove, ARZ_FIRST_BOOTSTRAP_COMPLETED_PATH)
+		ARZ_FIRST_BOOTSTRAP_ACTIVE = true
+		return false, "offline_disable_failed"
+	end
+
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_PENDING_PATH)
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+	ARZ_FIRST_BOOTSTRAP_ACTIVE = false
+	return true
+end
+
 -- MoonLoader's downloader bypasses asyncHttpRequest. When proxy mode is active
 -- it is replaced by the same fail-closed curl transport, otherwise native behavior is preserved.
 if type(ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD) == "function" then
@@ -6760,8 +7104,9 @@ end
 -- External account-role bridge used by Arizona Account Launcher.
 -- A role is effective only while launcher_heartbeat.ini is fresh.
 -- If the launcher is closed, killed, or crashes, Lua releases the role automatically.
-ARZ_ACCOUNT_BRIDGE_FAILSAFE_VERSION = 3
-ARZ_ACCOUNT_BRIDGE_PROTOCOL = 3
+ARZ_ACCOUNT_BRIDGE_FAILSAFE_VERSION = 4
+ARZ_ACCOUNT_BRIDGE_PROTOCOL = 4
+ARZ_ACCOUNT_BRIDGE_LEGACY_PROTOCOL = 3
 ARZ_ACCOUNT_BRIDGE_CONFIG_PATH = "moonloader/config/ArzMarket/account_bridge.ini"
 ARZ_ACCOUNT_BRIDGE_SYNC_PATH = "moonloader/config/ArzMarket/donor_auth_sync.json"
 ARZ_ACCOUNT_BRIDGE_HEARTBEAT_PATH = "moonloader/config/ArzMarket/launcher_heartbeat.ini"
@@ -6800,6 +7145,12 @@ ARZ_ACCOUNT_BRIDGE_CFG_AUTH_FIELDS = {
     authSelfInfoId = true, authSelfInfoUsername = true, authSelfInfoExp = true,
     authSelfInfoOsTime = true, marketAuthKey = true
 }
+ARZ_ACCOUNT_BRIDGE_CFG_AUTHORITATIVE_STRINGS = {
+    myServerToken = true, myServerId = true, authNickname = true, authUid = true,
+    authPremiumTokenAuth = true, authUserTempKey = true, authRealNameMode1 = true,
+    authRealNameMode2 = true, authSelfInfoId = true, authSelfInfoUsername = true,
+    authSelfInfoExp = true, authSelfInfoOsTime = true, marketAuthKey = true
+}
 ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_SET = {}
 for _, field in ipairs(ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_FIELDS) do
     ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_SET[field] = true
@@ -6810,6 +7161,37 @@ function arzAccountBridgeAuthFieldAllowed(sectionName, fieldName)
         and sectionName ~= "" and not sectionName:find("[%z\r\n%[%]]")
         and (ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_SET[fieldName] == true
             or (sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_AUTH_FIELDS[fieldName] == true))
+end
+
+function arzAccountBridgeFieldIsAuthoritative(sectionName, fieldName)
+    if ARZ_ACCOUNT_BRIDGE_ANY_SECTION_AUTH_SET[fieldName] == true then return true end
+    return sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_AUTHORITATIVE_STRINGS[fieldName] == true
+end
+
+function arzAccountBridgeProfileField(fieldName)
+    return fieldName == "authPremiumTokenAuth" or fieldName == "authUserTempKey"
+        or fieldName == "premiumTokenAuth" or fieldName == "lastUpdatePremiumToken"
+end
+
+function arzAccountBridgeMarketplaceAuthFingerprint(source)
+    local cfg = type(source) == "table" and type(source.cfg) == "table" and source.cfg or {}
+    return table.concat({
+        tostring(cfg.marketAuthKey or ""),
+        tostring(cfg.myServerToken or ""),
+        tostring(cfg.myServerId or ""),
+        tostring(cfg.authPremiumTokenAuth or "")
+    }, "\0")
+end
+
+function arzAccountBridgeResetMarketplaceAuthState()
+    if download_marketplace == "auth" then download_marketplace = nil end
+    if type(timers) == "table" then
+        timers[22] = os.time() - 5
+        timers[30] = os.time() - 25
+    end
+    if type(marketState) == "table" then
+        marketState.marketplaceTimeOut = nil
+    end
 end
 
 function arzAccountBridgeReadText(path)
@@ -6966,21 +7348,24 @@ end
 function arzAccountBridgeApplySnapshot(snapshot)
     if type(snapshot) ~= "table" or type(snapshot.sections) ~= "table" then return false end
     if tonumber(snapshot.protocol) ~= ARZ_ACCOUNT_BRIDGE_PROTOCOL
+        or snapshot.authoritative ~= true
         or type(snapshot.session) ~= "string" or snapshot.session == ""
         or snapshot.session ~= ARZ_ACCOUNT_BRIDGE_RUNTIME.session
         or not ARZ_ACCOUNT_BRIDGE_RUNTIME.active
         or ARZ_ACCOUNT_BRIDGE_RUNTIME.effectiveRole ~= "MAIN" then return false end
     if type(ini) ~= "table" then return false end
+
+    local beforeMarketplaceAuth = arzAccountBridgeMarketplaceAuthFingerprint(ini)
     local updated = arzIniDeepCopy(ini)
+
     for sectionName, values in pairs(snapshot.sections) do
         if type(values) == "table" then
             for fieldName, rawValue in pairs(values) do
-                local profileField = sectionName == "cfg" and (fieldName == "authPremiumTokenAuth"
-                    or fieldName == "authUserTempKey" or fieldName == "premiumTokenAuth"
-                    or fieldName == "lastUpdatePremiumToken")
+                local profileField = sectionName == "cfg" and arzAccountBridgeProfileField(fieldName)
+                local profileOwned = profileField and ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthSession == snapshot.session
                 if arzAccountBridgeAuthFieldAllowed(sectionName, fieldName)
                     and (type(rawValue) == "string" or type(rawValue) == "number")
-                    and not (profileField and ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthSession == snapshot.session) then
+                    and not profileOwned then
                     local value = rawValue
                     if sectionName == "cfg" and ARZ_ACCOUNT_BRIDGE_CFG_NUMERIC[fieldName] then
                         value = tonumber(rawValue)
@@ -6996,6 +7381,30 @@ function arzAccountBridgeApplySnapshot(snapshot)
         end
     end
 
+    -- Protocol 4 snapshots are authoritative. Remove stale auth values that
+    -- exist only on MAIN and are absent from DONOR. Profile auth fields stay
+    -- owned by the validated launcher profile handoff once it succeeds.
+    local toClear = {}
+    for sectionName, values in pairs(updated) do
+        if type(values) == "table" then
+            local snapshotSection = type(snapshot.sections[sectionName]) == "table" and snapshot.sections[sectionName] or nil
+            for fieldName, _ in pairs(values) do
+                local profileField = sectionName == "cfg" and arzAccountBridgeProfileField(fieldName)
+                local profileOwned = profileField and ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthSession == snapshot.session
+                local presentInSnapshot = snapshotSection ~= nil and snapshotSection[fieldName] ~= nil
+                if not profileOwned and not presentInSnapshot
+                    and arzAccountBridgeAuthFieldAllowed(sectionName, fieldName)
+                    and arzAccountBridgeFieldIsAuthoritative(sectionName, fieldName) then
+                    toClear[#toClear + 1] = { sectionName, fieldName }
+                end
+            end
+        end
+    end
+    for _, entry in ipairs(toClear) do
+        local sectionName, fieldName = entry[1], entry[2]
+        if type(updated[sectionName]) == "table" then updated[sectionName][fieldName] = nil end
+    end
+
     if inicfg.save(updated, iniPath) ~= true then return false end
     ini = updated
     ARZ_AUTH_FREEZE = {}
@@ -7006,6 +7415,11 @@ function arzAccountBridgeApplySnapshot(snapshot)
         arzManualServerTokenBufferSet(ini.cfg.myServerToken or "")
     end
     pcall(arzApplySavedAuthRuntime)
+
+    local afterMarketplaceAuth = arzAccountBridgeMarketplaceAuthFingerprint(ini)
+    if beforeMarketplaceAuth ~= afterMarketplaceAuth then
+        pcall(arzAccountBridgeResetMarketplaceAuthState)
+    end
     return true
 end
 
@@ -7022,7 +7436,8 @@ function arzAccountBridgeRestoreMainAuthBackup(expectedSession)
     if not raw or raw == "" then return false end
     local ok, backup = pcall(decodeJson, raw)
     if not ok or type(backup) ~= "table" then return false end
-    if tonumber(backup.protocol) ~= ARZ_ACCOUNT_BRIDGE_PROTOCOL
+    local backupProtocol = tonumber(backup.protocol)
+    if (backupProtocol ~= ARZ_ACCOUNT_BRIDGE_PROTOCOL and backupProtocol ~= ARZ_ACCOUNT_BRIDGE_LEGACY_PROTOCOL)
         or type(backup.session) ~= "string" or backup.session == ""
         or backup.session ~= expectedSession then return false end
     if type(ini) ~= "table" then return false end
@@ -7271,6 +7686,7 @@ do
 
     local function trustedSaveProfile(session, key, info)
         if not sessionIsMain(session) or type(ini) ~= "table" or type(ini.cfg) ~= "table" then return false end
+        local beforeMarketplaceAuth = arzAccountBridgeMarketplaceAuthFingerprint(ini)
         local updated = arzIniDeepCopy(ini)
         local function setString(field, value)
             if field ~= "authPremiumTokenAuth" and field ~= "authUserTempKey" then return false end
@@ -7295,6 +7711,9 @@ do
         marketState.lastUpdatePremiumToken = ini.cfg.lastUpdatePremiumToken
         marketState.isPremiumAuthedStatus = info.userStatus ~= 0
         arzApplySavedAuthRuntime()
+        if beforeMarketplaceAuth ~= arzAccountBridgeMarketplaceAuthFingerprint(ini) then
+            pcall(arzAccountBridgeResetMarketplaceAuthState)
+        end
         return true
     end
 
@@ -7646,7 +8065,7 @@ AUTO_AD_RECONNECT_STATE = AUTO_AD_RECONNECT_STATE or {
 	resumeAfter = 0
 }
 local menuThemePath = "moonloader/ArzMarket/js/menu_theme.json"
-menuThemeConfig = gojson(menuThemePath):Load({
+local menuThemeConfig = gojson(menuThemePath):Load({
 	selectedSputnik = "",
 	palette_key = "arzmarket_default",
 	color_text_market = {
@@ -16359,31 +16778,63 @@ function arzAuthFreezeInitialize()
 end
 
 function main()
+	local bootstrapGateOk, bootstrapGateError = arzFirstBootstrapEnsurePendingForInitialLoader()
+	if not bootstrapGateOk then
+		print("[ArzMarket][Bootstrap] cannot create first-run isolation: " .. tostring(bootstrapGateError))
+		return
+	end
+
 	local loaderInstallMarkerPath = getWorkingDirectory() .. "\\.arzmarket_loader_downloaded"
 	local startedFromFreshLoaderDownload = doesFileExist(loaderInstallMarkerPath)
+	local firstBootstrapPending = nil
+	local firstBootstrapActive = doesFileExist(ARZ_FIRST_BOOTSTRAP_PENDING_PATH)
+
+	if firstBootstrapActive then
+		firstBootstrapPending = arzFirstBootstrapReadKeyValue(ARZ_FIRST_BOOTSTRAP_PENDING_PATH)
+		if tostring(firstBootstrapPending.session or "") == "" then
+			print("[ArzMarket][Bootstrap] invalid first bootstrap session")
+			return
+		end
+		if not arzScriptOfflineSet(true) then
+			print("[ArzMarket][Bootstrap] cannot enable offline isolation")
+			return
+		end
+		ARZ_FIRST_BOOTSTRAP_ACTIVE = true
+
+		local managedInstalled, managedError = arzFirstBootstrapInstallManagedLoader(firstBootstrapPending)
+		if not managedInstalled then
+			print("[ArzMarket][Bootstrap] managed loader install failed: " .. tostring(managedError))
+			while not isSampLoaded() do wait(0) end
+			while not isSampAvailable() do wait(0) end
+			pcall(sampAddChatMessage, u8:decode("[ArzMarket] Первый запуск остановлен. Loader не прошёл установку: ") .. tostring(managedError), 0xFFFF6464)
+			return
+		end
+
+		local managedVerified, verifyError = arzFirstBootstrapWaitManagedVerification(firstBootstrapPending, 90)
+		if not managedVerified then
+			print("[ArzMarket][Bootstrap] managed loader verification failed: " .. tostring(verifyError))
+			while not isSampLoaded() do wait(0) end
+			while not isSampAvailable() do wait(0) end
+			pcall(sampAddChatMessage, u8:decode("[ArzMarket] Первый запуск остановлен. Повторная проверка loader не пройдена: ") .. tostring(verifyError), 0xFFFF6464)
+			return
+		end
+		print("[ArzMarket][Bootstrap] managed loader verification passed")
+	end
 
 	if startedFromFreshLoaderDownload then
-		while not isSampLoaded() do
-			wait(0)
-		end
-
-		while not isSampAvailable() do
-			wait(0)
-		end
-
+		while not isSampLoaded() do wait(0) end
+		while not isSampAvailable() do wait(0) end
 		pcall(os.remove, loaderInstallMarkerPath)
-		pcall(sampAddChatMessage, u8:decode("[ArzMarket] ArzMarket успешно скачан. Начинаю скачивание остальных файлов..."), 0xFF70C8FF)
+		local message = firstBootstrapActive
+			and "[ArzMarket] Второй loader проверен. Начинаю загрузку остальных файлов в изолированном режиме..."
+			or "[ArzMarket] ArzMarket успешно скачан. Начинаю скачивание остальных файлов..."
+		pcall(sampAddChatMessage, u8:decode(message), 0xFF70C8FF)
 	end
 
 	ARZ_COMPONENTS.bootstrap_ready, ARZ_COMPONENTS.bootstrap_error = arzComponentsBootstrapAll()
 
-	while not isSampLoaded() do
-		wait(0)
-	end
-
-	while not isSampAvailable() do
-		wait(0)
-	end
+	while not isSampLoaded() do wait(0) end
+	while not isSampAvailable() do wait(0) end
 
 	if not ARZ_COMPONENTS.bootstrap_ready then
 		local bootstrapErrorText = u8:decode("ArzMarket не запущен: не удалось загрузить обязательные компоненты. Ошибка: ")
@@ -16399,10 +16850,7 @@ function main()
 		pcall(os.remove, successfulUpdateBackup)
 	end
 
-	-- Load Baron again after component bootstrap so a freshly downloaded or
-	-- updated assistant is used immediately in this same script session.
 	pcall(arzBaronLoadAssistant)
-
 	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.registerCommands) == "function" then
 		ARZ_BARON_ASSISTANT.registerCommands()
 	end
@@ -16423,6 +16871,16 @@ function main()
 		pcall(sendNotify, ARZ_MODULES.bootstrap.failure_message)
 		pcall(AFKMessage, u8:decode("Модуль buyroute_core НЕ загружен. Ошибка: ") .. tostring(ARZ_MODULES.bootstrap.buyroute_error))
 		return
+	end
+
+	if firstBootstrapActive then
+		local completed, completionError = arzFirstBootstrapComplete(firstBootstrapPending)
+		if not completed then
+			print("[ArzMarket][Bootstrap] completion failed: " .. tostring(completionError))
+			pcall(sampAddChatMessage, u8:decode("[ArzMarket] Проверки пройдены, но не удалось завершить первый запуск: ") .. tostring(completionError), 0xFFFF6464)
+			return
+		end
+		pcall(sampAddChatMessage, u8:decode("[ArzMarket] Все проверки пройдены. Offline первого запуска выключен."), 0xFF70C8FF)
 	end
 	arzAuthFreezeInitialize()
 	arzAccountBridgeStart()
@@ -17437,7 +17895,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.57.130"
+ARZ_UPDATE_VERSION = "3.57.132"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -35333,6 +35791,10 @@ function telegramOriginalCleanup()
 end
 
 function telegramOriginalAsyncHttpRequest(method, url, requestOptions, onSuccess, onError, timeoutSeconds)
+	if ARZ_FIRST_BOOTSTRAP_ACTIVE then
+		if type(onError) == "function" then pcall(onError, "first_bootstrap_offline") end
+		return nil, "first_bootstrap_offline"
+	end
 	requestOptions = requestOptions or {}
 	requestOptions.headers = requestOptions.headers or {}
 	requestOptions.headers["Accept-Encoding"] = ini.cfg.bannedByRkn == true and zzlibLoaded == true and "gzip, deflate" or nil
@@ -35650,6 +36112,10 @@ function telegramProcessSendQueue()
 end
 
 function telegramWorkingOriginalAsyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveSelfInfo)
+	if ARZ_FIRST_BOOTSTRAP_ACTIVE then
+		if type(onError) == "function" then pcall(onError, "first_bootstrap_offline") end
+		return nil, "first_bootstrap_offline"
+	end
 	marketState.asyncRequestSerial = (tonumber(marketState.asyncRequestSerial) or 0) + 1
 	local requestId = tostring(os.clock()) .. ":tg:" .. tostring(marketState.asyncRequestSerial)
 	marketState.asyncData[requestId] = os.time()
@@ -35977,6 +36443,9 @@ end
 function arzComponentsDownloadFile(url, path, timeoutSeconds)
 	if arzComponentsIsPlaceholderUrl(url) then
 		return false, "url_not_configured"
+	end
+	if ARZ_FIRST_BOOTSTRAP_ACTIVE and not arzFirstBootstrapIsAllowedGithubUrl(url) then
+		return false, "first_bootstrap_url_blocked"
 	end
 	if not arzComponentsEnsureParentDirectory(path) then
 		return false, "destination_directory_unavailable"
@@ -36512,6 +36981,9 @@ function arzModulesFileSize(path)
 end
 
 function arzModulesDownloadFile(url, path, timeoutSeconds)
+	if ARZ_FIRST_BOOTSTRAP_ACTIVE and not arzFirstBootstrapIsAllowedGithubUrl(url) then
+		return false, "first_bootstrap_url_blocked"
+	end
 	pcall(os.remove, path)
 	if doesFileExist(path) then
 		return false, "stale_download_locked"
@@ -37022,7 +37494,13 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 		or url:find("https://api-telegram.arz.market/", 1, true) == 1
 	)
 
-	if not isOriginalTelegramTransport and arzScriptOfflineReject("http", url) then
+	local blockedByOffline = false
+	if ARZ_FIRST_BOOTSTRAP_ACTIVE and ARZ_SCRIPT_OFFLINE then
+		blockedByOffline = arzScriptOfflineReject("http", url)
+	elseif not isOriginalTelegramTransport then
+		blockedByOffline = arzScriptOfflineReject("http", url)
+	end
+	if blockedByOffline then
 		if type(onError) == "function" then
 			lua_thread.create(function()
 				wait(0)

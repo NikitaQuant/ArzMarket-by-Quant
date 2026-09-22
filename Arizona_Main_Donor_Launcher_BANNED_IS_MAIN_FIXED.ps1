@@ -3,7 +3,8 @@ param(
     [switch]$PreparationWorker,
     [string]$PreparationConfigPath,
     [string]$PreparationProgressPath,
-    [string]$PreparationResultPath
+    [string]$PreparationResultPath,
+    [switch]$SelfUpdateRelaunched
 )
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -27,7 +28,10 @@ $OnboardingCompletedPath = Join-Path $SettingsDir 'onboarding_v1_completed.flag'
 $LogsDir = Join-Path $ScriptDir 'logs'
 [IO.Directory]::CreateDirectory($LogsDir) | Out-Null
 $DeveloperLogPath = Join-Path $LogsDir ('launcher_{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))
-$LauncherBuild = 'prepare-launch-wpf-v2-github-layout-fix1'
+$LauncherBuild = 'prepare-launch-wpf-v2-github-layout-fix2-self-update-v1-bootstrap-chain-v1-tutorial-warnings-v1'
+$LauncherSelfUpdateVersion = '1.0.3'
+$LauncherSelfUpdateUrl = 'https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/Arizona_Main_Donor_Launcher_BANNED_IS_MAIN_FIXED.ps1'
+$LauncherSelfUpdateTimeoutSeconds = 8
 
 # All launcher-managed download sources are intentionally configured here.
 $PayloadOwner = 'NikitaQuant'
@@ -93,6 +97,122 @@ function Write-DevLog([string]$Text) {
         $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
         [IO.File]::AppendAllText($DeveloperLogPath, "[$stamp] $Text`r`n", [Text.UTF8Encoding]::new($false))
     } catch {}
+}
+
+function ConvertTo-LauncherVersion([string]$Value) {
+    $text = ([string]$Value).Trim()
+    if ($text -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') { return $null }
+    try { return [version]$text } catch { return $null }
+}
+
+function Get-RemoteLauncherVersion([string]$Path) {
+    try {
+        $text = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+    } catch {
+        throw "Не удалось прочитать загруженное обновление: $($_.Exception.Message)"
+    }
+
+    $match = [regex]::Match(
+        $text,
+        '(?m)^\s*\$LauncherSelfUpdateVersion\s*=\s*[''\"]([^''\"]+)[''\"]\s*$'
+    )
+    if (-not $match.Success) { throw 'В обновлении не найдена версия launcher.' }
+    return $match.Groups[1].Value.Trim()
+}
+
+function Test-LauncherUpdateFile([string]$Path, [version]$ExpectedVersion) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Файл обновления launcher не найден.' }
+
+    $file = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($file.Length -lt 50000 -or $file.Length -gt 5000000) {
+        throw "Некорректный размер обновления launcher: $($file.Length) байт."
+    }
+
+    $text = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+    foreach ($required in @('#requires -version 5.1', 'function Write-DevLog', 'function Invoke-LauncherSelfUpdate', 'ShowDialog()')) {
+        if ($text.IndexOf($required, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            throw "Обновление launcher не прошло проверку структуры: отсутствует '$required'."
+        }
+    }
+
+    $remoteTextVersion = Get-RemoteLauncherVersion $Path
+    $remoteVersion = ConvertTo-LauncherVersion $remoteTextVersion
+    if ($null -eq $remoteVersion -or $remoteVersion -ne $ExpectedVersion) {
+        throw 'Версия внутри загруженного launcher не совпадает с проверенной версией.'
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+    if ($null -ne $parseErrors -and @($parseErrors).Count -gt 0) {
+        $message = (@($parseErrors) | Select-Object -First 3 | ForEach-Object { $_.Message }) -join '; '
+        throw "Загруженный launcher содержит синтаксические ошибки: $message"
+    }
+}
+
+function Invoke-LauncherSelfUpdate {
+    if ($PreparationWorker) { return $false }
+    if ([string]::IsNullOrWhiteSpace($PSCommandPath) -or -not (Test-Path -LiteralPath $PSCommandPath -PathType Leaf)) {
+        Write-DevLog 'Self-update skipped: current script path is unavailable.'
+        return $false
+    }
+
+    $localVersion = ConvertTo-LauncherVersion $LauncherSelfUpdateVersion
+    if ($null -eq $localVersion) {
+        Write-DevLog "Self-update skipped: invalid local version '$LauncherSelfUpdateVersion'."
+        return $false
+    }
+
+    $stagePath = Join-Path $ScriptDir ('.launcher_update_' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    try {
+        $headers = @{ 'User-Agent'='Arizona-Main-Donor-Launcher-SelfUpdate'; 'Cache-Control'='no-cache' }
+        Invoke-WebRequest -UseBasicParsing -Uri $LauncherSelfUpdateUrl -Headers $headers -TimeoutSec $LauncherSelfUpdateTimeoutSeconds -OutFile $stagePath -ErrorAction Stop | Out-Null
+
+        $remoteTextVersion = Get-RemoteLauncherVersion $stagePath
+        $remoteVersion = ConvertTo-LauncherVersion $remoteTextVersion
+        if ($null -eq $remoteVersion) {
+            throw "GitHub вернул launcher с некорректной версией '$remoteTextVersion'."
+        }
+
+        if ($remoteVersion -le $localVersion) {
+            Write-DevLog "Self-update: current=$localVersion remote=$remoteVersion, update not required."
+            return $false
+        }
+
+        Test-LauncherUpdateFile $stagePath $remoteVersion
+
+        $backupPath = Join-Path $SettingsDir 'launcher_previous.ps1'
+        Copy-Item -LiteralPath $PSCommandPath -Destination $backupPath -Force -ErrorAction Stop
+
+        try {
+            Copy-Item -LiteralPath $stagePath -Destination $PSCommandPath -Force -ErrorAction Stop
+        } catch {
+            try { Copy-Item -LiteralPath $backupPath -Destination $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}
+            throw
+        }
+
+        Write-DevLog "Self-update installed: $localVersion -> $remoteVersion. Restarting launcher."
+        $powershellExe = Join-Path $PSHOME 'powershell.exe'
+        if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) { $powershellExe = 'powershell.exe' }
+
+        $arguments = @(
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-STA',
+            '-File', ('"{0}"' -f $PSCommandPath),
+            '-SelfUpdateRelaunched'
+        ) -join ' '
+
+        Start-Process -FilePath $powershellExe -ArgumentList $arguments -WorkingDirectory $ScriptDir -ErrorAction Stop | Out-Null
+        return $true
+    } catch {
+        Write-DevLog "Self-update failed: $($_.Exception.ToString())"
+        return $false
+    } finally {
+        if (Test-Path -LiteralPath $stagePath -PathType Leaf) {
+            Remove-Item -LiteralPath $stagePath -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 
@@ -912,19 +1032,27 @@ $AnySectionAuthFields = @(
     'marketAuthKey','marketAuthToken','premiumToken','premiumAuthToken',
     'userToken','userAuthToken','serverToken','authKey'
 )
+$AuthoritativeCfgAuthFields = @(
+    'myServerToken','myServerId','authNickname','authUid',
+    'authPremiumTokenAuth','authUserTempKey','authRealNameMode1','authRealNameMode2',
+    'authSelfInfoId','authSelfInfoUsername','authSelfInfoExp','authSelfInfoOsTime','marketAuthKey'
+)
 
-$BridgeProtocol = 3
+$BridgeProtocol = 4
 $PairRuntime = [pscustomobject]@{
     Session = ''
     ProfileKey = ''
+    ProfileAuthProvided = $false
     Active = $false
     Phase = 'IDLE'
     Main = $null
     Donor = $null
     Deadline = [datetime]::MinValue
     CandidateToken = ''
+    CandidateSignature = ''
     CandidateSince = [datetime]::MinValue
     LastSignature = ''
+    LastAuthIssue = ''
 }
 
 function Add-LauncherLog([string]$Text) {
@@ -1057,8 +1185,11 @@ function Enable-MoonLoader([string]$GameDir) {
 function Test-PairBridgeLua([string]$GameDir) {
     $moon = Join-Path $GameDir 'moonloader'
     try {
+        $protocolMarker = "ARZ_ACCOUNT_BRIDGE_PROTOCOL = $BridgeProtocol"
         foreach ($f in (Get-ChildItem -LiteralPath $moon -Filter '*.lua' -File -ErrorAction SilentlyContinue)) {
-            if (Select-String -LiteralPath $f.FullName -SimpleMatch 'ARZ_ACCOUNT_BRIDGE_CONFIG_PATH' -Quiet -ErrorAction SilentlyContinue) { return $true }
+            $hasBridge = Select-String -LiteralPath $f.FullName -SimpleMatch 'ARZ_ACCOUNT_BRIDGE_CONFIG_PATH' -Quiet -ErrorAction SilentlyContinue
+            $hasProtocol = Select-String -LiteralPath $f.FullName -SimpleMatch $protocolMarker -Quiet -ErrorAction SilentlyContinue
+            if ($hasBridge -and $hasProtocol) { return $true }
         }
     } catch {}
     return $false
@@ -1396,28 +1527,77 @@ function Get-DonorAuthPayload($donor) {
     $parsed = Read-IniSections $iniPath
     $out = [ordered]@{}
 
-    foreach ($sectionName in $parsed.Sections.Keys) {
+    # cfg auth strings form one authoritative context. Preserve explicit empty
+    # values so stale MAIN credentials cannot survive a DONOR snapshot.
+    $cfgSource = if ($parsed.Sections.ContainsKey('cfg')) { $parsed.Sections['cfg'] } else { @{} }
+    $cfgTarget = [ordered]@{}
+    foreach ($field in $CfgAccountFields) {
+        if ($cfgSource.ContainsKey($field)) {
+            $value = [string]$cfgSource[$field]
+            if ($value -match '[\r\n]') { throw "Некорректное auth-поле DONOR: cfg.$field" }
+            $cfgTarget[$field] = $value
+        } elseif ($field -in @('myServerToken','myServerId','authNickname','authUid','authPremiumTokenAuth','authUserTempKey','authRealNameMode1','authRealNameMode2','authSelfInfoId','authSelfInfoUsername','authSelfInfoExp','authSelfInfoOsTime','marketAuthKey')) {
+            $cfgTarget[$field] = ''
+        }
+    }
+    foreach ($field in $AnySectionAuthFields) {
+        if ($cfgSource.ContainsKey($field)) {
+            $value = [string]$cfgSource[$field]
+            if ($value -match '[\r\n]') { throw "Некорректное auth-поле DONOR: cfg.$field" }
+            $cfgTarget[$field] = $value
+        }
+    }
+    $out['cfg'] = $cfgTarget
+
+    foreach ($sectionName in @($parsed.Sections.Keys | Sort-Object)) {
+        if ($sectionName -ieq 'cfg') { continue }
         $src = $parsed.Sections[$sectionName]
         $dst = [ordered]@{}
-        if ($sectionName -ieq 'cfg') {
-            foreach ($field in $CfgAccountFields) {
-                if ($src.ContainsKey($field) -and -not [string]::IsNullOrWhiteSpace([string]$src[$field])) { $dst[$field] = [string]$src[$field] }
-            }
-        }
         foreach ($field in $AnySectionAuthFields) {
-            if ($src.ContainsKey($field) -and -not [string]::IsNullOrWhiteSpace([string]$src[$field])) { $dst[$field] = [string]$src[$field] }
+            if ($src.ContainsKey($field)) {
+                $value = [string]$src[$field]
+                if ($value -match '[\r\n]') { throw "Некорректное auth-поле DONOR: $sectionName.$field" }
+                $dst[$field] = $value
+            }
         }
         if ($dst.Count -gt 0) { $out[$sectionName] = $dst }
     }
 
-    $token = ''
-    if ($out.Contains('cfg') -and $out['cfg'].Contains('myServerToken')) { $token = [string]$out['cfg']['myServerToken'] }
+    $token = [string]$cfgTarget['myServerToken']
     if ([string]::IsNullOrWhiteSpace($token)) { return $null }
+
+    $authSignatureSource = [ordered]@{
+        myServerToken = [string]$cfgTarget['myServerToken']
+        myServerId = [string]$cfgTarget['myServerId']
+        authPremiumTokenAuth = [string]$cfgTarget['authPremiumTokenAuth']
+        authUserTempKey = [string]$cfgTarget['authUserTempKey']
+        marketAuthKey = [string]$cfgTarget['marketAuthKey']
+        authNickname = [string]$cfgTarget['authNickname']
+        authUid = [string]$cfgTarget['authUid']
+    }
     $sig = ($out | ConvertTo-Json -Depth 8 -Compress)
-    return [pscustomobject]@{ Token=$token; Sections=$out; Signature=$sig }
+    $authSig = ($authSignatureSource | ConvertTo-Json -Compress)
+    return [pscustomobject]@{ Token=$token; Sections=$out; Signature=$sig; AuthSignature=$authSig }
 }
 
-function Update-MainIniFromPayload($main, $payload, $Missing = @{}) {
+function Get-DonorAuthMissingRequirements($payload) {
+    $missing = New-Object 'System.Collections.Generic.List[string]'
+    if ($null -eq $payload -or -not $payload.Sections.Contains('cfg')) {
+        $missing.Add('cfg')
+        return @($missing)
+    }
+    $cfg = $payload.Sections['cfg']
+    foreach ($field in @('myServerToken','myServerId')) {
+        if (-not $cfg.Contains($field) -or [string]::IsNullOrWhiteSpace([string]$cfg[$field])) { $missing.Add($field) }
+    }
+    if (-not $PairRuntime.ProfileAuthProvided -and
+        (-not $cfg.Contains('authPremiumTokenAuth') -or [string]::IsNullOrWhiteSpace([string]$cfg['authPremiumTokenAuth']))) {
+        $missing.Add('authPremiumTokenAuth')
+    }
+    return @($missing)
+}
+
+function Update-MainIniFromPayload($main, $payload, $Missing = @{}, [bool]$Authoritative=$false) {
     $path = Join-Path $main.GameDir 'moonloader\config\ArzMarket\ArzMarket.ini'
     $doc = Get-TextDocument $path
     $newline = if ($doc.Text.Contains("`r`n")) { "`r`n" } else { "`n" }
@@ -1453,13 +1633,18 @@ function Update-MainIniFromPayload($main, $payload, $Missing = @{}) {
         if ($current -ne '' -and $line -match '^\s*([^;#][^=]*?)\s*=') {
             $key = $matches[1].Trim()
             if ($Missing.Contains($current) -and $Missing[$current].Contains($key)) { continue }
-            if (-not $payload.Sections.Contains($current)) { $output.Add($line); continue }
+            if (-not $payload.Sections.Contains($current)) {
+                if ($Authoritative -and (Test-BridgeAuthoritativeAuthField $current $key)) { continue }
+                $output.Add($line)
+                continue
+            }
             $target = $payload.Sections[$current]
             if ($target.Contains($key)) {
                 $output.Add("$key=$($target[$key])")
                 $seenKeys[$current][$key] = $true
                 continue
             }
+            if ($Authoritative -and (Test-BridgeAuthoritativeAuthField $current $key)) { continue }
         }
         $output.Add($line)
     }
@@ -1480,6 +1665,11 @@ function Update-MainIniFromPayload($main, $payload, $Missing = @{}) {
 function Test-BridgeAuthField([string]$Section, [string]$Field) {
     return ($Section.Length -gt 0 -and $Section -notmatch '[\r\n\[\]]' -and
         (($Section -ceq 'cfg' -and $CfgAccountFields -ccontains $Field) -or $AnySectionAuthFields -ccontains $Field))
+}
+
+function Test-BridgeAuthoritativeAuthField([string]$Section, [string]$Field) {
+    return ($Section.Length -gt 0 -and $Section -notmatch '[\r\n\[\]]' -and
+        (($Section -ceq 'cfg' -and $AuthoritativeCfgAuthFields -ccontains $Field) -or $AnySectionAuthFields -ccontains $Field))
 }
 
 function Write-BridgeJsonAtomic([string]$Path, $Value) {
@@ -1522,6 +1712,13 @@ function Write-MainAuthBackup($main, $payload, [string]$Session) {
     $touched = [ordered]@{}
     foreach ($section in $payload.Sections.Keys) {
         $touched[$section] = @($payload.Sections[$section].Keys)
+    }
+    foreach ($section in $parsed.Sections.Keys) {
+        foreach ($field in $parsed.Sections[$section].Keys) {
+            if (-not (Test-BridgeAuthField $section $field)) { continue }
+            if (-not $touched.Contains($section)) { $touched[$section] = @() }
+            if ($touched[$section] -notcontains $field) { $touched[$section] += $field }
+        }
     }
     if (-not [string]::IsNullOrWhiteSpace($PairRuntime.ProfileKey)) {
         if (-not $touched.Contains('cfg')) { $touched['cfg'] = @() }
@@ -1567,7 +1764,8 @@ function Restore-MainAuthBackup($main) {
                     if ($line -match '^session=(.+)$') { $expectedSession = $matches[1] }
                 }
             }
-            if ($backup.protocol -ne $BridgeProtocol -or [string]::IsNullOrWhiteSpace($expectedSession) -or
+            $backupProtocol = [int]$backup.protocol
+            if (($backupProtocol -ne $BridgeProtocol -and $backupProtocol -ne 3) -or [string]::IsNullOrWhiteSpace($expectedSession) -or
                 $backup.session -cne $expectedSession -or $backup.sections -isnot [pscustomobject] -or
                 $backup.missing -isnot [pscustomobject]) { throw 'Invalid backup' }
             $sections = [ordered]@{}
@@ -1661,7 +1859,7 @@ function Write-LauncherProfileAuth($main) {
 function Write-DonorSnapshot($main, $donor, $payload, [bool]$Initial) {
     $dir = Ensure-ArzConfigDir $main
     Write-MainAuthBackup $main $payload $PairRuntime.Session
-    if ($Initial) { Update-MainIniFromPayload $main $payload }
+    if ($Initial) { Update-MainIniFromPayload $main $payload @{} $true }
     $syncPath = Join-Path $dir 'donor_auth_sync.json'
     $snapshot = [ordered]@{
         protocol = $BridgeProtocol
@@ -1670,6 +1868,7 @@ function Write-DonorSnapshot($main, $donor, $payload, [bool]$Initial) {
         generatedAt = (Get-Date).ToString('o')
         sourceNick = $donor.Nick
         targetNick = $main.Nick
+        authoritative = $true
         sections = $payload.Sections
     }
     $json = $snapshot | ConvertTo-Json -Depth 10 -Compress
@@ -1727,6 +1926,7 @@ function Start-MainDonor {
     Restore-BridgeStandaloneFlags $pair.Donor
     $PairRuntime.Session = [Guid]::NewGuid().ToString('N')
     $PairRuntime.ProfileKey = $profileKeyBox.Password.Trim()
+    $PairRuntime.ProfileAuthProvided = -not [string]::IsNullOrWhiteSpace($PairRuntime.ProfileKey)
 
     Write-ArzMarketProxyConfig $pair.Main $proxyCfg
     Write-ArzMarketProxyConfig $pair.Donor $proxyCfg
@@ -1737,8 +1937,10 @@ function Start-MainDonor {
     $PairRuntime.Donor = $pair.Donor
     $PairRuntime.Deadline = (Get-Date).AddMinutes(3)
     $PairRuntime.CandidateToken = ''
+    $PairRuntime.CandidateSignature = ''
     $PairRuntime.CandidateSince = [datetime]::MinValue
     $PairRuntime.LastSignature = ''
+    $PairRuntime.LastAuthIssue = ''
 
     Write-LauncherHeartbeat $pair.Donor $true
     Write-LauncherHeartbeat $pair.Main $true
@@ -1759,6 +1961,8 @@ function Sync-Now {
     $pair = [pscustomobject]@{ Main=$PairRuntime.Main; Donor=$PairRuntime.Donor }
     $payload = Get-DonorAuthPayload $pair.Donor
     if ($null -eq $payload) { throw 'Донорский аккаунт пока не получил токен. Подождите его полного входа в игру.' }
+    $missingAuth = @(Get-DonorAuthMissingRequirements $payload)
+    if ($missingAuth.Count -gt 0) { throw ('Донорский auth-контекст неполный: ' + ($missingAuth -join ', ')) }
     Set-RoleFiles $pair.Donor 'DONOR' $false
     Write-DonorSnapshot $pair.Main $pair.Donor $payload ($PairRuntime.Phase -eq 'WAIT_DONOR') | Out-Null
     $PairRuntime.LastSignature = $payload.Signature
@@ -1775,6 +1979,7 @@ function Stop-PairWorkflow {
         $PairRuntime.Active = $false
         $PairRuntime.Phase = 'STOPPED'
         $PairRuntime.ProfileKey = ''
+        $PairRuntime.ProfileAuthProvided = $false
         $profileKeyBox.Password = ''
         Write-Status 'Остановил автовосстановление.'
     } catch {
@@ -1902,6 +2107,7 @@ function Test-ProtectedPayloadPath([string]$RelativePath) {
     $protectedNames = @(
         'donor_auth_sync.json','launcher_heartbeat.ini','account_bridge.ini','account_role.flag',
         'network_proxy.ini','proxy_required.flag','launcher_profile_auth.json','main_auth_restore.json',
+        'first_bootstrap_pending.ini','first_bootstrap_completed.flag','managed_loader_verified.ini','managed_loader_failed.ini',
         'arzmarket.ini','ini_write_locked.flag','buy.json','sell.json','trade_filters.json',
         'manual_purchased.json','log.json','vrprofile.json','release_notes_state.json',
         'html_window_state.json','html_draft_sell.json','component_state.json','baron_assistant.json',
@@ -1955,7 +2161,9 @@ function Get-RemotePayloadManifest($Config) {
         $remote = ([string]$entry.path).Replace('\','/').TrimStart([char]'/')
         if ([string]::IsNullOrWhiteSpace($remote)) { continue }
 
-        $isProjectFile = ($remote -like 'ArzMarket/*') -or ($remote -like 'modules/*') -or ($remote -match '^(?i:by_Quant_ArzMarket.*\.lua)$') -or ($remote -ieq 'ArzMarket_Loader_by_Quant.lua')
+        # The managed Lua loader is intentionally not preinstalled here.
+        # ArzMarket must download and verify it during the isolated first bootstrap.
+        $isProjectFile = ($remote -like 'ArzMarket/*') -or ($remote -like 'modules/*') -or ($remote -match '^(?i:by_Quant_ArzMarket.*\.lua)$')
         if (-not $isProjectFile) { continue }
 
         $local = ConvertTo-SafeRelativePath ('moonloader/' + $remote)
@@ -2278,6 +2486,10 @@ function Invoke-PreparationWorker {
 
 if ($PreparationWorker) {
     Invoke-PreparationWorker
+    exit
+}
+
+if (Invoke-LauncherSelfUpdate) {
     exit
 }
 
@@ -2875,6 +3087,7 @@ $mainB.Add_CheckedChanged({ Save-UiSettings })
 $form.Add_FormClosing({
     Save-UiSettings
     $PairRuntime.ProfileKey = ''
+    $PairRuntime.ProfileAuthProvided = $false
     $profileKeyBox.Clear()
     try {
         if ($null -ne $PairRuntime.Main) { Write-LauncherHeartbeat $PairRuntime.Main $false }
@@ -3304,6 +3517,7 @@ function Show-LauncherOnboarding([bool]$Force = $false) {
         <Border Style="{StaticResource TutorialCard}"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel>
           <TextBlock Text="Аккаунты" FontSize="20" FontWeight="SemiBold"/>
           <TextBlock Text="Основной - аккаунт, с которого вы будете играть. Донор нужен для получения данных авторизации. Донорский аккаунт можно брать с любого сервера Arizona RP, он не обязан быть на том же сервере, что и основной." Foreground="#B8C1CA" TextWrapping="Wrap" Margin="0,8,0,14"/>
+          <TextBlock Text="Для донора нельзя использовать заблокированный аккаунт в игре, заблокированный аккаунт в ArzMarket." Foreground="#FF4D4D" FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,14"/>
           <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="12"/><ColumnDefinition/></Grid.ColumnDefinitions>
             <Border Grid.Column="0" Background="#11161B" BorderBrush="#2A323A" BorderThickness="1" CornerRadius="8" Padding="12"><StackPanel>
               <TextBlock Text="Основной аккаунт" FontWeight="SemiBold" FontSize="14"/>
@@ -3329,6 +3543,7 @@ function Show-LauncherOnboarding([bool]$Force = $false) {
       <Grid x:Name="TutorialProxy" Visibility="Collapsed">
         <Border Style="{StaticResource TutorialCard}"><StackPanel>
           <TextBlock Text="Прокси для ArzMarket" FontSize="20" FontWeight="SemiBold"/>
+          <TextBlock Text="ВПН использовать обязательно, если вы хотите обойти бан." Foreground="#FF4D4D" FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap" Margin="0,8,0,2"/>
           <TextBlock TextWrapping="Wrap" Foreground="#B8C1CA" Margin="0,10,0,0">
             <Run Text="1. Зайдите на сайт "/>
             <Hyperlink x:Name="OnboardingWebshareLink" Foreground="#35D07F" TextDecorations="Underline" Cursor="Hand">Webshare</Hyperlink>
@@ -3351,6 +3566,7 @@ function Show-LauncherOnboarding([bool]$Force = $false) {
         <Border Style="{StaticResource TutorialCard}"><StackPanel VerticalAlignment="Center" MaxWidth="620">
           <TextBlock Text="Telegram" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
           <TextBlock Text="Код для поля Telegram можно получить в боте @ArzMarketManager_bot. Откройте бота, получите код и вставьте его в поле ниже или позже в основном окне лаунчера." Foreground="#B8C1CA" FontSize="14" TextWrapping="Wrap" TextAlignment="Center" Margin="0,10,0,0"/>
+          <TextBlock Text="Обязательно нужно использовать новый купленный ТГ аккаунт. ТГ аккаунт стоит 50р. Новый ТГ аккаунт использовать обязательно." Foreground="#FF4D4D" FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" Margin="0,10,0,0"/>
           <Button x:Name="OnboardingTelegramOpen" Content="Открыть @ArzMarketManager_bot" Style="{StaticResource TutorialButton}" Height="38" Width="260" Margin="0,18,0,0"/>
           <TextBlock Text="Код Telegram" Foreground="#8E99A5" Margin="0,18,0,5"/>
           <PasswordBox x:Name="OnboardingTelegramKey" Height="34"/>
@@ -3560,7 +3776,7 @@ $launchButton.Add_Click({ Start-Preparation }); $checkFilesButton.Add_Click({ St
 $helpButton.Add_Click({ Show-LauncherOnboarding $true })
 $detailsButton.Add_Click({ if($logContentRow.Height.Value -lt 100){$logContentRow.Height=220; $form.Height=870; $detailsButton.Content='Свернуть'}else{$logContentRow.Height=72; $form.Height=720; $detailsButton.Content='Подробнее'} })
 $titleBar.Add_MouseLeftButtonDown({ if($_.ChangedButton -eq [Windows.Input.MouseButton]::Left){$form.DragMove()} }); $minimizeButton.Add_Click({$form.WindowState='Minimized'}); $closeButton.Add_Click({$form.Close()})
-$form.Add_Closing({ Save-UiSettings; if($null -ne $script:PreparationPollTimer){$script:PreparationPollTimer.Stop()}; if($null -ne $script:PreparationProcess -and -not $script:PreparationProcess.HasExited){try{$script:PreparationProcess.Kill()}catch{}}; Remove-PreparationFiles; $PairRuntime.ProfileKey=''; $profileKeyBox.Password=''; try{if($null-ne $PairRuntime.Main){Write-LauncherHeartbeat $PairRuntime.Main $false};if($null-ne $PairRuntime.Donor){Write-LauncherHeartbeat $PairRuntime.Donor $false}}catch{} })
+$form.Add_Closing({ Save-UiSettings; if($null -ne $script:PreparationPollTimer){$script:PreparationPollTimer.Stop()}; if($null -ne $script:PreparationProcess -and -not $script:PreparationProcess.HasExited){try{$script:PreparationProcess.Kill()}catch{}}; Remove-PreparationFiles; $PairRuntime.ProfileKey=''; $PairRuntime.ProfileAuthProvided=$false; $profileKeyBox.Password=''; try{if($null-ne $PairRuntime.Main){Write-LauncherHeartbeat $PairRuntime.Main $false};if($null-ne $PairRuntime.Donor){Write-LauncherHeartbeat $PairRuntime.Donor $false}}catch{} })
 
 $SettingsLoadPath = $SettingsPath
 if (-not (Test-Path -LiteralPath $SettingsLoadPath) -and (Test-Path -LiteralPath $LegacySettingsPath)) {
@@ -3641,12 +3857,17 @@ $timer.Add_Tick({
         if (-not $PairRuntime.Active) { return }
 
         if ((Get-Date) -gt $PairRuntime.Deadline -and $PairRuntime.Phase -eq 'WAIT_DONOR') {
-            Write-Status 'Не вошел в донор за 3 минуты.'
+            if (-not [string]::IsNullOrWhiteSpace($PairRuntime.LastAuthIssue)) {
+                Write-Status ("Не получил полный auth-контекст донора за 3 минуты: {0}." -f $PairRuntime.LastAuthIssue)
+            } else {
+                Write-Status 'Не вошел в донор за 3 минуты.'
+            }
             Write-LauncherHeartbeat $PairRuntime.Main $false
             Write-LauncherHeartbeat $PairRuntime.Donor $false
             $PairRuntime.Active = $false
             $PairRuntime.Phase = 'TIMEOUT'
             $PairRuntime.ProfileKey = ''
+            $PairRuntime.ProfileAuthProvided = $false
             $profileKeyBox.Password = ''
             return
         }
@@ -3654,6 +3875,7 @@ $timer.Add_Tick({
         $donorState = Get-WatchdogState $PairRuntime.Donor
         if ($donorState.State -ne 'ONLINE' -or $donorState.Age -gt 12) {
             $PairRuntime.CandidateToken = ''
+            $PairRuntime.CandidateSignature = ''
             $PairRuntime.CandidateSince = [datetime]::MinValue
             return
         }
@@ -3661,10 +3883,25 @@ $timer.Add_Tick({
         $payload = Get-DonorAuthPayload $PairRuntime.Donor
         if ($null -eq $payload) { return }
 
-        if ($PairRuntime.CandidateToken -ne $payload.Token) {
+        $missingAuth = @(Get-DonorAuthMissingRequirements $payload)
+        if ($missingAuth.Count -gt 0) {
+            $issue = ($missingAuth -join ', ')
+            if ($PairRuntime.LastAuthIssue -ne $issue) {
+                $PairRuntime.LastAuthIssue = $issue
+                Write-Status ("Жду полные данные авторизации донора: {0}." -f $issue)
+            }
+            $PairRuntime.CandidateToken = ''
+            $PairRuntime.CandidateSignature = ''
+            $PairRuntime.CandidateSince = [datetime]::MinValue
+            return
+        }
+        $PairRuntime.LastAuthIssue = ''
+
+        if ($PairRuntime.CandidateToken -ne $payload.Token -or $PairRuntime.CandidateSignature -ne $payload.AuthSignature) {
             $PairRuntime.CandidateToken = $payload.Token
+            $PairRuntime.CandidateSignature = $payload.AuthSignature
             $PairRuntime.CandidateSince = Get-Date
-            Write-Status 'Получил данные донора. Проверяю...'
+            Write-Status 'Получил полный auth-контекст донора. Проверяю стабильность...'
             return
         }
         if (((Get-Date) - $PairRuntime.CandidateSince).TotalSeconds -lt 6) { return }
