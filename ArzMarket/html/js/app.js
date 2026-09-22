@@ -4059,7 +4059,62 @@
       button.classList.toggle('active', active);
       button.setAttribute('aria-selected', active ? 'true' : 'false');
     });
-    // Content intentionally stays empty for both sections until their functionality is implemented.
+
+    const content = refs.modsWorkspace.querySelector('.mods-catalog-content');
+    if (!content) return;
+    content.innerHTML = '';
+
+    // "Мои" пока остается пустым. Карточка программы находится только в первом разделе "Скрипты".
+    if (state.modsSection !== 'scripts') return;
+
+    const data = state.data && typeof state.data === 'object' ? state.data : {};
+    const downloadState = String(data.launcher_download_state || 'idle');
+    const downloadMessage = String(data.launcher_download_message || 'Готово к скачиванию');
+    const downloadTarget = String(data.launcher_download_target || '');
+    const busy = downloadState === 'choosing' || downloadState === 'downloading';
+
+    const card = document.createElement('article');
+    card.className = 'mods-download-card';
+
+    const icon = document.createElement('div');
+    icon.className = 'mods-download-card-icon';
+    icon.innerHTML = iconSvg('mods');
+
+    const body = document.createElement('div');
+    body.className = 'mods-download-card-body';
+
+    const title = document.createElement('h3');
+    title.textContent = 'Обход бана маркета';
+
+    body.append(title);
+
+    const actions = document.createElement('div');
+    actions.className = 'mods-download-card-actions';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'mods-download-button';
+    button.disabled = busy;
+    button.textContent = 'Скачать';
+
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = 'Скачать';
+      try {
+        await action('mods.launcher.download', {page:'mods'});
+        showToast('Выберите папку для сохранения программы', 'success');
+        await refresh(true, 'mods');
+      } catch (err) {
+        showToast(`Скачивание программы: ${err.message}`, 'error');
+        button.disabled = false;
+        button.textContent = 'Скачать';
+      }
+    });
+
+    actions.append(button);
+    card.append(icon, body, actions);
+    content.append(card);
   }
 
   function render() {

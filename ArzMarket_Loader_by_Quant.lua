@@ -2,7 +2,7 @@ require 'moonloader'
 
 script_name('ArzMarket Loader by Quant')
 script_author('NikitaQuant')
-script_version('0.45')
+script_version('0.47')
 
 local moonloader = require 'moonloader'
 local dlstatus = moonloader.download_status
@@ -88,6 +88,15 @@ local function readFile(path)
     file:close()
 
     return data
+end
+
+
+local function readInstallMarker()
+    local data = readFile(INSTALL_MARKER_PATH)
+    if not data then
+        return ''
+    end
+    return tostring(data):gsub('^%s+', ''):gsub('%s+$', '')
 end
 
 local function addCacheBuster(url)
@@ -262,7 +271,7 @@ local function getTargetFilename()
     local versionPart = versionForFilename(selectedVersion)
 
     if selectedSource == 'CUSTOM' then
-        return 'by_Quant_ArzMarket[' .. versionPart .. '].lua'
+        return 'by_Quant_ArzMarket[3_57_123].lua'
     end
 
     return '#ArzMarket[' .. versionPart .. '].lua'
@@ -326,6 +335,65 @@ local function unloadScripts(entries)
             entry.object:unload()
         end)
     end
+end
+
+local function parseFilenameVersion(filename)
+    local inside = tostring(filename or ''):match('%[([^%]]+)%]')
+    if not inside then return {} end
+    local parts = {}
+    for value in inside:gmatch('%d+') do
+        parts[#parts + 1] = tonumber(value) or 0
+    end
+    return parts
+end
+
+local function compareVersionParts(left, right)
+    local count = math.max(#left, #right)
+    for index = 1, count do
+        local a = left[index] or 0
+        local b = right[index] or 0
+        if a > b then return 1 end
+        if a < b then return -1 end
+    end
+    return 0
+end
+
+local function cleanupDuplicateLoadedArzMarket()
+    local loaded = {}
+
+    for _, scriptObject in ipairs(script.list()) do
+        local currentName = scriptObject.filename or basename(scriptObject.path)
+        if currentName ~= thisScript().filename and isArzMarketFilename(currentName) then
+            loaded[#loaded + 1] = {
+                object = scriptObject,
+                path = scriptObject.path,
+                name = currentName,
+                version = parseFilenameVersion(currentName)
+            }
+        end
+    end
+
+    if #loaded <= 1 then
+        return
+    end
+
+    local keep = loaded[1]
+    for index = 2, #loaded do
+        if compareVersionParts(loaded[index].version, keep.version) > 0 then
+            keep = loaded[index]
+        end
+    end
+
+    log('duplicate guard: found ' .. tostring(#loaded) .. ' loaded ArzMarket scripts, keeping ' .. tostring(keep.name))
+
+    for _, entry in ipairs(loaded) do
+        if entry.object ~= keep.object then
+            log('duplicate guard: unloading ' .. tostring(entry.name))
+            pcall(function() entry.object:unload() end)
+        end
+    end
+
+    wait(50)
 end
 
 local function restoreScripts(entries)
@@ -423,7 +491,11 @@ local function installSelectedVersion()
     log('FINAL url = ' .. tostring(selectedUpdateUrl))
     log('FINAL filename = ' .. tostring(targetFilename))
 
-    if doesFileExist(targetPath) and fileSize(targetPath) > 0 then
+    local installedMarker = readInstallMarker()
+    if doesFileExist(targetPath)
+        and fileSize(targetPath) > 0
+        and installedMarker == tostring(selectedVersion or '') then
+
         if not findLoadedScript(targetFilename) then
             if not script.load(targetPath) then
                 log('existing selected script could not be loaded')
@@ -437,6 +509,11 @@ local function installSelectedVersion()
 
         log('selected script is already installed')
         return true
+    end
+
+    if doesFileExist(targetPath) and fileSize(targetPath) > 0 then
+        log('selected filename exists, but installed marker is old: '
+            .. tostring(installedMarker) .. ' -> ' .. tostring(selectedVersion))
     end
 
     chatMessage('Загрузчик ArzMarket успешно загружен.')
@@ -456,8 +533,18 @@ local function installSelectedVersion()
         return false
     end
 
+    local currentTargetScript = findLoadedScript(targetFilename)
     local otherScripts = collectOtherLoadedArzMarket(targetFilename)
+
+    if currentTargetScript then
+        pcall(function()
+            currentTargetScript:unload()
+        end)
+        wait(50)
+    end
+
     unloadScripts(otherScripts)
+    wait(50)
 
     removeFile(targetPath)
 
@@ -488,6 +575,12 @@ end
 
 function main()
     math.randomseed(os.time() + math.floor(os.clock() * 100000))
+
+    -- MoonLoader загружает все *.lua из папки ещё до запуска main().
+    -- Если пользователь оставил несколько старых ArzMarket, они не должны
+    -- одновременно работать и патчить один и тот же Lua/mimgui/sampev runtime.
+    wait(0)
+    cleanupDuplicateLoadedArzMarket()
 
     wait(500)
     waitForSamp()

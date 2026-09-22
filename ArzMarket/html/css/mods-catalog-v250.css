@@ -68,3 +68,100 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* launcher download card */
+#app[data-html-theme][data-page="mods"] .mods-catalog-content {
+  padding: calc(14px * var(--ui-scale));
+  overflow: auto;
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(16px * var(--ui-scale));
+  min-height: calc(110px * var(--ui-scale));
+  padding: calc(18px * var(--ui-scale));
+  border: 1px solid var(--am-border-soft);
+  border-radius: calc(12px * var(--ui-scale));
+  background: color-mix(in srgb, var(--am-panel) 92%, var(--am-accent) 8%);
+  box-shadow: inset 0 1px 0 var(--am-white-faint);
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-card-icon {
+  display: grid;
+  place-items: center;
+  width: calc(54px * var(--ui-scale));
+  height: calc(54px * var(--ui-scale));
+  border: 1px solid var(--am-accent);
+  border-radius: calc(10px * var(--ui-scale));
+  background: var(--am-accent-soft);
+  color: var(--am-accent);
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-card-icon svg {
+  width: calc(27px * var(--ui-scale));
+  height: calc(27px * var(--ui-scale));
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-card-body {
+  min-width: 0;
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-card-body h3 {
+  margin: 0;
+  color: var(--am-text);
+  font-size: calc(17px * var(--ui-scale));
+  font-weight: 760;
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-card-body p {
+  margin: calc(6px * var(--ui-scale)) 0 0;
+  color: var(--am-text-soft);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.45;
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-status {
+  margin-top: calc(8px * var(--ui-scale));
+  color: var(--am-text-soft);
+  font-size: calc(11px * var(--ui-scale));
+  overflow-wrap: anywhere;
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-status.state-done { color: #35d07f; }
+#app[data-html-theme][data-page="mods"] .mods-download-status.state-error { color: #ff6464; }
+#app[data-html-theme][data-page="mods"] .mods-download-status.state-choosing,
+#app[data-html-theme][data-page="mods"] .mods-download-status.state-downloading { color: #f0c15a; }
+
+#app[data-html-theme][data-page="mods"] .mods-download-button {
+  min-width: calc(190px * var(--ui-scale));
+  height: calc(38px * var(--ui-scale));
+  padding: 0 calc(18px * var(--ui-scale));
+  border: 1px solid var(--am-accent);
+  border-radius: calc(9px * var(--ui-scale));
+  background: var(--am-accent);
+  color: #07150f;
+  font: inherit;
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 760;
+  cursor: pointer;
+  transition: filter .14s ease, opacity .14s ease, transform .14s ease;
+}
+
+#app[data-html-theme][data-page="mods"] .mods-download-button:hover:not(:disabled) { filter: brightness(1.06); }
+#app[data-html-theme][data-page="mods"] .mods-download-button:active:not(:disabled) { transform: translateY(1px); }
+#app[data-html-theme][data-page="mods"] .mods-download-button:disabled { cursor: default; opacity: .55; }
+
+@media (max-width: 860px) {
+  #app[data-html-theme][data-page="mods"] .mods-download-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  #app[data-html-theme][data-page="mods"] .mods-download-card-actions {
+    grid-column: 1 / -1;
+  }
+  #app[data-html-theme][data-page="mods"] .mods-download-button {
+    width: 100%;
+  }
+}

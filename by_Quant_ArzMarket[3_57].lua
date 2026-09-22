@@ -909,6 +909,339 @@ end
 
 local modificationState
 
+ARZ_MAIN_DONOR_LAUNCHER_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/Arizona_Main_Donor_Launcher.zip"
+ARZ_MAIN_DONOR_LAUNCHER_FILENAME = "Arizona_Main_Donor_Launcher.zip"
+ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD or {
+	state = "idle",
+	message = "Готово к скачиванию",
+	path = "",
+	target = ""
+}
+
+function arzMainDonorLauncherSetState(state, message, path, target)
+	local runtime = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD
+	runtime.state = tostring(state or "idle")
+	runtime.message = tostring(message or "")
+	if path ~= nil then runtime.path = tostring(path or "") end
+	if target ~= nil then runtime.target = tostring(target or "") end
+end
+
+function arzMainDonorLauncherReadAll(path)
+	local file = io.open(path, "rb")
+	if not file then return nil end
+	local data = file:read("*a")
+	file:close()
+	return data
+end
+
+function arzMainDonorLauncherWriteAll(path, data)
+	local file = io.open(path, "wb")
+	if not file then return false end
+	file:write(data or "")
+	file:flush()
+	file:close()
+	return true
+end
+
+function arzMainDonorLauncherCleanupFile(path)
+	if path and path ~= "" and doesFileExist(path) then
+		pcall(os.remove, path)
+	end
+end
+
+function arzMainDonorLauncherNotify(message)
+	local value = tostring(message or "")
+	if type(sendNotify) == "function" then
+		local decoded = value
+		if type(u8) == "table" and type(u8.decode) == "function" then
+			local ok, result = pcall(function() return u8:decode(value) end)
+			if ok and result ~= nil then decoded = result end
+		end
+		pcall(sendNotify, decoded)
+	else
+		print("[ArzMarket][LauncherDownload] " .. value)
+	end
+end
+
+
+function arzMainDonorLauncherUtf8ToWide(value)
+	local text = tostring(value or "")
+	local okCdef = pcall(ffi.cdef, [[
+		int MultiByteToWideChar(unsigned int CodePage, unsigned long dwFlags, const char* lpMultiByteStr, int cbMultiByte, unsigned short* lpWideCharStr, int cchWideChar);
+		void* ShellExecuteW(void* hwnd, const unsigned short* lpOperation, const unsigned short* lpFile, const unsigned short* lpParameters, const unsigned short* lpDirectory, int nShowCmd);
+	]])
+	local CP_UTF8 = 65001
+	local length = ffi.C.MultiByteToWideChar(CP_UTF8, 0, text, #text, nil, 0)
+	if length <= 0 then return nil end
+	local buffer = ffi.new("unsigned short[?]", length + 1)
+	local written = ffi.C.MultiByteToWideChar(CP_UTF8, 0, text, #text, buffer, length)
+	if written <= 0 then return nil end
+	buffer[written] = 0
+	return buffer
+end
+
+function arzMainDonorLauncherStartHiddenPowerShell(workerScript)
+	local ok, result = pcall(function()
+		local shell32 = ffi.load("shell32")
+		local operation = arzMainDonorLauncherUtf8ToWide("open")
+		local executable = arzMainDonorLauncherUtf8ToWide("powershell.exe")
+		local params = arzMainDonorLauncherUtf8ToWide(
+			'-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' .. tostring(workerScript or "") .. '"'
+		)
+		if not operation or not executable or not params then
+			return false, "wide_string_failed"
+		end
+		local handle = shell32.ShellExecuteW(nil, operation, executable, params, nil, 0)
+		local code = tonumber(ffi.cast("intptr_t", handle)) or 0
+		if code <= 32 then
+			return false, "ShellExecuteW:" .. tostring(code)
+		end
+		return true
+	end)
+	if not ok then return false, tostring(result) end
+	if result ~= true then return false, "powershell_launch_failed" end
+	return true
+end
+
+function arzModsDownloadMainDonorLauncher()
+	local runtime = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD
+	if runtime.state == "choosing" or runtime.state == "downloading" then
+		return false, "download_busy"
+	end
+	if ARZ_SCRIPT_OFFLINE == true then
+		arzMainDonorLauncherSetState("error", "Скачивание недоступно в Offline режиме")
+		return false, "offline_mode"
+	end
+	if type(lua_thread) ~= "table" or type(lua_thread.create) ~= "function" then
+		return false, "thread_unavailable"
+	end
+
+	arzMainDonorLauncherSetState("choosing", "", "", "")
+
+	local okThread, threadOrError = pcall(lua_thread.create, function()
+		local gameDirectory = tostring(getGameDirectory() or ".")
+		local configDirectory = gameDirectory .. "\\moonloader\\config\\ArzMarket"
+		if not doesDirectoryExist(gameDirectory .. "\\moonloader\\config") then pcall(createDirectory, gameDirectory .. "\\moonloader\\config") end
+		if not doesDirectoryExist(configDirectory) then pcall(createDirectory, configDirectory) end
+		if not doesDirectoryExist(configDirectory) then
+			arzMainDonorLauncherSetState("error", "Не удалось создать временную папку")
+			return
+		end
+
+		local nonce = tostring(os.time()) .. "_" .. tostring(math.floor((os.clock() % 1) * 1000000))
+		local workerScript = configDirectory .. "\\launcher_download_" .. nonce .. ".vbs"
+		local resultPath = configDirectory .. "\\launcher_download_" .. nonce .. ".result"
+		local function vbsQuote(value) return tostring(value or ""):gsub('"', '""') end
+
+		local vbsScript = [=[
+Option Explicit
+On Error Resume Next
+Dim resultPath
+resultPath = "__RESULT_PATH__"
+Const BAT_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/ARIZONA.bat"
+Const PS1_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/Arizona_Main_Donor_Launcher_BANNED_IS_MAIN_FIXED.ps1"
+
+Sub WriteUtf8(path, text)
+    Dim stm
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 2
+    stm.Charset = "utf-8"
+    stm.Open
+    stm.WriteText text
+    stm.Position = 0
+    stm.SaveToFile path, 2
+    stm.Close
+End Sub
+Sub Finish(state, target, errText)
+    WriteUtf8 resultPath, state & vbLf & target & vbLf & errText
+End Sub
+Function DownloadFile(url, destination)
+    Dim http, stm
+    Err.Clear
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 15000, 15000, 90000, 90000
+    http.Open "GET", url, False
+    http.setRequestHeader "User-Agent", "ArzMarket-Launcher-Downloader"
+    http.Send
+    If Err.Number <> 0 Then
+        DownloadFile = "Ошибка сети: " & Err.Description
+        Err.Clear
+        Exit Function
+    End If
+    If http.Status < 200 Or http.Status >= 300 Then
+        DownloadFile = "GitHub вернул HTTP " & CStr(http.Status)
+        Exit Function
+    End If
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 1
+    stm.Open
+    stm.Write http.responseBody
+    stm.SaveToFile destination, 2
+    stm.Close
+    If Err.Number <> 0 Then
+        DownloadFile = "Не удалось сохранить файл: " & Err.Description
+        Err.Clear
+        Exit Function
+    End If
+    DownloadFile = ""
+End Function
+
+Dim shellApp, folder, selectedPath
+Set shellApp = CreateObject("Shell.Application")
+Set folder = shellApp.BrowseForFolder(0, "Выберите папку, куда скачать программу", 65, 0)
+If Err.Number <> 0 Then Finish "error", "", "Не удалось открыть выбор папки: " & Err.Description : WScript.Quit 1
+If folder Is Nothing Then Finish "cancelled", "", "" : WScript.Quit 0
+selectedPath = folder.Self.Path
+If Len(selectedPath) = 0 Then Finish "cancelled", "", "" : WScript.Quit 0
+
+Dim fso, installDir
+Set fso = CreateObject("Scripting.FileSystemObject")
+installDir = fso.BuildPath(selectedPath, "Arizona_Main_Donor_Launcher")
+If Not fso.FolderExists(installDir) Then fso.CreateFolder installDir
+If Err.Number <> 0 Or Not fso.FolderExists(installDir) Then Finish "error", "", "Не удалось создать папку Arizona_Main_Donor_Launcher." : WScript.Quit 1
+
+Dim batPath, ps1Path, batPart, ps1Part, errText
+batPath = fso.BuildPath(installDir, "ARIZONA.bat")
+ps1Path = fso.BuildPath(installDir, "Arizona_Main_Donor_Launcher_BANNED_IS_MAIN_FIXED.ps1")
+batPart = batPath & ".part"
+ps1Part = ps1Path & ".part"
+If fso.FileExists(batPart) Then fso.DeleteFile batPart, True
+If fso.FileExists(ps1Part) Then fso.DeleteFile ps1Part, True
+
+errText = DownloadFile(BAT_URL, batPart)
+If Len(errText) > 0 Then
+    If fso.FileExists(batPart) Then fso.DeleteFile batPart, True
+    Finish "error", "", "ARIZONA.bat: " & errText
+    WScript.Quit 1
+End If
+errText = DownloadFile(PS1_URL, ps1Part)
+If Len(errText) > 0 Then
+    If fso.FileExists(batPart) Then fso.DeleteFile batPart, True
+    If fso.FileExists(ps1Part) Then fso.DeleteFile ps1Part, True
+    Finish "error", "", "PowerShell-файл: " & errText
+    WScript.Quit 1
+End If
+If Not fso.FileExists(batPart) Or fso.GetFile(batPart).Size <= 0 Then Finish "error", "", "ARIZONA.bat скачался пустым." : WScript.Quit 1
+If Not fso.FileExists(ps1Part) Or fso.GetFile(ps1Part).Size <= 0 Then Finish "error", "", "PowerShell-файл скачался пустым." : WScript.Quit 1
+If fso.FileExists(batPath) Then fso.DeleteFile batPath, True
+If fso.FileExists(ps1Path) Then fso.DeleteFile ps1Path, True
+fso.MoveFile batPart, batPath
+If Err.Number <> 0 Then Finish "error", "", "Не удалось сохранить ARIZONA.bat." : WScript.Quit 1
+fso.MoveFile ps1Part, ps1Path
+If Err.Number <> 0 Then Finish "error", "", "Не удалось сохранить PowerShell-файл." : WScript.Quit 1
+Finish "done", installDir, ""
+WScript.Quit 0
+]=]
+		vbsScript = vbsScript:gsub("__RESULT_PATH__", vbsQuote(resultPath))
+		arzMainDonorLauncherCleanupFile(resultPath)
+		if not arzMainDonorLauncherWriteAll(workerScript, vbsScript) then
+			arzMainDonorLauncherSetState("error", "Не удалось подготовить скачивание")
+			return
+		end
+
+		local shell32 = ffi.load("shell32")
+		pcall(ffi.cdef, [[void* ShellExecuteA(void* hwnd, const char* lpOperation, const char* lpFile, const char* lpParameters, const char* lpDirectory, int nShowCmd);]])
+		local params = '//NoLogo "' .. workerScript .. '"'
+		local launched, launchError = false, "unknown"
+		local okLaunch, handle = pcall(function() return shell32.ShellExecuteA(nil, "open", "wscript.exe", params, nil, 1) end)
+		if okLaunch and handle ~= nil then
+			local code = tonumber(ffi.cast("intptr_t", handle)) or 0
+			if code > 32 then launched = true else launchError = "ShellExecuteA:" .. tostring(code) end
+		else launchError = tostring(handle or "ShellExecuteA failed") end
+		if not launched then
+			arzMainDonorLauncherCleanupFile(workerScript)
+			arzMainDonorLauncherSetState("error", "Не удалось открыть выбор папки: " .. launchError)
+			return
+		end
+
+		local waited = 0
+		while not doesFileExist(resultPath) and waited < 600000 do wait(100); waited = waited + 100 end
+		if not doesFileExist(resultPath) then
+			arzMainDonorLauncherCleanupFile(workerScript)
+			arzMainDonorLauncherSetState("error", "Время ожидания истекло")
+			return
+		end
+		local raw = tostring(arzMainDonorLauncherReadAll(resultPath) or "")
+		arzMainDonorLauncherCleanupFile(workerScript)
+		arzMainDonorLauncherCleanupFile(resultPath)
+		if raw:sub(1, 3) == "\239\187\191" then raw = raw:sub(4) end
+		local lines = {}
+		for line in (raw .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
+		local state = tostring(lines[1] or "")
+		local targetUtf8 = tostring(lines[2] or "")
+		local errorUtf8 = tostring(lines[3] or "")
+		if state == "cancelled" then arzMainDonorLauncherSetState("idle", "", "", ""); return end
+		if state ~= "done" then
+			local errorText = errorUtf8 ~= "" and errorUtf8 or "Не удалось скачать программу"
+			if type(u8) == "table" and type(u8.decode) == "function" then
+				local okDecode, decoded = pcall(function() return u8:decode(errorText) end)
+				if okDecode and decoded and decoded ~= "" then errorText = decoded end
+			end
+			arzMainDonorLauncherSetState("error", errorText, "", "")
+			if type(arzMainDonorLauncherNotify) == "function" then arzMainDonorLauncherNotify(errorText) end
+			return
+		end
+		local targetPath = targetUtf8
+		if type(u8) == "table" and type(u8.decode) == "function" and targetUtf8 ~= "" then
+			local okDecode, decodedPath = pcall(function() return u8:decode(targetUtf8) end)
+			if okDecode and decodedPath and decodedPath ~= "" then targetPath = decodedPath end
+		end
+		arzMainDonorLauncherSetState("done", "", "", targetPath)
+		if type(arzMainDonorLauncherNotify) == "function" then arzMainDonorLauncherNotify("Программа скачана") end
+	end)
+	if not okThread or not threadOrError then
+		arzMainDonorLauncherSetState("error", "Не удалось запустить скачивание")
+		return false, tostring(threadOrError or "thread_start_failed")
+	end
+	return true
+end
+
+function arzRenderMainDonorLauncherDownloadCard()
+	local runtime = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD or {}
+	local state = tostring(runtime.state or "idle")
+	local busy = state == "choosing" or state == "downloading"
+
+	local cardWidth = imgui.GetContentRegionAvail().x
+	if cardWidth <= 1 then return end
+
+	local cardHeight = 68
+	imgui.CustomInvisibleChild("arz_main_donor_launcher_download_card", imgui.ImVec2(cardWidth, cardHeight), true)
+
+	local cursorScreenPos = imgui.GetCursorScreenPos()
+	local innerWidth = imgui.GetWindowWidth()
+
+	imgui.SetCursorPos(imgui.ImVec2(18, 21))
+	imgui.PushFont(fonts[24])
+	imgui.TextColoredRGB("{cccccc}" .. u8("Обход бана маркета"))
+	imgui.PopFont()
+
+	local buttonWidth = 150
+	local buttonX = math.max(18, innerWidth - buttonWidth - 18)
+	imgui.SetCursorPos(imgui.ImVec2(buttonX, 18))
+	if imgui.Button(u8("Скачать") .. "##arz_main_donor_launcher_download", imgui.ImVec2(buttonWidth, 32)) and not busy then
+		local ok, err = arzModsDownloadMainDonorLauncher()
+		if not ok and err ~= "download_busy" then
+			arzMainDonorLauncherNotify("Не удалось начать скачивание программы: " .. tostring(err or "unknown_error"))
+		end
+	end
+
+	imgui.GetWindowDrawList():AddRect(
+		cursorScreenPos,
+		imgui.ImVec2(cursorScreenPos.x + cardWidth, cursorScreenPos.y + cardHeight),
+		imgui.GetColorU32Vec4(imgui.ImVec4(
+			menuThemeConfig.Border[1],
+			menuThemeConfig.Border[2],
+			menuThemeConfig.Border[3],
+			menuThemeConfig.Border[4]
+		)),
+		5,
+		0,
+		1.8
+	)
+
+	imgui.EndCustomInvisibleChild()
+end
+
 function arzUiExtensionsCreateContext(extension)
 	local ctx = {
 		api_version = ARZ_UI_EXTENSION_API_VERSION,
@@ -1585,7 +1918,12 @@ function arzUiExtensionsCreateContext(extension)
 			cycle_active_kind = activeKind,
 			cycle_pending_sell = pendingSell,
 			cycle_pending_rebuy = pendingRebuy,
-			trade_busy = type(tradeAutomation) == "table" and (tradeAutomation.sell == true or tradeAutomation.buy == true) or false
+			trade_busy = type(tradeAutomation) == "table" and (tradeAutomation.sell == true or tradeAutomation.buy == true) or false,
+			launcher_download_state = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD and tostring(ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD.state or "idle") or "idle",
+			launcher_download_message = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD and tostring(ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD.message or "") or "",
+			launcher_download_path = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD and tostring(ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD.path or "") or "",
+			launcher_download_target = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD and tostring(ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD.target or "") or "",
+			launcher_download_filename = tostring(ARZ_MAIN_DONOR_LAUNCHER_FILENAME or "Arizona_Main_Donor_Launcher.zip")
 		}
 	end
 	ctx.setModsValue = function(key, value)
@@ -1632,6 +1970,12 @@ function arzUiExtensionsCreateContext(extension)
 		if not ok then return false, tostring(result) end
 		if result == false then return false, "start_failed" end
 		return true, "started"
+	end
+	ctx.downloadMainDonorLauncher = function()
+		if type(arzModsDownloadMainDonorLauncher) ~= "function" then return false, "download_unavailable" end
+		local ok, result, err = pcall(arzModsDownloadMainDonorLauncher)
+		if not ok then return false, tostring(result) end
+		return result ~= false, result == false and (err or "download_failed") or nil
 	end
 	ctx.openModsTelegram = function()
 		if type(openUrl) ~= "function" then return false, "open_url_unavailable" end
@@ -17090,7 +17434,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.56.124"
+ARZ_UPDATE_VERSION = "3.57.129"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -27306,6 +27650,8 @@ function script_Page()
 	imgui.TextColoredRGB(u8:decode("{cccccc} Скрипты: "))
 	imgui.PopFont()
 
+	arzRenderMainDonorLauncherDownloadCard()
+
 	for scriptName, scriptData in pairs(download_scripts[1]) do
 		if not textureCache[scriptName] and doesFileExist(getWorkingDirectory() .. "/ArzMarket/resource/" .. scriptName .. scriptData.unic .. ".png") and timers[25][1] + 0.2 <= os.clock() then
 			timers[25][1] = os.clock()
@@ -35442,7 +35788,7 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
-ARZ_COMPONENTS.bootstrap.expected_bundle_version = 283
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 287
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"

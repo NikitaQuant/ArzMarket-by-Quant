@@ -2318,6 +2318,12 @@ local function doAction(req)
         local ok,result,coreErr=callCore(ctx.openModsTelegram)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
+    elseif action=="mods.launcher.download" then
+        if not ctx or type(ctx.downloadMainDonorLauncher)~="function" then return jsonResponse(400,{ok=false,error="launcher_download_unavailable"}) end
+        local ok,result,coreErr=callCore(ctx.downloadMainDonorLauncher)
+        local success=ok and result~=false
+        fingerprints.mods=""
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="settings.set" then
         if not ctx or type(ctx.setSettingsValue)~="function" then return jsonResponse(400,{ok=false,error="settings_unavailable"}) end
         local value=data.value
@@ -2796,14 +2802,14 @@ local function service()
     end
 end
 
-local function recoverServiceClients()
+function __arzHtmlRecoverServiceClients()
     local entries={}
     for entry in pairs(clients) do entries[#entries+1]=entry end
     for _,entry in ipairs(entries) do closeClient(entry) end
     requestQueue={}
 end
 
-local function safeService(generation)
+function __arzHtmlSafeService(generation)
     if generation~=serverGeneration or not running then return false,"stale_generation" end
     if serviceBusy then return true end
     serviceBusy=true
@@ -2813,7 +2819,7 @@ local function safeService(generation)
     serviceBusy=false
     if ok then return true end
 
-    recoverServiceClients()
+    __arzHtmlRecoverServiceClients()
     local now=nowMs()
     if now-lastServiceErrorAt>=1000 then
         lastServiceErrorAt=now
@@ -2822,7 +2828,7 @@ local function safeService(generation)
     return false,tostring(err)
 end
 
-local function startServer()
+function __arzHtmlStartServer()
     if running then return true end
     local ok,socket=pcall(require,"socket")
     if not ok or type(socket)~="table" then return false,"luasocket_missing" end
@@ -2870,7 +2876,7 @@ local function startServer()
     return true
 end
 
-local function stopServer()
+function __arzHtmlStopServer()
     serverGeneration=serverGeneration+1
     running=false
     requestWorkerRunning=false
@@ -2883,7 +2889,7 @@ local function stopServer()
     server,port=nil,nil
     socketApi=nil
 end
-local function loadCefAdapter()
+function __arzHtmlLoadCefAdapter()
     local ok,module=pcall(require,"arizona-events")
     if ok and type(module)=="table" and type(module.eval)=="function" then
         return module
@@ -2916,7 +2922,7 @@ local function loadCefAdapter()
     }
 end
 
-local function loadItemIcons()
+function __arzHtmlLoadItemIcons()
     local path=ctx.getWorkingDirectory().."\\ArzMarket\\lua\\arz_item_icons.lua"
     local loader,err=loadfile(path)
     if not loader then log("item icon module missing: "..tostring(err)); return end
@@ -2939,11 +2945,11 @@ function M.open_html(page,settingsSection,options)
     suppressAutoOpen=false
     if currentPage=="marketplace" and ctx and type(ctx.ensureMarketplaceLoaded)=="function" then pcall(ctx.ensureMarketplaceLoaded) end
     if not running then
-        local ok,err=startServer()
+        local ok,err=__arzHtmlStartServer()
         if not ok then if ctx and ctx.notify then pcall(ctx.notify,"HTML интерфейс недоступен: "..tostring(err)) end; return false end
     end
     if not acef or type(acef.eval)~="function" then
-        if not previewOpen then stopServer() end
+        if not previewOpen then __arzHtmlStopServer() end
         if ctx and ctx.notify then pcall(ctx.notify,"CEF API недоступен. Lua интерфейс продолжает работать.") end
         return false
     end
@@ -2957,7 +2963,7 @@ function M.open_html(page,settingsSection,options)
     end
     if not ok then
         htmlTemporaryMode=false
-        if not previewOpen then stopServer() end
+        if not previewOpen then __arzHtmlStopServer() end
     end
     if not ok and ctx and ctx.notify then pcall(ctx.notify,"Не удалось открыть CEF интерфейс. Используйте Lua режим.") end
     return ok
@@ -3087,27 +3093,27 @@ end
 function M.open_preview(bounds,page,options)
     if not previewOpen and (page=="buy" or page=="sell" or page=="settings" or page=="logs" or page=="marketplace" or page=="mods" or page=="storage") then currentPage=page end
     if not running then
-        local ok,err=startServer()
+        local ok,err=__arzHtmlStartServer()
         if not ok then return false,err end
     end
     if not acef or type(acef.eval)~="function" then
-        if not htmlOpen then stopServer() end
+        if not htmlOpen then __arzHtmlStopServer() end
         return false,"cef_unavailable"
     end
     local ok,err=injectPreviewIframe(bounds,options)
-    if not ok and not htmlOpen then stopServer() end
+    if not ok and not htmlOpen then __arzHtmlStopServer() end
     return ok,err
 end
 function M.close_preview()
     removePreviewIframe()
-    if not htmlOpen and not previewOpen then stopServer() end
+    if not htmlOpen and not previewOpen then __arzHtmlStopServer() end
     return true
 end
 function M.close_html()
     suppressAutoOpen=true
     removeIframe()
     removePreviewIframe()
-    if not htmlOpen and not previewOpen then stopServer() end
+    if not htmlOpen and not previewOpen then __arzHtmlStopServer() end
     return true
 end
 function M.init(context)
@@ -3118,12 +3124,12 @@ function M.init(context)
     restoreTradeDraft("buy")
     restoreTradeDraft("sell")
     loadWindowState()
-    loadItemIcons()
+    __arzHtmlLoadItemIcons()
     -- Build trade sources before any HTTP coroutine exists. This keeps file I/O
     -- and first-time icon/catalog work out of /api/state after Alt+Tab.
     refreshSourceCache("buy",true)
     refreshSourceCache("sell",true)
-    acef=loadCefAdapter()
+    acef=__arzHtmlLoadCefAdapter()
 
     -- Arizona CEF can survive a MoonLoader Lua reload. Remove only our stale
     -- iframe. The local HTTP bridge is started lazily by open_html/open_preview.
@@ -3162,7 +3168,7 @@ function M.render(context)
     end
     if not running then
         imgui.Text("Local bridge не запущен.")
-        if imgui.Button("Повторить запуск",imgui.ImVec2(220,34)) then startServer() end
+        if imgui.Button("Повторить запуск",imgui.ImVec2(220,34)) then __arzHtmlStartServer() end
         return
     end
     if not htmlOpen then
@@ -3176,7 +3182,7 @@ function M.pump()
     local ok,err=true,nil
     if now-lastServiceAt>=8 then
         lastServiceAt=now
-        ok,err=safeService(serverGeneration)
+        ok,err=__arzHtmlSafeService(serverGeneration)
     end
     if htmlOpen then
         ensureIframe()
@@ -3194,7 +3200,7 @@ function M.shutdown(context, quitGame)
     if quitGame ~= true and not gameUiNeedsCursor() then
         forceDisableCefCursor()
     end
-    stopServer()
+    __arzHtmlStopServer()
     if itemIcons and type(itemIcons.shutdown)=="function" then pcall(itemIcons.shutdown) end
     return true
 end
