@@ -1,10 +1,6 @@
 {
   "manifest_version": 1,
-<<<<<<< HEAD
   "bundle_version": 287,
-=======
-  "bundle_version": 282,
->>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
   "base_url": "__ARZMARKET_COMPONENTS_RAW_BASE_URL__",
   "files": [
     {
@@ -489,13 +485,8 @@
     },
     {
       "path": "ArzMarket/html/js/app.js",
-<<<<<<< HEAD
       "size": 259341,
       "crc32": "6B0FFD45",
-=======
-      "size": 251646,
-      "crc32": "623734E5",
->>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
       "required": true
     },
     {
@@ -554,13 +545,8 @@
     },
     {
       "path": "modules/arz_html_ui.lua",
-<<<<<<< HEAD
       "size": 152518,
       "crc32": "2D23DCB0",
-=======
-      "size": 149790,
-      "crc32": "DA698577",
->>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
       "required": true
     },
     {

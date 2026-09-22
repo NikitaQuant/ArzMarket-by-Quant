@@ -271,7 +271,7 @@ local function getTargetFilename()
     local versionPart = versionForFilename(selectedVersion)
 
     if selectedSource == 'CUSTOM' then
-        return 'by_Quant_ArzMarket[3_57_123].lua'
+        return 'by_Quant_ArzMarket[3_57].lua'
     end
 
     return '#ArzMarket[' .. versionPart .. '].lua'

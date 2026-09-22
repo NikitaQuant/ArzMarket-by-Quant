@@ -4913,16 +4913,12 @@
   refresh(true).catch(() => null);
   (async function pollBridge() {
     while (true) {
-<<<<<<< HEAD
       const common = state.data?.common || {};
       const busy = common.tradeBusy === true || common.automation === true || common.scanning === true
         || (state.page === 'marketplace' && state.data?.data?.status === 'loading');
       const minimized = document.querySelector('.window')?.classList.contains('window-minimized') === true;
       const delay = document.visibilityState === 'hidden' ? 10000 : busy ? 750 : minimized ? 6000 : 4000;
       await new Promise(resolve => window.setTimeout(resolve, delay));
-=======
-      await new Promise(resolve => window.setTimeout(resolve, 2000));
->>>>>>> 0e480debd46f7970db438c2fd82523a7972c6520
       try { await refresh(false); } catch (_) {}
     }
   })();
