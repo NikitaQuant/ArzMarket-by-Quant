@@ -1225,14 +1225,17 @@ function arzRenderMainDonorLauncherDownloadCard()
 		end
 	end
 
+	local border = type(menuThemeConfig) == "table" and type(menuThemeConfig.Border) == "table"
+		and menuThemeConfig.Border or { 0.35, 0.35, 0.35, 0.65 }
+
 	imgui.GetWindowDrawList():AddRect(
 		cursorScreenPos,
 		imgui.ImVec2(cursorScreenPos.x + cardWidth, cursorScreenPos.y + cardHeight),
 		imgui.GetColorU32Vec4(imgui.ImVec4(
-			menuThemeConfig.Border[1],
-			menuThemeConfig.Border[2],
-			menuThemeConfig.Border[3],
-			menuThemeConfig.Border[4]
+			tonumber(border[1]) or 0.35,
+			tonumber(border[2]) or 0.35,
+			tonumber(border[3]) or 0.35,
+			tonumber(border[4]) or 0.65
 		)),
 		5,
 		0,
@@ -7643,7 +7646,7 @@ AUTO_AD_RECONNECT_STATE = AUTO_AD_RECONNECT_STATE or {
 	resumeAfter = 0
 }
 local menuThemePath = "moonloader/ArzMarket/js/menu_theme.json"
-local menuThemeConfig = gojson(menuThemePath):Load({
+menuThemeConfig = gojson(menuThemePath):Load({
 	selectedSputnik = "",
 	palette_key = "arzmarket_default",
 	color_text_market = {
@@ -17434,7 +17437,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.57.129"
+ARZ_UPDATE_VERSION = "3.57.130"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
