@@ -28,8 +28,8 @@ $OnboardingCompletedPath = Join-Path $SettingsDir 'onboarding_v1_completed.flag'
 $LogsDir = Join-Path $ScriptDir 'logs'
 [IO.Directory]::CreateDirectory($LogsDir) | Out-Null
 $DeveloperLogPath = Join-Path $LogsDir ('launcher_{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))
-$LauncherBuild = 'prepare-launch-wpf-v2-github-layout-fix2-self-update-v1-bootstrap-chain-v1-tutorial-warnings-v1'
-$LauncherSelfUpdateVersion = '1.0.3'
+$LauncherBuild = 'prepare-launch-wpf-v2-github-layout-fix2-self-update-v1-bootstrap-chain-v1-tutorial-warnings-v1-auth-backup-v2'
+$LauncherSelfUpdateVersion = '1.0.5'
 $LauncherSelfUpdateUrl = 'https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/Arizona_Main_Donor_Launcher_BANNED_IS_MAIN_FIXED.ps1'
 $LauncherSelfUpdateTimeoutSeconds = 8
 
@@ -151,7 +151,7 @@ function Test-LauncherUpdateFile([string]$Path, [version]$ExpectedVersion) {
 }
 
 function Invoke-LauncherSelfUpdate {
-    if ($PreparationWorker) { return $false }
+    if ($PreparationWorker -or $SelfUpdateRelaunched) { return $false }
     if ([string]::IsNullOrWhiteSpace($PSCommandPath) -or -not (Test-Path -LiteralPath $PSCommandPath -PathType Leaf)) {
         Write-DevLog 'Self-update skipped: current script path is unavailable.'
         return $false
@@ -1053,6 +1053,8 @@ $PairRuntime = [pscustomobject]@{
     CandidateSince = [datetime]::MinValue
     LastSignature = ''
     LastAuthIssue = ''
+    AuthApplied = $false
+    LastBackgroundError = ''
 }
 
 function Add-LauncherLog([string]$Text) {
@@ -1673,79 +1675,128 @@ function Test-BridgeAuthoritativeAuthField([string]$Section, [string]$Field) {
 }
 
 function Write-BridgeJsonAtomic([string]$Path, $Value) {
-    $tmp = $Path + '.tmp'
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) { [IO.Directory]::CreateDirectory($parent) | Out-Null }
+    $tag = [Guid]::NewGuid().ToString('N')
+    $tmp = $Path + '.' + $PID + '.' + $tag + '.tmp'
+    $replaceBackup = $Path + '.' + $tag + '.replace.bak'
     try {
-        $json = $Value | ConvertTo-Json -Depth 10 -Compress
+        $json = $Value | ConvertTo-Json -Depth 12 -Compress -ErrorAction Stop
         [IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+        if (-not (Test-Path -LiteralPath $tmp -PathType Leaf) -or (Get-Item -LiteralPath $tmp).Length -le 1) {
+            throw 'Временный JSON backup не был записан.'
+        }
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            try {
+                [IO.File]::Replace($tmp, $Path, $replaceBackup, $true)
+            } catch {
+                Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+            }
+        } else {
+            Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+        }
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or (Get-Item -LiteralPath $Path).Length -le 1) {
+            throw 'Итоговый JSON backup не был создан.'
+        }
     } finally {
         if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $replaceBackup) { Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue }
     }
 }
 
-function Write-MainAuthBackup($main, $payload, [string]$Session) {
+function Get-MainAuthBackupPath($main) {
+    $gameDir = [IO.Path]::GetFullPath([string]$main.GameDir).TrimEnd('\').ToLowerInvariant()
+    $sha = [Security.Cryptography.SHA256]::Create()
     try {
-    if ([string]::IsNullOrWhiteSpace($Session)) { throw 'Нет session для backup MAIN.' }
-    $dir = Ensure-ArzConfigDir $main
-    $path = Join-Path $dir 'main_auth_restore.json'
-    $sections = [ordered]@{}
-    $missing = [ordered]@{}
-    $createdAt = [DateTime]::UtcNow.ToString('o')
-    if (Test-Path -LiteralPath $path) {
-        $old = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
-        if ($old.protocol -ne $BridgeProtocol -or $old.session -cne $Session -or
-            $old.sections -isnot [pscustomobject] -or $old.missing -isnot [pscustomobject]) { throw 'Invalid backup' }
-        $createdAt = $old.createdAt
-        foreach ($group in @('sections', 'missing')) {
-            $target = if ($group -eq 'sections') { $sections } else { $missing }
-            foreach ($section in $old.$group.PSObject.Properties) {
-                foreach ($field in $section.Value.PSObject.Properties) {
-                    if (Test-BridgeAuthField $section.Name $field.Name) {
-                        if (-not $target.Contains($section.Name)) { $target[$section.Name] = [ordered]@{} }
-                        $target[$section.Name][$field.Name] = $field.Value
+        $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($gameDir))
+        $id = ([BitConverter]::ToString($hash)).Replace('-', '').Substring(0, 20).ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+    return Join-Path $SettingsDir ("main_auth_restore_{0}.json" -f $id)
+}
+
+function Get-LegacyMainAuthBackupPath($main) {
+    return Join-Path (Ensure-ArzConfigDir $main) 'main_auth_restore.json'
+}
+
+function Write-MainAuthBackup($main, $payload, [string]$Session) {
+    $path = ''
+    try {
+        if ([string]::IsNullOrWhiteSpace($Session)) { throw 'Нет session для backup MAIN.' }
+        $dir = Ensure-ArzConfigDir $main
+        $path = Get-MainAuthBackupPath $main
+        $sections = [ordered]@{}
+        $missing = [ordered]@{}
+        $createdAt = [DateTime]::UtcNow.ToString('o')
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $old = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+            if ([int]$old.protocol -ne [int]$BridgeProtocol -or [string]$old.session -cne $Session -or
+                $old.sections -isnot [pscustomobject] -or $old.missing -isnot [pscustomobject]) { throw 'Существующий backup MAIN принадлежит другой или поврежденной session.' }
+            $createdAt = [string]$old.createdAt
+            foreach ($group in @('sections', 'missing')) {
+                $target = if ($group -eq 'sections') { $sections } else { $missing }
+                foreach ($section in $old.$group.PSObject.Properties) {
+                    foreach ($field in $section.Value.PSObject.Properties) {
+                        if (Test-BridgeAuthField $section.Name $field.Name) {
+                            if (-not $target.Contains($section.Name)) { $target[$section.Name] = [ordered]@{} }
+                            $target[$section.Name][$field.Name] = $field.Value
+                        }
                     }
                 }
             }
         }
-    }
-    $parsed = Read-IniSections (Join-Path $dir 'ArzMarket.ini')
-    $touched = [ordered]@{}
-    foreach ($section in $payload.Sections.Keys) {
-        $touched[$section] = @($payload.Sections[$section].Keys)
-    }
-    foreach ($section in $parsed.Sections.Keys) {
-        foreach ($field in $parsed.Sections[$section].Keys) {
-            if (-not (Test-BridgeAuthField $section $field)) { continue }
-            if (-not $touched.Contains($section)) { $touched[$section] = @() }
-            if ($touched[$section] -notcontains $field) { $touched[$section] += $field }
-        }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($PairRuntime.ProfileKey)) {
-        if (-not $touched.Contains('cfg')) { $touched['cfg'] = @() }
-        $touched['cfg'] += @('authPremiumTokenAuth','authUserTempKey','premiumTokenAuth','lastUpdatePremiumToken')
-    }
-    $changed = -not (Test-Path -LiteralPath $path)
-    foreach ($section in $touched.Keys) {
-        foreach ($field in $touched[$section]) {
-            if (-not (Test-BridgeAuthField $section $field)) { continue }
-            if (($sections.Contains($section) -and $sections[$section].Contains($field)) -or
-                ($missing.Contains($section) -and $missing[$section].Contains($field))) { continue }
-            if ($parsed.Sections.ContainsKey($section) -and $parsed.Sections[$section].ContainsKey($field)) {
-                if (-not $sections.Contains($section)) { $sections[$section] = [ordered]@{} }
-                $sections[$section][$field] = [string]$parsed.Sections[$section][$field]
-            } else {
-                if (-not $missing.Contains($section)) { $missing[$section] = [ordered]@{} }
-                $missing[$section][$field] = $true
+
+        $parsed = Read-IniSections (Join-Path $dir 'ArzMarket.ini')
+        $touched = [ordered]@{}
+        if ($null -ne $payload -and $null -ne $payload.Sections) {
+            foreach ($section in $payload.Sections.Keys) {
+                $touched[$section] = @($payload.Sections[$section].Keys)
             }
-            $changed = $true
         }
+        foreach ($section in $parsed.Sections.Keys) {
+            foreach ($field in $parsed.Sections[$section].Keys) {
+                if (-not (Test-BridgeAuthField $section $field)) { continue }
+                if (-not $touched.Contains($section)) { $touched[$section] = @() }
+                if ($touched[$section] -notcontains $field) { $touched[$section] += $field }
+            }
+        }
+        if (-not $touched.Contains('cfg')) { $touched['cfg'] = @() }
+        foreach ($field in @($AuthoritativeCfgAuthFields + @('premiumTokenAuth','lastUpdatePremiumToken'))) {
+            if ($touched['cfg'] -notcontains $field) { $touched['cfg'] += $field }
+        }
+
+        $changed = -not (Test-Path -LiteralPath $path -PathType Leaf)
+        foreach ($section in $touched.Keys) {
+            foreach ($field in @($touched[$section] | Select-Object -Unique)) {
+                if (-not (Test-BridgeAuthField $section $field)) { continue }
+                if (($sections.Contains($section) -and $sections[$section].Contains($field)) -or
+                    ($missing.Contains($section) -and $missing[$section].Contains($field))) { continue }
+                if ($parsed.Sections.ContainsKey($section) -and $parsed.Sections[$section].ContainsKey($field)) {
+                    if (-not $sections.Contains($section)) { $sections[$section] = [ordered]@{} }
+                    $sections[$section][$field] = [string]$parsed.Sections[$section][$field]
+                } else {
+                    if (-not $missing.Contains($section)) { $missing[$section] = [ordered]@{} }
+                    $missing[$section][$field] = $true
+                }
+                $changed = $true
+            }
+        }
+
+        if ($changed) {
+            $normalizedGameDir = [IO.Path]::GetFullPath([string]$main.GameDir).TrimEnd('\')
+            Write-BridgeJsonAtomic $path ([ordered]@{
+                protocol=$BridgeProtocol; session=$Session; createdAt=$createdAt; gameDir=$normalizedGameDir
+                sections=$sections; missing=$missing
+            })
+        }
+        Write-DevLog "MAIN auth backup ready. path=$path session=$Session"
+        return $path
+    } catch {
+        $detail = $_.Exception.ToString()
+        Write-DevLog "MAIN auth backup FAILED. path=$path session=$Session detail=$detail"
+        throw ('Не удалось сохранить backup MAIN; передача auth остановлена. Причина: ' + $_.Exception.Message)
     }
-    if ($changed) {
-        try {
-            Write-BridgeJsonAtomic $path ([ordered]@{ protocol=$BridgeProtocol; session=$Session; createdAt=$createdAt; sections=$sections; missing=$missing })
-        } catch { throw 'Не удалось сохранить backup MAIN; передача auth остановлена.' }
-    }
-    } catch { throw 'Не удалось сохранить backup MAIN; передача auth остановлена.' }
 }
 
 function Restore-MainAuthBackup($main) {
@@ -1753,21 +1804,36 @@ function Restore-MainAuthBackup($main) {
         throw 'Восстановление MAIN невозможно: прошлый запуск ещё работает.'
     }
     $dir = Ensure-ArzConfigDir $main
-    $path = Join-Path $dir 'main_auth_restore.json'
-    if (Test-Path -LiteralPath $path) {
+    $primaryPath = Get-MainAuthBackupPath $main
+    $legacyPath = Get-LegacyMainAuthBackupPath $main
+    $paths = @($primaryPath, $legacyPath) | Select-Object -Unique
+    $restored = $false
+
+    foreach ($path in $paths) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
         try {
             $backup = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+            $backupProtocol = [int]$backup.protocol
+            if (($backupProtocol -ne $BridgeProtocol -and $backupProtocol -ne 3) -or
+                $backup.sections -isnot [pscustomobject] -or $backup.missing -isnot [pscustomobject]) { throw 'Invalid backup structure' }
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$backup.gameDir)) {
+                $expectedDir = [IO.Path]::GetFullPath([string]$main.GameDir).TrimEnd('\')
+                $backupDir = [IO.Path]::GetFullPath([string]$backup.gameDir).TrimEnd('\')
+                if ($backupDir -ine $expectedDir) { throw 'Backup belongs to another MAIN directory' }
+            }
+
             $bridge = Join-Path $dir 'account_bridge.ini'
             $expectedSession = ''
-            if (Test-Path -LiteralPath $bridge) {
+            if (Test-Path -LiteralPath $bridge -PathType Leaf) {
                 foreach ($line in [IO.File]::ReadAllLines($bridge)) {
                     if ($line -match '^session=(.+)$') { $expectedSession = $matches[1] }
                 }
             }
-            $backupProtocol = [int]$backup.protocol
-            if (($backupProtocol -ne $BridgeProtocol -and $backupProtocol -ne 3) -or [string]::IsNullOrWhiteSpace($expectedSession) -or
-                $backup.session -cne $expectedSession -or $backup.sections -isnot [pscustomobject] -or
-                $backup.missing -isnot [pscustomobject]) { throw 'Invalid backup' }
+            if (-not [string]::IsNullOrWhiteSpace($expectedSession) -and [string]$backup.session -cne $expectedSession) {
+                throw 'Backup session does not match bridge session'
+            }
+
             $sections = [ordered]@{}
             $missing = [ordered]@{}
             foreach ($group in @('sections', 'missing')) {
@@ -1784,13 +1850,23 @@ function Restore-MainAuthBackup($main) {
                 }
             }
             Update-MainIniFromPayload $main ([pscustomobject]@{ Sections=$sections }) $missing
-            Remove-Item -LiteralPath $path -Force -ErrorAction Stop
-        } catch { throw 'Не удалось восстановить backup MAIN; новый запуск остановлен.' }
+            foreach ($candidate in $paths) {
+                if (Test-Path -LiteralPath $candidate) { Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue }
+            }
+            $restored = $true
+            Write-DevLog "MAIN auth backup restored. path=$path"
+            break
+        } catch {
+            Write-DevLog "MAIN auth restore FAILED. path=$path detail=$($_.Exception.ToString())"
+            throw ('Не удалось восстановить backup MAIN; новый запуск остановлен. Причина: ' + $_.Exception.Message)
+        }
     }
+
     foreach ($name in @('launcher_profile_auth.json','launcher_profile_auth.json.tmp','donor_auth_sync.json')) {
         $stale = Join-Path $dir $name
         if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Force -ErrorAction Stop }
     }
+    return $restored
 }
 
 function Restore-BridgeStandaloneFlags($cfg) {
@@ -1859,7 +1935,10 @@ function Write-LauncherProfileAuth($main) {
 function Write-DonorSnapshot($main, $donor, $payload, [bool]$Initial) {
     $dir = Ensure-ArzConfigDir $main
     Write-MainAuthBackup $main $payload $PairRuntime.Session
-    if ($Initial) { Update-MainIniFromPayload $main $payload @{} $true }
+    if ($Initial) {
+        Update-MainIniFromPayload $main $payload @{} $true
+        $PairRuntime.AuthApplied = $true
+    }
     $syncPath = Join-Path $dir 'donor_auth_sync.json'
     $snapshot = [ordered]@{
         protocol = $BridgeProtocol
@@ -1871,14 +1950,7 @@ function Write-DonorSnapshot($main, $donor, $payload, [bool]$Initial) {
         authoritative = $true
         sections = $payload.Sections
     }
-    $json = $snapshot | ConvertTo-Json -Depth 10 -Compress
-    $tmp = $syncPath + '.tmp'
-    try {
-        [IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $tmp -Destination $syncPath -Force -ErrorAction Stop
-    } finally {
-        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
-    }
+    Write-BridgeJsonAtomic $syncPath $snapshot
 
     if ($Initial) {
         Set-RoleFiles $main 'MAIN' $true
@@ -1925,6 +1997,9 @@ function Start-MainDonor {
     Restore-BridgeStandaloneFlags $pair.Main
     Restore-BridgeStandaloneFlags $pair.Donor
     $PairRuntime.Session = [Guid]::NewGuid().ToString('N')
+    $PairRuntime.AuthApplied = $false
+    $PairRuntime.LastBackgroundError = ''
+    Write-MainAuthBackup $pair.Main ([pscustomobject]@{ Sections = [ordered]@{} }) $PairRuntime.Session | Out-Null
     $PairRuntime.ProfileKey = $profileKeyBox.Password.Trim()
     $PairRuntime.ProfileAuthProvided = -not [string]::IsNullOrWhiteSpace($PairRuntime.ProfileKey)
 
@@ -3430,25 +3505,45 @@ function Set-NormalState { $settingsContent.IsEnabled=$true; $idle=-not [bool]$P
 function Complete-Preparation($Result) { Set-Indicator $originalDot $originalStatus ([string]$Result.OriginalVersion) '#35D07F'; Set-Indicator $payloadDot $payloadStatus 'Актуально' '#35D07F'; Set-Indicator $antiDot $antiStatus 'Готов' '#35D07F'; $script:PreparedProxyResult=$Result.ProxyTest }
 function Fail-Preparation([string]$Message) { Set-Indicator $payloadDot $payloadStatus 'Ошибка' '#FF6464'; Set-Indicator $antiDot $antiStatus 'Ошибка' '#FF6464'; Set-NormalState; Write-Status "Ошибка: $Message"; Write-DevLog "Preparation failed: $Message"; [Windows.MessageBox]::Show($Message,'Ошибка подготовки','OK','Error') | Out-Null }
 
-$script:PreparationProcess=$null; $script:PreparationPollTimer=$null; $script:PreparationProgressRead=0; $script:PreparationFiles=$null; $script:PreparationMode=''; $script:PreparedProxyResult=$null
+$script:PreparationProcess=$null; $script:PreparationPollTimer=$null; $script:PreparationProgressRead=0; $script:PreparationFiles=$null; $script:PreparationMode=''; $script:PreparedProxyResult=$null; $script:PreparationStartedAt=$null; $script:PreparationLastProgressAt=$null
+function Stop-PreparationWorker {
+    if($null -eq $script:PreparationProcess -or $script:PreparationProcess.HasExited){return}
+    try {
+        $owned=New-Object 'System.Collections.Generic.List[int]'
+        $queue=New-Object 'System.Collections.Generic.List[int]'
+        $queue.Add([int]$script:PreparationProcess.Id)
+        for($index=0; $index -lt $queue.Count; $index++){
+            foreach($child in @(Get-CimInstance Win32_Process -Filter ("ParentProcessId={0}" -f $queue[$index]) -ErrorAction SilentlyContinue)){
+                $childId=[int]$child.ProcessId
+                if(-not $queue.Contains($childId)){ $queue.Add($childId); $owned.Add($childId) }
+            }
+        }
+        for($index=$owned.Count-1; $index -ge 0; $index--){ Stop-Process -Id $owned[$index] -Force -ErrorAction SilentlyContinue }
+        $script:PreparationProcess.Kill()
+    } catch { Write-DevLog ("Preparation worker cleanup failed: " + $_.Exception.Message) }
+}
 function Remove-PreparationFiles { if($null -eq $script:PreparationFiles){return}; foreach($path in $script:PreparationFiles){ if(Test-Path -LiteralPath $path -PathType Leaf){ Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue } }; $script:PreparationFiles=$null }
 function Run-Preparation([ValidateSet('FullLaunch','CheckOnly')][string]$Mode) {
-    if($null -ne $script:PreparationProcess -and -not $script:PreparationProcess.HasExited){ Write-Status 'Проверка уже выполняется.'; return }
+    if($null -ne $script:PreparationFiles -or ($null -ne $script:PreparationProcess -and -not $script:PreparationProcess.HasExited)){ Write-Status 'Проверка уже выполняется.'; return }
     if($PairRuntime.Active){ [Windows.MessageBox]::Show('Связка уже запущена. Сначала нажмите «Остановить».','Проверка файлов','OK','Information')|Out-Null; return }
     try {
         $pair=Validate-Pair; Assert-GameNotRunning $pair.Main 'MAIN'; Assert-GameNotRunning $pair.Donor 'DONOR'; Save-Settings $pair
         $id=[Guid]::NewGuid().ToString('N'); $configPath=Join-Path $SettingsDir "prepare_$id.json"; $progressPath=Join-Path $SettingsDir "prepare_$id.progress"; $resultPath=Join-Path $SettingsDir "prepare_$id.result.json"
-        $config=[ordered]@{ MainGamePath=$pair.Main.GameDir; DonorGamePath=$pair.Donor.GameDir; PayloadOwner=$PayloadOwner; PayloadRepo=$PayloadRepo; PayloadBranch=$PayloadBranch; PayloadRemotePath=$PayloadRemotePath; CustomArzMarketInfoUrl=$CustomArzMarketInfoUrl; OriginalArzMarketInfoUrl=$OriginalArzMarketInfoUrl; CustomLuaPath=(Join-Path $ScriptDir 'lua\by_Quant_ArzMarket[3_56].lua'); AntiAfkOwner=$AntiAfkOwner; AntiAfkRepo=$AntiAfkRepo; AntiAfkBranch=$AntiAfkBranch; AntiAfkRemotePath=$AntiAfkRemotePath; AntiAfkLocalRelativePath=$AntiAfkLocalRelativePath; Proxy=(Get-ProxySettingsForStorage) }
+        $config=[ordered]@{ MainGamePath=$pair.Main.GameDir; DonorGamePath=$pair.Donor.GameDir; PayloadOwner=$PayloadOwner; PayloadRepo=$PayloadRepo; PayloadBranch=$PayloadBranch; PayloadRemotePath=$PayloadRemotePath; CustomArzMarketInfoUrl=$CustomArzMarketInfoUrl; OriginalArzMarketInfoUrl=$OriginalArzMarketInfoUrl; CustomLuaPath=(Join-Path $pair.Main.GameDir 'moonloader\by_Quant_ArzMarket[3_57].lua'); AntiAfkOwner=$AntiAfkOwner; AntiAfkRepo=$AntiAfkRepo; AntiAfkBranch=$AntiAfkBranch; AntiAfkRemotePath=$AntiAfkRemotePath; AntiAfkLocalRelativePath=$AntiAfkLocalRelativePath; Proxy=(Get-ProxySettingsForStorage) }
         Write-JsonAtomic $configPath $config; [IO.File]::WriteAllText($progressPath,'',[Text.UTF8Encoding]::new($false)); $script:PreparationFiles=@($configPath,$progressPath,$resultPath); $script:PreparationProgressRead=0; $script:PreparationMode=$Mode; $script:PreparedProxyResult=$null
         Set-Indicator $originalDot $originalStatus 'Проверка' '#8E99A5'; Set-Indicator $payloadDot $payloadStatus 'Ожидание' '#8E99A5'; Set-Indicator $antiDot $antiStatus 'Ожидание' '#8E99A5'; Set-LoadingState $Mode; Write-Status $(if($Mode -eq 'CheckOnly'){'Ручная проверка файлов...'}else{'Проверка версии оригинального ArzMarket...'})
         $args='-NoProfile -ExecutionPolicy Bypass -STA -File "{0}" -PreparationWorker -PreparationConfigPath "{1}" -PreparationProgressPath "{2}" -PreparationResultPath "{3}"' -f $PSCommandPath,$configPath,$progressPath,$resultPath
         $script:PreparationProcess=Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru -WindowStyle Hidden
+        $script:PreparationStartedAt=[DateTime]::UtcNow; $script:PreparationLastProgressAt=$script:PreparationStartedAt
         $script:PreparationPollTimer=New-Object Windows.Threading.DispatcherTimer; $script:PreparationPollTimer.Interval=[TimeSpan]::FromMilliseconds(250)
         $script:PreparationPollTimer.Add_Tick({
             try {
                 $progressPath=$script:PreparationFiles[1]; $resultPath=$script:PreparationFiles[2]
                 $lines=@(Get-Content -LiteralPath $progressPath -Encoding UTF8 -ErrorAction SilentlyContinue)
-                while($script:PreparationProgressRead -lt $lines.Count){ $line=$lines[$script:PreparationProgressRead++]; try{$event=$line|ConvertFrom-Json -ErrorAction Stop; $loadingText.Text=[string]$event.text; Write-Status ([string]$event.text); if($event.text -like 'Проверка файлов*'){Set-Indicator $payloadDot $payloadStatus 'Проверка' '#8E99A5'}; if($event.text -like 'Проверка Anti*'){Set-Indicator $antiDot $antiStatus 'Проверка' '#8E99A5'}}catch{} }
+                while($script:PreparationProgressRead -lt $lines.Count){ $line=$lines[$script:PreparationProgressRead++]; try{$event=$line|ConvertFrom-Json -ErrorAction Stop; $script:PreparationLastProgressAt=[DateTime]::UtcNow; $loadingText.Text=[string]$event.text; Write-Status ([string]$event.text); if($event.text -like 'Проверка файлов*'){Set-Indicator $payloadDot $payloadStatus 'Проверка' '#8E99A5'}; if($event.text -like 'Проверка Anti*'){Set-Indicator $antiDot $antiStatus 'Проверка' '#8E99A5'}}catch{} }
+                if(-not $script:PreparationProcess.HasExited -and (([DateTime]::UtcNow-$script:PreparationStartedAt).TotalMinutes -ge 20 -or ([DateTime]::UtcNow-$script:PreparationLastProgressAt).TotalSeconds -ge 180)){
+                    $script:PreparationPollTimer.Stop(); Stop-PreparationWorker; Remove-PreparationFiles; $script:PreparationProcess=$null; $script:PreparationMode=''; Fail-Preparation 'Время ожидания подготовки истекло. Повторите попытку.'; return
+                }
                 if($script:PreparationProcess.HasExited){
                     $script:PreparationPollTimer.Stop(); $result=if(Test-Path -LiteralPath $resultPath){((Get-TextDocument $resultPath).Text)|ConvertFrom-Json}else{$null}
                     $completedMode=$script:PreparationMode; Remove-PreparationFiles; $script:PreparationProcess=$null; $script:PreparationMode=''
@@ -3457,9 +3552,9 @@ function Run-Preparation([ValidateSet('FullLaunch','CheckOnly')][string]$Mode) {
                     elseif($result.OriginalNewer -eq $true){ Set-Indicator $originalDot $originalStatus ([string]$result.OriginalVersion) '#FF6464'; Set-NormalState; $message="Вышла новая версия оригинального ArzMarket`n`nОригинальная версия: $($result.OriginalVersion)`nТекущая версия вашей сборки: $($result.CustomVersion)`n`nЗапуск двух окон временно недоступен. Сначала необходимо обновить ArzMarket."; Write-DevLog $message; Write-Status 'Запуск заблокирован: оригинальный ArzMarket новее.'; [Windows.MessageBox]::Show($message,'Обновление ArzMarket','OK','Warning')|Out-Null }
                     else{ Fail-Preparation ([string]$result.Error) }
                 }
-            } catch { if($null -ne $script:PreparationPollTimer){$script:PreparationPollTimer.Stop()}; Remove-PreparationFiles; $script:PreparationMode=''; Fail-Preparation $_.Exception.Message }
+            } catch { if($null -ne $script:PreparationPollTimer){$script:PreparationPollTimer.Stop()}; Stop-PreparationWorker; Remove-PreparationFiles; $script:PreparationProcess=$null; $script:PreparationMode=''; Fail-Preparation $_.Exception.Message }
         }); $script:PreparationPollTimer.Start()
-    } catch { $script:PreparationMode=''; Fail-Preparation $_.Exception.Message }
+    } catch { Stop-PreparationWorker; Remove-PreparationFiles; $script:PreparationProcess=$null; $script:PreparationMode=''; Fail-Preparation $_.Exception.Message }
 }
 
 
@@ -3776,7 +3871,7 @@ $launchButton.Add_Click({ Start-Preparation }); $checkFilesButton.Add_Click({ St
 $helpButton.Add_Click({ Show-LauncherOnboarding $true })
 $detailsButton.Add_Click({ if($logContentRow.Height.Value -lt 100){$logContentRow.Height=220; $form.Height=870; $detailsButton.Content='Свернуть'}else{$logContentRow.Height=72; $form.Height=720; $detailsButton.Content='Подробнее'} })
 $titleBar.Add_MouseLeftButtonDown({ if($_.ChangedButton -eq [Windows.Input.MouseButton]::Left){$form.DragMove()} }); $minimizeButton.Add_Click({$form.WindowState='Minimized'}); $closeButton.Add_Click({$form.Close()})
-$form.Add_Closing({ Save-UiSettings; if($null -ne $script:PreparationPollTimer){$script:PreparationPollTimer.Stop()}; if($null -ne $script:PreparationProcess -and -not $script:PreparationProcess.HasExited){try{$script:PreparationProcess.Kill()}catch{}}; Remove-PreparationFiles; $PairRuntime.ProfileKey=''; $PairRuntime.ProfileAuthProvided=$false; $profileKeyBox.Password=''; try{if($null-ne $PairRuntime.Main){Write-LauncherHeartbeat $PairRuntime.Main $false};if($null-ne $PairRuntime.Donor){Write-LauncherHeartbeat $PairRuntime.Donor $false}}catch{} })
+$form.Add_Closing({ Save-UiSettings; if($null -ne $script:PreparationPollTimer){$script:PreparationPollTimer.Stop()}; Stop-PreparationWorker; Remove-PreparationFiles; $PairRuntime.ProfileKey=''; $PairRuntime.ProfileAuthProvided=$false; $profileKeyBox.Password=''; try{if($null-ne $PairRuntime.Main){Write-LauncherHeartbeat $PairRuntime.Main $false};if($null-ne $PairRuntime.Donor){Write-LauncherHeartbeat $PairRuntime.Donor $false}}catch{} })
 
 $SettingsLoadPath = $SettingsPath
 if (-not (Test-Path -LiteralPath $SettingsLoadPath) -and (Test-Path -LiteralPath $LegacySettingsPath)) {
@@ -3923,8 +4018,19 @@ $timer.Add_Tick({
             Write-Status 'Обновил данные основного.'
         }
     } catch {
-        Write-DevLog "Background error: $($_.Exception.ToString())"
-        Write-Status 'Ошибка. Подробности в папке logs.'
+        $backgroundError = $_.Exception.ToString()
+        $backgroundMessage = $_.Exception.Message
+        Write-DevLog "Background error: $backgroundError"
+        if ($PairRuntime.LastBackgroundError -ne $backgroundMessage) {
+            $PairRuntime.LastBackgroundError = $backgroundMessage
+            Write-Status ("Ошибка: {0}" -f $backgroundMessage)
+        }
+        if ($backgroundMessage -like '*backup MAIN*') {
+            Write-LauncherHeartbeat $PairRuntime.Main $false
+            Write-LauncherHeartbeat $PairRuntime.Donor $false
+            $PairRuntime.Active = $false
+            $PairRuntime.Phase = 'ERROR'
+        }
     }
 })
 $timer.Start()

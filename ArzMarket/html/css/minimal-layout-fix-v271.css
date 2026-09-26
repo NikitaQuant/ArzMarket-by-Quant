@@ -1,0 +1,151 @@
+/* v271: minimal-mode layout fixes for Storage, Modifications and Settings. */
+
+/* Storage: the second toolbar row must reserve its real height. Without an
+   explicit minimum the place tabs can visually fall into the table row after
+   the large page hero is removed by minimal mode. */
+#app.minimal-mode[data-page="storage"] .content {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: calc(10px * var(--ui-scale)) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-toolbar {
+  flex: 0 0 auto !important;
+  height: auto !important;
+  min-height: calc(130px * var(--ui-scale)) !important;
+  grid-template-rows: calc(54px * var(--ui-scale)) calc(46px * var(--ui-scale)) !important;
+  align-self: stretch !important;
+  overflow: visible !important;
+  box-sizing: border-box !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-place-tabs {
+  min-height: calc(46px * var(--ui-scale)) !important;
+  height: calc(46px * var(--ui-scale)) !important;
+  overflow: hidden !important;
+  align-items: center !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-place-tabs button {
+  flex: 0 0 auto !important;
+  max-height: calc(38px * var(--ui-scale)) !important;
+  box-sizing: border-box !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-workspace {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+  align-self: stretch !important;
+  overflow: hidden !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-table-card {
+  grid-template-rows: calc(46px * var(--ui-scale)) minmax(0, 1fr) !important;
+  min-height: 0 !important;
+}
+
+#app.minimal-mode[data-page="storage"] .storage-empty {
+  top: calc(46px * var(--ui-scale)) !important;
+  bottom: 0 !important;
+}
+
+/* Modifications: in minimal mode the catalog is the only content row. Keep the
+   workspace and its second grid row stretched so the download offer cannot be
+   clipped into a thin strip. */
+#app.minimal-mode[data-html-theme][data-page="mods"] .content {
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+#app.minimal-mode[data-html-theme][data-page="mods"] .mods-catalog-workspace {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  align-self: stretch !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+#app.minimal-mode[data-html-theme][data-page="mods"] .mods-catalog-content {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  align-self: stretch !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  box-sizing: border-box !important;
+  scrollbar-width: thin;
+  scrollbar-color: var(--am-border-strong, #405a70) transparent;
+}
+
+#app.minimal-mode[data-html-theme][data-page="mods"] .mods-download-card {
+  width: 100% !important;
+  min-height: calc(110px * var(--ui-scale)) !important;
+  height: auto !important;
+  align-self: start !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+}
+
+#app.minimal-mode[data-html-theme][data-page="mods"] .mods-catalog-content::-webkit-scrollbar {
+  width: calc(8px * var(--ui-scale));
+  height: calc(8px * var(--ui-scale));
+}
+#app.minimal-mode[data-html-theme][data-page="mods"] .mods-catalog-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+#app.minimal-mode[data-html-theme][data-page="mods"] .mods-catalog-content::-webkit-scrollbar-thumb {
+  background: var(--am-border-strong, #405a70);
+  border-radius: 999px;
+  border: calc(2px * var(--ui-scale)) solid transparent;
+  background-clip: padding-box;
+}
+#app.minimal-mode[data-html-theme][data-page="mods"] .mods-catalog-content::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Settings: minimal mode must keep the same sidebar icon language as all other
+   pages. ui-polish-v89 intentionally hid them, which made Settings inconsistent. */
+#app.minimal-mode[data-page="settings"] .nav-item {
+  gap: calc(11px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="settings"] .nav-icon {
+  display: block !important;
+  width: calc(27px * var(--ui-scale)) !important;
+  height: calc(27px * var(--ui-scale)) !important;
+  flex: 0 0 calc(27px * var(--ui-scale)) !important;
+}
+
+/* Keep card actions as real buttons instead of stretching them into a full-width
+   bar, and leave scroll breathing room below the last Settings card. */
+#app.minimal-mode[data-page="settings"] .settings-content {
+  box-sizing: border-box !important;
+  padding-bottom: calc(28px * var(--ui-scale)) !important;
+  scroll-padding-bottom: calc(28px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="settings"] .settings-card-body > .settings-action {
+  width: auto !important;
+  max-width: calc(100% - 24px * var(--ui-scale)) !important;
+  min-width: calc(190px * var(--ui-scale)) !important;
+  justify-self: start !important;
+  margin: calc(10px * var(--ui-scale)) calc(12px * var(--ui-scale)) !important;
+  padding-left: calc(16px * var(--ui-scale)) !important;
+  padding-right: calc(16px * var(--ui-scale)) !important;
+}
+
+#app.minimal-mode[data-page="settings"] .settings-content::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}

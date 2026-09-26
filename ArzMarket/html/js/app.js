@@ -3454,10 +3454,20 @@
       title.textContent='Доступ к Маркетплейсу ограничен';
       textNode.textContent='Проверьте уровень аккаунта, авторизацию и то, что вы находитесь на сервере Arizona RP.';
       copy.append(title,textNode);
+      if(marketplaceData().unbanAvailable===true) {
+        const actions=div('', 'marketplace-status-actions');
+        const unban=document.createElement('button'); unban.type='button'; unban.textContent='Отправить/проверить заявку на амнистию';
+        unban.addEventListener('click',async()=>{ try { await action('marketplace.unban',{page:'marketplace'}); showToast('Запрос амнистии отправлен','success'); } catch(err) { showToast(`Амнистия: ${err.message}`,'error'); } });
+        actions.append(unban); copy.append(actions);
+      }
     } else if(status==='setup_required') {
       title.textContent='Нужно подготовить список предметов';
       textNode.textContent='Откройте раздел «Скупка» и выполните сканирование списка предметов, затем вернитесь сюда.';
       const actions=div('', 'marketplace-status-actions'); const go=document.createElement('button'); go.type='button'; go.textContent='Перейти в Скупку'; go.addEventListener('click',()=>switchPage('buy')); actions.append(go); copy.append(title,textNode,actions);
+    } else if(status==='error') {
+      title.textContent='Не удалось загрузить Маркетплейс';
+      textNode.textContent='Проверьте подключение и повторите загрузку.';
+      const actions=div('', 'marketplace-status-actions'); const retry=document.createElement('button'); retry.type='button'; retry.textContent='Повторить'; retry.addEventListener('click',async()=>{ try { await action('marketplace.refresh',{page:'marketplace'}); await refresh(true,'marketplace'); } catch(err) { showToast(`Маркетплейс: ${err.message}`,'error'); } }); actions.append(retry); copy.append(title,textNode,actions);
     } else {
       title.textContent='Загрузка Маркетплейса';
       textNode.textContent='Получаю список лавок с сервера ArzMarket...';
@@ -4409,21 +4419,6 @@
         } catch (err) {
           showToast(`Минимализм: не удалось сохранить режим (${err.message})`, 'error');
         }
-      }
-      return;
-    }
-    if (name === 'mode-lua') {
-      button.disabled = true;
-
-      // Hide the CEF iframe immediately but keep it alive long enough for the
-      // bridge request to finish. This removes the 3-5 second HTML/Lua overlap.
-      hideHostFrame();
-      try {
-        await action('ui.switch_mode', {page: state.page, side: state.page === 'sell' ? 'sell' : state.page === 'buy' ? 'buy' : undefined});
-      } catch (err) {
-        showHostFrame();
-        button.disabled = false;
-        showToast(`Переключение на Lua: ${err.message}`, 'error');
       }
       return;
     }

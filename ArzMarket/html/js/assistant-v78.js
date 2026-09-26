@@ -742,29 +742,6 @@
         actionsEl.style.display = 'none';
         return;
       }
-      if (snapshot.choiceType === 'interface') {
-        actionsEl.append(
-          button('Старый', 'interface-old', () => runAction('interface_select', {mode:'lua'})),
-          button('Новый', 'interface-new', () => runAction('interface_select', {mode:'html'}))
-        );
-        return;
-      }
-      if (snapshot.choiceType === 'tutorial') {
-        actionsEl.append(
-          button('Пройти обучение', 'primary tutorial-accept', () => runAction('tutorial_accept'))
-        );
-        return;
-      }
-      if (snapshot.choiceType === 'lua_redirect') {
-        const yesButton = button('Да', 'primary lua-redirect-yes', () => runAction('lua_redirect_yes'));
-        choiceNoButtonEl = button('Нет', 'lua-redirect-no', async () => {
-          if (getChoiceNoCooldownMs(performance.now()) > 0) return;
-          await runAction('lua_redirect_no');
-        });
-        actionsEl.append(yesButton, choiceNoButtonEl);
-        updateChoiceNoButtonState(performance.now());
-        return;
-      }
       if (snapshot.choiceType === 'future_details') {
         actionsEl.classList.add('future-details-actions');
         const yesButton = button('Да', 'primary future-details-yes', () => runAction('future_details_yes'));

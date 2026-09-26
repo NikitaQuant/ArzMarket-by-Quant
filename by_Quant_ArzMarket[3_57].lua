@@ -24,7 +24,20 @@ local u8 = require("encoding").UTF8
 local renderFontFlags = require("moonloader").font_flag
 local menuOpen = false
 local menuVisible = imgui.new.bool(menuOpen)
+ARZ_SPECIAL_UI = { visible = imgui.new.bool(false), page = nil, popup = nil, pending = false }
 local selectedMenuPage = 1
+
+-- HTML page mapping used when /crr or game events reopen the interface.
+-- This helper is intentionally independent of the removed legacy Lua UI.
+function arzInterfaceCurrentPageForModeSwitch()
+	return selectedMenuPage == 1 and "sell"
+		or selectedMenuPage == 3 and "settings"
+		or selectedMenuPage == 4 and "logs"
+		or selectedMenuPage == 5 and "marketplace"
+		or selectedMenuPage == 7 and "mods"
+		or selectedMenuPage == 8 and "storage"
+		or "buy"
+end
 local customItemPage = 0
 local marketplaceView = {}
 local imguiNew = imgui.new
@@ -908,6 +921,7 @@ function arzUiExtensionsClearDynamicMenuSections()
 end
 
 local modificationState
+local menuThemeConfig
 
 ARZ_MAIN_DONOR_LAUNCHER_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/Arizona_Main_Donor_Launcher.zip"
 ARZ_MAIN_DONOR_LAUNCHER_FILENAME = "Arizona_Main_Donor_Launcher.zip"
@@ -1001,6 +1015,18 @@ function arzMainDonorLauncherStartHiddenPowerShell(workerScript)
 	if not ok then return false, tostring(result) end
 	if result ~= true then return false, "powershell_launch_failed" end
 	return true
+end
+
+function arzMainDonorLauncherReleaseWorker(terminate)
+	local runtime = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD
+	local handle = runtime and runtime.workerHandle
+	if not handle then return end
+	runtime.workerHandle = nil
+	pcall(function()
+		local kernel32 = ffi.load("kernel32")
+		if terminate then kernel32.TerminateProcess(handle, 1) end
+		kernel32.CloseHandle(handle)
+	end)
 end
 
 function arzModsDownloadMainDonorLauncher()
@@ -1140,14 +1166,36 @@ WScript.Quit 0
 		end
 
 		local shell32 = ffi.load("shell32")
-		pcall(ffi.cdef, [[void* ShellExecuteA(void* hwnd, const char* lpOperation, const char* lpFile, const char* lpParameters, const char* lpDirectory, int nShowCmd);]])
+		pcall(ffi.cdef, [[
+			typedef struct {
+				unsigned long cbSize; unsigned long fMask; void* hwnd;
+				const char* lpVerb; const char* lpFile; const char* lpParameters;
+				const char* lpDirectory; int nShow; void* hInstApp; void* lpIDList;
+				const char* lpClass; void* hkeyClass; unsigned long dwHotKey;
+				void* hIcon; void* hProcess;
+			} ARZ_SHELLEXECUTEINFOA;
+			int ShellExecuteExA(ARZ_SHELLEXECUTEINFOA* info);
+			int TerminateProcess(void* process, unsigned int exitCode);
+			int CloseHandle(void* handle);
+		]])
 		local params = '//NoLogo "' .. workerScript .. '"'
 		local launched, launchError = false, "unknown"
-		local okLaunch, handle = pcall(function() return shell32.ShellExecuteA(nil, "open", "wscript.exe", params, nil, 1) end)
-		if okLaunch and handle ~= nil then
-			local code = tonumber(ffi.cast("intptr_t", handle)) or 0
-			if code > 32 then launched = true else launchError = "ShellExecuteA:" .. tostring(code) end
-		else launchError = tostring(handle or "ShellExecuteA failed") end
+		local okLaunch, launchResult = pcall(function()
+			local info = ffi.new("ARZ_SHELLEXECUTEINFOA")
+			info.cbSize = ffi.sizeof(info)
+			info.fMask = 0x140 -- SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+			info.lpVerb = "open"
+			info.lpFile = "wscript.exe"
+			info.lpParameters = params
+			info.nShow = 1
+			if shell32.ShellExecuteExA(info) == 0
+				or tonumber(ffi.cast("intptr_t", info.hProcess)) == 0 then return nil end
+			return info.hProcess
+		end)
+		if okLaunch and launchResult ~= nil then
+			runtime.workerHandle = launchResult
+			launched = true
+		else launchError = tostring(launchResult or "ShellExecuteExA failed") end
 		if not launched then
 			arzMainDonorLauncherCleanupFile(workerScript)
 			arzMainDonorLauncherSetState("error", "Не удалось открыть выбор папки: " .. launchError)
@@ -1157,11 +1205,14 @@ WScript.Quit 0
 		local waited = 0
 		while not doesFileExist(resultPath) and waited < 600000 do wait(100); waited = waited + 100 end
 		if not doesFileExist(resultPath) then
+			arzMainDonorLauncherReleaseWorker(true)
 			arzMainDonorLauncherCleanupFile(workerScript)
+			arzMainDonorLauncherCleanupFile(resultPath)
 			arzMainDonorLauncherSetState("error", "Время ожидания истекло")
 			return
 		end
 		local raw = tostring(arzMainDonorLauncherReadAll(resultPath) or "")
+		arzMainDonorLauncherReleaseWorker(false)
 		arzMainDonorLauncherCleanupFile(workerScript)
 		arzMainDonorLauncherCleanupFile(resultPath)
 		if raw:sub(1, 3) == "\239\187\191" then raw = raw:sub(4) end
@@ -1197,6 +1248,8 @@ WScript.Quit 0
 end
 
 function arzRenderMainDonorLauncherDownloadCard()
+	local border = type(menuThemeConfig) == "table" and type(menuThemeConfig.Border) == "table"
+		and menuThemeConfig.Border or { 0.516, 0.505, 0.977, 0.4 }
 	local runtime = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD or {}
 	local state = tostring(runtime.state or "idle")
 	local busy = state == "choosing" or state == "downloading"
@@ -1229,10 +1282,10 @@ function arzRenderMainDonorLauncherDownloadCard()
 		cursorScreenPos,
 		imgui.ImVec2(cursorScreenPos.x + cardWidth, cursorScreenPos.y + cardHeight),
 		imgui.GetColorU32Vec4(imgui.ImVec4(
-			menuThemeConfig.Border[1],
-			menuThemeConfig.Border[2],
-			menuThemeConfig.Border[3],
-			menuThemeConfig.Border[4]
+			border[1],
+			border[2],
+			border[3],
+			border[4]
 		)),
 		5,
 		0,
@@ -1454,14 +1507,7 @@ function arzUiExtensionsCreateContext(extension)
 		if type(save_all) == "function" then return save_all() end
 		return false
 	end
-	ctx.selectExtension = function(extensionId)
-		local target = ARZ_UI_EXTENSIONS.by_id[tostring(extensionId or "")]
-		if target and target.page_id and type(imgui.SelectMenu) == "function" then
-			imgui.SelectMenu(mainMenu, target.page_id)
-			return true
-		end
-		return false
-	end
+
 	ctx.selectCorePage = function(pageId)
 		pageId = tonumber(pageId)
 		local maxCorePage = 10
@@ -1471,8 +1517,7 @@ function arzUiExtensionsCreateContext(extension)
 		end
 		if not pageId or pageId < 1 or pageId > maxCorePage then return false end
 
-		-- Bridge-safe page switch. imgui.SelectMenu is an animated UI helper and
-		-- must not be used from the HTTP bridge/background thread.
+		-- Bridge-safe page selection from the HTTP worker.
 		if type(modificationState) == "table" and type(modificationState.returnToMenuRoot) == "function" then
 			pcall(modificationState.returnToMenuRoot, pageId)
 		end
@@ -1485,29 +1530,15 @@ function arzUiExtensionsCreateContext(extension)
 
 		-- Cancel every deferred/animated menu switch before selecting the page.
 		-- Otherwise an old selectAfterLoad value can overwrite the page one frame
-		-- after HTML -> Lua and open e.g. Storage instead of Sell.
+		-- after a bridge request.
 		if type(marketState) == "table" then
-			marketState.selectAfterLoad = -1
 			marketState.isPopupActive = false
 		end
 
 		selectedMenuPage = pageId
 		if type(ini) == "table" and type(ini.cfg) == "table" then ini.cfg.lastCrrSelect = pageId end
 
-		if type(UI_ANIM_BUTTON) == "table" then
-			UI_ANIM_BUTTON.pending_menu = nil
-			UI_ANIM_BUTTON.menu_change_time = 0
-			UI_ANIM_BUTTON.time = 0
-			-- Keep selector animation state neutral. CreateLeftMenu will place it on
-			-- the current selectedMenuPage on the next mimgui frame.
-			if type(UI_ANIM_BUTTON.pos) == "table" then
-				UI_ANIM_BUTTON.pos.last = UI_ANIM_BUTTON.pos.current
-				UI_ANIM_BUTTON.pos.next = UI_ANIM_BUTTON.pos.current
-			end
-		end
-
-		-- A bridge switch starts a fresh menu history. This prevents mouse back/
-		-- forward state from immediately restoring the page that was open before HTML.
+		-- Keep bridge page history consistent with the selected HTML page.
 		if type(modificationState) == "table" then
 			modificationState.menuHistory = { pageId }
 			modificationState.menuHistoryPos = 1
@@ -1518,29 +1549,12 @@ function arzUiExtensionsCreateContext(extension)
 	end
 
 	ctx.activateLuaPage = function(pageId)
-		local okPage, switched = pcall(ctx.selectCorePage, pageId)
-		if not okPage or switched == false then return false end
-
-		menuOpen = true
-		if menuVisible then menuVisible[0] = true end
-		kifir = 1
-		onOpenMenu = true
-		zzztime = os.clock()
-
-		if type(ini) == "table" and type(ini.cfg) == "table" then
-			ini.cfg.interface_mode = "lua"
-			ini.cfg.interface_choice_done = true
-		end
-		if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
-			ARZ_INTERFACE_CHOOSER.visible[0] = false
-		end
-		if type(arzIniSave) == "function" then
-			pcall(arzIniSave)
-		elseif type(save_all) == "function" then
-			pcall(save_all)
-		end
-		return true
-	end
+  pageId = tonumber(pageId) or 0
+  local specialized = { [5] = "key" }
+  local page = specialized[pageId]
+  if not page then return false end
+  return arzOpenSpecialPage(page, true)
+ end
 	ctx.getTradeAutomationState = function()
 		return {
 			sell = tradeAutomation.sell == true,
@@ -1554,29 +1568,22 @@ function arzUiExtensionsCreateContext(extension)
 	end
 	ctx.setCoreMenuVisible = function(value)
 		local nextValue = value == true
-		menuOpen = nextValue
-		if menuVisible then
-			menuVisible[0] = nextValue
-		end
-		if nextValue then
-			kifir = 1
-			onOpenMenu = true
-			zzztime = os.clock()
+		menuOpen = false
+  if menuVisible then menuVisible[0] = false end
+  if nextValue then
+   if type(arzUiExtensionsOpenHtml) == "function" then arzUiExtensionsOpenHtml(arzInterfaceCurrentPageForModeSwitch()) end
 		elseif type(resetIO) == "function" then
 			pcall(resetIO)
 		end
 		return true
 	end
 	ctx.getPreferredInterfaceMode = function()
-		return ini.cfg.interface_mode == "html" and "html" or "lua"
+		return "html"
 	end
 	ctx.setPreferredInterfaceMode = function(mode)
-		mode = mode == "html" and "html" or "lua"
+		mode = "html"
 		ini.cfg.interface_mode = mode
 		ini.cfg.interface_choice_done = true
-		if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
-			ARZ_INTERFACE_CHOOSER.visible[0] = false
-		end
 		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.setInterface) == "function" then
 			pcall(ARZ_BARON_ASSISTANT.setInterface, mode)
 		end
@@ -1986,24 +1993,51 @@ function arzUiExtensionsCreateContext(extension)
 		lastContinueAt = 0,
 		lastSetupProbeAt = 0,
 		fallbackActive = false,
-		fallbackStartedAt = 0
+		fallbackStartedAt = 0,
+		attempts = 0,
+		nextRetryAt = 0
 	}
 	ctx.pumpMarketplaceHtml = function()
 		if type(marketState) ~= "table" or type(marketplace_Manager) ~= "function" then return false, "marketplace_unavailable" end
 		local runtime = ctx.marketplaceHtmlRuntime
 		local now = os.time()
+		if marketState.catalogJustLoaded then
+			marketState.catalogJustLoaded = false
+			runtime.attempts = 0
+			runtime.nextRetryAt = 0
+		end
+		if marketState.marketplaceInFlight and now - (tonumber(marketState.marketplaceRequestStartedAt) or now) > 50 then
+			marketState.marketplaceInFlight = false
+			marketState.marketplaceError = "request_deadline"
+			download_marketplace = nil
+		end
+		if download_marketplace == false and not marketState.marketplaceInFlight
+			and now - (tonumber(marketState.marketplaceRequestStartedAt) or now) > 1 then
+			marketState.marketplaceError = marketState.marketplaceError or "callback_failed"
+			download_marketplace = nil
+		end
+		if type(download_marketplace) == "table" or download_marketplace == "auth" or download_marketplace == "blocked" then
+			runtime.attempts = 0
+			runtime.nextRetryAt = 0
+		end
 
 		-- The original Lua Marketplace advances these states from its per-frame renderer.
 		-- HTML has no such renderer, so mirror only the non-visual state transitions here.
 		-- Do not replace marketplace_Manager(): Lua keeps using the original working path.
 		if download_marketplace == true then
+			if marketState.catalogError then
+				download_marketplace = "error"
+				return true
+			end
 			if now - (tonumber(runtime.lastSetupProbeAt) or 0) >= 5 or json_vlad == nil then
 				runtime.lastSetupProbeAt = now
 				local okBuy, buyData = pcall(readJsonFile, buyJsonPath)
 				if okBuy and type(buyData) == "table" then json_vlad = buyData end
 			end
-			if type(json_vlad) == "table" and #json_vlad ~= 0 then
+			if type(json_vlad) == "table" and #json_vlad ~= 0 and not marketState.catalogItemsPending then
 				download_marketplace = nil
+				runtime.attempts = 0
+				runtime.nextRetryAt = 0
 			else
 				return true
 			end
@@ -2043,14 +2077,24 @@ function arzUiExtensionsCreateContext(extension)
 		-- Continue an asynchronous stage after items.json/buy.json download, request
 		-- failure or host fallback. A small guard prevents duplicate starts if several
 		-- HTML state requests arrive during the same second.
-		if download_marketplace == nil and now ~= tonumber(runtime.lastContinueAt) then
+		if download_marketplace == nil and not marketState.marketplaceInFlight
+			and now ~= tonumber(runtime.lastContinueAt)
+			and now >= (tonumber(runtime.nextRetryAt) or 0)
+			and type(timers) == "table" and (tonumber(timers[22]) or 0) + 5 <= now then
+			if (tonumber(runtime.attempts) or 0) >= 3 then
+				download_marketplace = "error"
+				return true
+			end
 			runtime.lastContinueAt = now
+			runtime.attempts = (tonumber(runtime.attempts) or 0) + 1
+			runtime.nextRetryAt = now + (runtime.attempts <= 2 and 5 or 7)
 			download_marketplace = false
 			local okLoad, loadErr = pcall(marketplace_Manager)
 			if not okLoad then
 				print("[ArzMarket HTML] marketplace continue failed: " .. tostring(loadErr))
+				marketState.marketplaceInFlight = false
+				marketState.marketplaceError = tostring(loadErr)
 				download_marketplace = nil
-				return false, tostring(loadErr)
 			end
 		end
 		return true
@@ -2070,10 +2114,13 @@ function arzUiExtensionsCreateContext(extension)
 			tostring(type(marketState) == "table" and tonumber(marketState.sort_mode_Marketplace) or tonumber(ini.cfg.sort_mode_Marketplace) or 0),
 			tostring(type(marketState) == "table" and marketState.marketplaceSave or nil),
 			tostring(type(marketState) == "table" and marketState.marketplaceTimeOut or nil),
+			tostring(type(marketState) == "table" and marketState.marketplaceError or nil),
+			tostring(type(marketState) == "table" and marketState.catalogError or nil),
 			tostring(ini.cfg.bannedByRkn == true),
 			serverAddress,
 			tostring(marketplacePayload and marketplacePayload.enabled == true or false),
-			tostring(marketplacePayload and marketplacePayload.LavkaUid or "")
+			tostring(marketplacePayload and marketplacePayload.LavkaUid or ""),
+			tostring(type(marketState) == "table" and marketState.marketplaceUnbanAvailable == true)
 		}, "\31")
 	end
 	ctx.getMarketplaceSnapshot = function()
@@ -2084,6 +2131,8 @@ function arzUiExtensionsCreateContext(extension)
 			status = "auth"
 		elseif download_marketplace == "blocked" then
 			status = "blocked"
+		elseif download_marketplace == "error" then
+			status = "error"
 		elseif type(download_marketplace) == "table" then
 			status = "ready"
 		end
@@ -2114,6 +2163,8 @@ function arzUiExtensionsCreateContext(extension)
 
 		return {
 			status = status,
+			errorReason = marketState.catalogError or marketState.marketplaceError,
+			unbanAvailable = status == "blocked" and marketState.marketplaceUnbanAvailable == true,
 			shops = shops,
 			servers = servers,
 			selectedIndex = selectedIndex,
@@ -2127,8 +2178,17 @@ function arzUiExtensionsCreateContext(extension)
 			publishedShopId = marketplacePayload and tonumber(marketplacePayload.LavkaUid) or nil
 		}
 	end
+	ctx.requestMarketplaceUnban = function()
+		if type(arzNetworkRequestUnban) ~= "function" then return false, "unban_unavailable" end
+		return arzNetworkRequestUnban()
+	end
 	ctx.refreshMarketplace = function(serverIndex)
 		if type(marketState) ~= "table" or type(marketplace_Manager) ~= "function" then return false, "marketplace_unavailable" end
+		if marketState.marketplaceInFlight then return false, "request_in_flight" end
+		if type(arzCatalogResetFailures) == "function" then arzCatalogResetFailures() end
+		marketState.marketplaceError = nil
+		ctx.marketplaceHtmlRuntime.attempts = 0
+		ctx.marketplaceHtmlRuntime.nextRetryAt = 0
 		if serverIndex ~= nil then
 			local maxIndex = math.max(0, #(marketState.marketplace_servers or {}) - 1)
 			local normalized = math.max(0, math.min(maxIndex, math.floor(tonumber(serverIndex) or 0)))
@@ -2150,9 +2210,13 @@ function arzUiExtensionsCreateContext(extension)
 		if type(save_all) == "function" then pcall(save_all) end
 		local function startLoad()
 			if download_marketplace == nil then download_marketplace = false end
+			ctx.marketplaceHtmlRuntime.attempts = 1
+			ctx.marketplaceHtmlRuntime.nextRetryAt = os.time() + 5
 			local ok, err = pcall(marketplace_Manager)
 			if not ok then
 				print("[ArzMarket HTML] marketplace load failed: " .. tostring(err))
+				marketState.marketplaceInFlight = false
+				marketState.marketplaceError = tostring(err)
 				download_marketplace = nil
 			end
 		end
@@ -2164,7 +2228,8 @@ function arzUiExtensionsCreateContext(extension)
 		return true
 	end
 	ctx.ensureMarketplaceLoaded = function()
-		if download_marketplace ~= nil then return true end
+		if download_marketplace ~= nil or marketState.marketplaceInFlight
+			or (ctx.marketplaceHtmlRuntime and (tonumber(ctx.marketplaceHtmlRuntime.attempts) or 0) > 0) then return true end
 		if ctx.marketplaceHtmlRuntime then
 			ctx.marketplaceHtmlRuntime.lastContinueAt = 0
 			ctx.marketplaceHtmlRuntime.lastSetupProbeAt = 0
@@ -2373,19 +2438,79 @@ function arzUiExtensionsInitialize()
 	return #ARZ_UI_EXTENSIONS.errors == 0
 end
 
+function arzUiExtensionsReloadHtml()
+	local fileName = "arz_html_ui.lua"
+	local fullPath = ARZ_UI_EXTENSIONS.directory .. "\\" .. fileName
+	if not doesFileExist(fullPath) then return false, "html_module_missing:" .. tostring(fullPath) end
+
+	local old = ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	if old and type(old.shutdown) == "function" then pcall(old.shutdown, old._ctx, false) end
+	if ARZ_UI_EXTENSIONS.by_id then ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] = nil end
+	for index = #ARZ_UI_EXTENSIONS.items, 1, -1 do
+		if ARZ_UI_EXTENSIONS.items[index] == old or tostring(ARZ_UI_EXTENSIONS.items[index].id or "") == "arz_html_ui" then
+			table.remove(ARZ_UI_EXTENSIONS.items, index)
+		end
+	end
+
+	local extension, loadError = arzUiExtensionsLoadFile(fullPath, fileName)
+	if not extension then return false, tostring(loadError or "html_module_load_failed") end
+	extension._ctx = arzUiExtensionsCreateContext(extension)
+	if type(extension.init) == "function" then
+		local okInit, initResult = xpcall(function()
+			return extension.init(extension._ctx)
+		end, arzUiExtensionTraceback)
+		if not okInit or initResult == false then
+			extension._disabled_runtime = true
+			extension._last_error = okInit and "init returned false" or tostring(initResult)
+			return false, "html_init_failed:" .. tostring(extension._last_error)
+		end
+	end
+	ARZ_UI_EXTENSIONS.items[#ARZ_UI_EXTENSIONS.items + 1] = extension
+	ARZ_UI_EXTENSIONS.by_id[extension.id] = extension
+	table.sort(ARZ_UI_EXTENSIONS.items, function(a, b)
+		if a.order ~= b.order then return a.order < b.order end
+		if a.section ~= b.section then return a.section < b.section end
+		return a.title < b.title
+	end)
+	arzUiExtensionsBuildMenu()
+	print("[ArzMarket][UIExtensions] HTML module reloaded successfully")
+	return true
+end
+
+function arzUiExtensionsEnsureHtmlReady()
+	if not ARZ_UI_EXTENSIONS.initialized then
+		local ok, result = pcall(arzUiExtensionsInitialize)
+		if not ok then return false, "ui_init_exception:" .. tostring(result) end
+	end
+	local extension = ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	if extension and not extension._disabled_runtime and type(extension.open_html) == "function" then return true end
+	local okReload, reloadError = arzUiExtensionsReloadHtml()
+	if not okReload then return false, tostring(reloadError or "html_reload_failed") end
+	extension = ARZ_UI_EXTENSIONS.by_id and ARZ_UI_EXTENSIONS.by_id["arz_html_ui"] or nil
+	if not extension or extension._disabled_runtime or type(extension.open_html) ~= "function" then
+		return false, tostring(extension and extension._last_error or "html_extension_unavailable")
+	end
+	return true
+end
+
 function arzUiExtensionsGetByPage(pageId)
 	return ARZ_UI_EXTENSIONS.by_page[tonumber(pageId) or -1]
 end
 
 function arzUiExtensionsOpenHtml(page, settingsSection, options)
-	local extensions = ARZ_UI_EXTENSIONS
-	local extension = extensions and extensions.by_id and extensions.by_id["arz_html_ui"] or nil
-	if not extension or extension._disabled_runtime or type(extension.open_html) ~= "function" then
-		if type(sendNotify) == "function" then
-			pcall(sendNotify, u8:decode("HTML интерфейс недоступен. Используйте Lua режим."))
+	local ready, readyError = arzUiExtensionsEnsureHtmlReady()
+	if not ready then
+		print("[ArzMarket][UIExtensions] HTML unavailable: " .. tostring(readyError))
+		if type(sendNotify) == "function" then pcall(sendNotify, u8:decode("HTML интерфейс недоступен: ") .. tostring(readyError)) end
+		if type(sampAddChatMessage) == "function" and isSampAvailable() then
+			pcall(sampAddChatMessage, u8:decode("[ArzMarket] HTML не запущен: ") .. tostring(readyError), 0xFFFF6464)
 		end
 		return false
 	end
+
+	local extensions = ARZ_UI_EXTENSIONS
+	local extension = extensions and extensions.by_id and extensions.by_id["arz_html_ui"] or nil
+	if not extension or extension._disabled_runtime or type(extension.open_html) ~= "function" then return false end
 
 	local wasMenuVisible = menuVisible and menuVisible[0] == true
 	if wasMenuVisible then
@@ -2395,35 +2520,28 @@ function arzUiExtensionsOpenHtml(page, settingsSection, options)
 	end
 
 	local temporary = type(options) == "table" and options.temporary == true
-	local ok, result = xpcall(function()
+	local ok, result, detail = xpcall(function()
 		local targetPage = page == "sell" and "sell" or page == "settings" and "settings" or page == "logs" and "logs" or page == "marketplace" and "marketplace" or page == "mods" and "mods" or page == "storage" and "storage" or "buy"
 		local targetSettingsSection = targetPage == "settings" and settingsSection or nil
 		return extension.open_html(targetPage, targetSettingsSection, { temporary = temporary })
 	end, arzUiExtensionTraceback)
 	if not ok or result == false then
-		extension._last_error = not ok and tostring(result) or "open_html returned false"
+		extension._last_error = not ok and tostring(result) or tostring(detail or extension._last_error or "open_html returned false")
 		print("[ArzMarket][UIExtensions] HTML open failed: " .. tostring(extension._last_error))
-		if wasMenuVisible then
-			menuOpen = true
-			menuVisible[0] = true
-			kifir = 1
-			onOpenMenu = true
-			zzztime = os.clock()
-		end
+
 		if type(sendNotify) == "function" then
-			pcall(sendNotify, u8:decode("Не удалось открыть HTML интерфейс. Lua режим продолжает работать."))
+			pcall(sendNotify, u8:decode("Не удалось открыть HTML интерфейс: ") .. tostring(extension._last_error))
+		end
+		if type(sampAddChatMessage) == "function" and isSampAvailable() then
+			pcall(sampAddChatMessage, u8:decode("[ArzMarket] HTML ошибка: ") .. tostring(extension._last_error), 0xFFFF6464)
 		end
 		return false
 	end
 
-	-- mimgui stays active to render the background blur, but its Win32 input
-	-- handler must not consume mouse/keyboard messages before Arizona CEF sees them.
 	if imgui and imgui.DisableInput ~= nil then imgui.DisableInput = true end
-
 	if not temporary then
 		ini.cfg.interface_mode = "html"
 		ini.cfg.interface_choice_done = true
-		if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
 		if type(arzIniSave) == "function" then pcall(arzIniSave) end
 	end
 	return true
@@ -2513,41 +2631,6 @@ function arzUiExtensionsGetRightChildFlags(pageId)
 	return 0
 end
 
-function arzUiExtensionsRenderPage(pageId, rainbowColor)
-	local extension = arzUiExtensionsGetByPage(pageId)
-	if not extension then return false end
-
-	if extension._disabled_runtime then
-		imgui.TextColored(imgui.ImVec4(1, 0.3, 0.3, 1), "Модуль отключен из-за ошибки.")
-		imgui.TextWrapped(tostring(extension._last_error or "unknown_error"))
-		imgui.Spacing()
-		imgui.TextDisabled(tostring(extension._path or ""))
-		return true
-	end
-
-	local ctx = extension._ctx or arzUiExtensionsCreateContext(extension)
-	extension._ctx = ctx
-	ctx.page_id = extension.page_id
-	ctx.selected_page = selectedMenuPage
-	ctx.rainbowColor = rainbowColor
-	ctx.uiScale = type(getMenuUiScale) == "function" and getMenuUiScale() or 1
-	ctx.sizeX = tonumber(sizeX) or 0
-	ctx.sizeY = tonumber(sizeY) or 0
-	ctx.menuVisible = menuVisible and menuVisible[0] == true or false
-	ctx.preview = ARZ_INTERFACE_LUA_PREVIEW and ARZ_INTERFACE_LUA_PREVIEW.active == true or false
-
-	local okRender, renderError = xpcall(function()
-		return extension.render(ctx)
-	end, arzUiExtensionTraceback)
-	if not okRender then
-		extension._disabled_runtime = true
-		extension._last_error = tostring(renderError)
-		print("[ArzMarket][UIExtensions] render failed for " .. extension.id .. ": " .. tostring(renderError))
-		imgui.TextColored(imgui.ImVec4(1, 0.3, 0.3, 1), "Ошибка UI-модуля. Он отключен до перезапуска ArzMarket.")
-		imgui.TextWrapped(tostring(renderError))
-	end
-	return true
-end
 
 function arzUiExtensionsShutdown(quitGame)
 	for _, extension in ipairs(ARZ_UI_EXTENSIONS.items or {}) do
@@ -3621,17 +3704,6 @@ function storageFinder.start()
     return ok == true
 end
 function storageFinder.shutdown() storageFinder.threadStarted = false;if core then return core.shutdown() end;return true end
-function storageFinder.renderPage()
-    if not app.ready then storageFinder.init() end
-    if not app.ready then
-        imgui.TextWrapped(u8(u8:decode("Хранилище не запущено. Ошибка: ") .. safeString(app.last_error, "storage_core_unavailable")))
-        return
-    end
-    local pushedMainFont = fonts and fonts[18] ~= nil
-    if pushedMainFont then imgui.PushFont(fonts[18]) end
-    renderStorageBrowser()
-    if pushedMainFont then imgui.PopFont() end
-end
 function storageFinder.captureLegacyCef(eventName, payload) if not core and not storageFinder.init() then return false end; return core.captureLegacyCef(eventName, payload) end
 function storageFinder.resetSession(reason) if not core then return false end;return core.resetSession(reason) end
 function storageFinder.markExternalVisible(kindHint) if not core and not storageFinder.init() then return false end; return core.markExternalVisible(kindHint) end
@@ -3863,243 +3935,9 @@ function modificationState.isMenuSubpageActive(page)
 	return false
 end
 
-function modificationState.updateMenuMouseNavigation()
-	if not menuVisible[0] then
-		return
-	end
-
-	local currentPage = tonumber(selectedMenuPage) or 1
-	local history = modificationState.menuHistory
-	local historyPos = tonumber(modificationState.menuHistoryPos) or 1
-
-	if #history == 0 then
-		history[1] = currentPage
-		historyPos = 1
-		modificationState.menuHistoryLastPage = currentPage
-	end
-
-	if currentPage ~= modificationState.menuHistoryLastPage then
-		if modificationState.menuHistoryIgnorePage == currentPage then
-			modificationState.menuHistoryIgnorePage = nil
-		else
-			while #history > historyPos do
-				table.remove(history)
-			end
-
-			if history[historyPos] ~= currentPage then
-				table.insert(history, currentPage)
-				historyPos = #history
-			end
-		end
-
-		modificationState.menuHistoryLastPage = currentPage
-		modificationState.menuHistoryPos = historyPos
-	end
-
-	if marketState.isPopupActive or (UI_ANIM_BUTTON and UI_ANIM_BUTTON.pending_menu) then
-		return
-	end
-
-	local targetPage = nil
-
-	if isKeyJustPressed(0x05) and historyPos > 1 then
-		historyPos = historyPos - 1
-		targetPage = history[historyPos]
-	elseif isKeyJustPressed(0x06) and historyPos < #history then
-		historyPos = historyPos + 1
-		targetPage = history[historyPos]
-	end
-
-	if targetPage and targetPage ~= currentPage then
-		modificationState.menuHistoryPos = historyPos
-		modificationState.menuHistoryIgnorePage = targetPage
-
-		if modificationState.persistMenuHistoryPage then
-			modificationState.persistMenuHistoryPage(targetPage)
-		end
-
-		imgui.SelectMenu(mainMenu, targetPage)
-	end
-end
 
 local getMenuUiScale
 
-function hack_page(rainbowColor)
-	local redCheckMark = imgui.ImVec4(1.0, 0.12, 0.12, 1.0)
-	local uiScale = getMenuUiScale()
-	local outerPad = 12 * uiScale
-
-	imgui.PushFont(fonts[18])
-	imgui.SetCursorPos(imgui.ImVec2(outerPad, outerPad))
-
-	local rootAvail = imgui.GetContentRegionAvail()
-	imgui.CustomInvisibleChild("mods_compact_single", imgui.ImVec2(rootAvail.x, rootAvail.y), true, imgui.WindowFlags.NoScrollWithMouse)
-	imgui.Scroller("mods_compact_single_scroll", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-	imgui.SetCursorPos(imgui.ImVec2(12 * uiScale, 10 * uiScale))
-
-	local function panelWidth()
-		return math.max(120 * uiScale, imgui.GetContentRegionAvail().x - 12 * uiScale)
-	end
-
-	local function header(label)
-		imgui.Text(label)
-		imgui.CustomSeparator(math.max(120 * uiScale, panelWidth()))
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 4 * uiScale)
-	end
-
-	local function sectionGap()
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 10 * uiScale)
-	end
-
-	local function toggleLine(id, current, label, setter)
-		if imgui.CustomCheckbox(id, imguiNew.bool(current), 0.1, 29, redCheckMark) then
-			setter(not current)
-		end
-		imgui.SameLine()
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5 * uiScale)
-		imgui.Text(label)
-	end
-
-
-	local bannerRainbowColor = rainbow(0.35, 1.0)
-
-	local function centeredModificationBanner(text, url)
-		local available = math.max(120 * uiScale, imgui.GetContentRegionAvail().x)
-		local lines = {}
-		local line = ""
-
-		for word in tostring(text):gmatch("%S+") do
-			local candidate = line == "" and word or (line .. " " .. word)
-			if line ~= "" and imgui.CalcTextSize(candidate).x > available then
-				lines[#lines + 1] = line
-				line = word
-			else
-				line = candidate
-			end
-		end
-
-		if line ~= "" then
-			lines[#lines + 1] = line
-		end
-
-		for index, currentLine in ipairs(lines) do
-			local lineSize = imgui.CalcTextSize(currentLine)
-			local startX = imgui.GetCursorPosX()
-			local centeredX = startX + math.max(0, (available - lineSize.x) * 0.5)
-			imgui.SetCursorPosX(centeredX)
-
-			local cursorPos = imgui.GetCursorPos()
-			local cursorScreenPos = imgui.GetCursorScreenPos()
-			local clicked = imgui.InvisibleButton("##mods_tg_banner_" .. tostring(index), imgui.ImVec2(lineSize.x, math.max(1, lineSize.y + 2 * uiScale)))
-			local hovered = imgui.IsItemHovered()
-			if clicked and url and url ~= "" then
-				openUrl(url)
-			end
-
-			imgui.SetCursorPos(cursorPos)
-			imgui.TextColored(imgui.ImVec4(bannerRainbowColor[1], bannerRainbowColor[2], bannerRainbowColor[3], 1), currentLine)
-
-			if hovered then
-				imgui.GetWindowDrawList():AddLine(
-					imgui.ImVec2(cursorScreenPos.x, cursorScreenPos.y + lineSize.y),
-					imgui.ImVec2(cursorScreenPos.x + lineSize.x, cursorScreenPos.y + lineSize.y),
-					imgui.GetColorU32Vec4(imgui.ImVec4(bannerRainbowColor[1], bannerRainbowColor[2], bannerRainbowColor[3], 0.9)),
-					math.max(1, uiScale)
-				)
-			end
-		end
-	end
-
-	imgui.PushFont(fonts[27])
-	centeredModificationBanner(
-		"Обязательно заходите в тгк https://t.me/moon_arz - там вы сможете предложить свою идею, которая с очень большой вероятностью будет добавлена, а вам будет публично объявлена благодарность. Также в этом канале публикую самые новые версии арз маркет от меня. Нажми на весь этот текст, чтобы перейти в тгк",
-		"https://t.me/moon_arz"
-	)
-	imgui.PopFont()
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 12 * uiScale)
-	imgui.CustomSeparator(math.max(120 * uiScale, panelWidth()))
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 12 * uiScale)
-
-	--[[
-	ВАЖНО: БЛОК НИЖЕ НАМЕРЕННО ОСТАВЛЕН В КОММЕНТАРИИ.
-	НЕЛЬЗЯ РАСКОММЕНТИРОВАТЬ ИЛИ УДАЛЯТЬ ЕГО ИЗ КОДА.
-	header(u8("\xCF\xEE\xE8\xF1\xEA \xF1\xE2\xEE\xE1\xEE\xE4\xED\xFB\xF5 \xEB\xE0\xE2\xEE\xEA"))
-	toggleLine("##lrend_enabled", modificationState.lrendEnabled[0], u8("\xD0\xE5\xED\xE4\xE5\xF0 \xEB\xE0\xE2\xEE\xEA"), function(value)
-		setLrendEnabled(value, true)
-	end)
-
-	sectionGap()
-	]]
-	header("FPS / производительность")
-	toggleLine("##mod_remove_players", modificationState.removePlayers[0], "Удалять других игроков", function(value)
-		if modificationState.setRemovePlayers then modificationState.setRemovePlayers(value, true) end
-	end)
-	toggleLine("##mod_remove_vehicles", modificationState.removeVehicles[0], "Удалять транспорт", function(value)
-		if modificationState.setRemoveVehicles then modificationState.setRemoveVehicles(value, true) end
-	end)
-	toggleLine("##mod_auto_fps", modificationState.autoFpsEnabled[0], "Автоматический FPS-режим", function(value)
-		if modificationState.setAutoFpsEnabled then modificationState.setAutoFpsEnabled(value, true) end
-	end)
-
-	imgui.Text("Игроков больше:")
-	imgui.SetNextItemWidth(panelWidth())
-	if imgui.SliderInt("##mod_auto_players", modificationState.autoFpsPlayersThreshold, 1, 300) then
-		modificationState.autoFpsPlayersThreshold[0] = math.max(1, math.min(300, modificationState.autoFpsPlayersThreshold[0]))
-		if modificationState.persistAutoFpsPlayersThreshold then modificationState.persistAutoFpsPlayersThreshold() end
-	end
-
-	imgui.Text("FPS меньше:")
-	imgui.SetNextItemWidth(panelWidth())
-	if imgui.SliderInt("##mod_auto_fps_threshold", modificationState.autoFpsThreshold, 15, 144) then
-		modificationState.autoFpsThreshold[0] = math.max(15, math.min(144, modificationState.autoFpsThreshold[0]))
-		if modificationState.persistAutoFpsThreshold then modificationState.persistAutoFpsThreshold() end
-	end
-
-	sectionGap()
-	header("Автоцикл")
-	toggleLine("##mod_auto_cycle", modificationState.autoCycleEnabled[0], "Скупка -> продажа -> скупка", function(value)
-		if modificationState.setAutoCycleEnabled then modificationState.setAutoCycleEnabled(value, true) end
-	end)
-
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 6 * uiScale)
-	local manualPurchasedCount = type(manualPurchasedGetTotalCount) == "function" and manualPurchasedGetTotalCount() or 0
-	local manualPurchasedLabel = manualPurchasedState and manualPurchasedState.running
-		and "Остановить ручное выставление"
-		or "Выставить скупленные товары"
-	if imgui.Button(manualPurchasedLabel .. "##mod_manual_purchased", imgui.ImVec2(panelWidth(), 30 * uiScale)) then
-		if manualPurchasedState and manualPurchasedState.running then
-			manualPurchasedCancel()
-		else
-			manualPurchasedStart()
-		end
-	end
-	imgui.TextDisabled("Запомнено к выставлению: " .. tostring(manualPurchasedCount) .. " шт.")
-
-	--[[
-	ВАЖНО: БЛОК НИЖЕ НАМЕРЕННО ОСТАВЛЕН В КОММЕНТАРИИ.
-	НЕЛЬЗЯ РАСКОММЕНТИРОВАТЬ ИЛИ УДАЛЯТЬ ЕГО ИЗ КОДА.
-	sectionGap()
-	header(u8("\xC0\xE2\xF2\xEE\xE5\xE4\xE0"))
-	toggleLine("##mod_autoeat", modificationState.autoEatEnabled[0], u8("\xC2\xEA\xEB\xFE\xF7\xE8\xF2\xFC \xE0\xE2\xF2\xEE\xE5\xE4\xF3"), function(value)
-		if modificationState.setAutoEatEnabled then modificationState.setAutoEatEnabled(value, true) end
-	end)
-	if modificationState.autoEatEnabled[0] then
-		imgui.Text(u8("\xD1\xEF\xEE\xF1\xEE\xE1 \xE5\xE4\xFB"))
-		imgui.SetNextItemWidth(panelWidth())
-		if modificationState.autoEatMethodsIm and imgui.Combo("##mod_autoeat_method", modificationState.autoEatMethod, modificationState.autoEatMethodsIm, #modificationState.autoEatMethods) then
-			if modificationState.persistAutoEatMethod then modificationState.persistAutoEatMethod() end
-		end
-		imgui.Text(u8("\xD1\xFB\xF2\xEE\xF1\xF2\xFC, \xEF\xF0\xE8 \xEA\xEE\xF2\xEE\xF0\xEE\xE9 \xE5\xF1\xF2\xFC:"))
-		imgui.SetNextItemWidth(panelWidth())
-		if imgui.SliderInt("##mod_autoeat_percent", modificationState.autoEatPercent, 1, 99) then
-			if modificationState.persistAutoEatPercent then modificationState.persistAutoEatPercent() end
-		end
-	end
-	]]
-
-	imgui.EndCustomInvisibleChild()
-	imgui.PopFont()
-end
 
 -- ============================================================
 
@@ -4224,38 +4062,6 @@ function marketSidePriceEditorActive(side)
 	return false
 end
 
-function marketHandlePriceEditorCommit(side, item, state, buffer, changed)
-	if type(state) ~= "table" or buffer == nil then
-		return false
-	end
-
-	if changed then
-		local valueText = ffi.string(buffer)
-		local minimumPrice = side == "buy" and 10 or 9
-		local numericValue = tonumber(valueText)
-		if valueText:match("^%d+$") and numericValue and numericValue >= minimumPrice then
-			marketCommitItemPrice(side, item, valueText)
-		end
-	end
-
-	local finished = false
-	if type(imgui.IsItemDeactivated) == "function" then
-		local ok, value = pcall(imgui.IsItemDeactivated)
-		finished = ok and value == true
-	end
-	if not finished and not imgui.IsItemHovered() and imgui.IsMouseClicked(0) then
-		finished = true
-	end
-
-	if finished then
-		state.active = false
-		state.click = false
-		state.focus_seen = false
-		resetIO()
-	end
-
-	return true
-end
 
 function marketFinishAllItemEditors()
 	for _, sideState in pairs(itemEditorState) do
@@ -4276,28 +4082,6 @@ function marketFinishAllItemEditors()
 	return true
 end
 
-function marketAnyItemEditorActive()
-	local io = imgui.GetIO and imgui.GetIO() or nil
-	if not io or not io.WantTextInput then
-		marketFinishAllItemEditors()
-		return false
-	end
-
-	for _, sideState in pairs(itemEditorState) do
-		if type(sideState) == "table" then
-			for _, itemState in pairs(sideState) do
-				if type(itemState) == "table" then
-					for _, fieldState in pairs(itemState) do
-						if type(fieldState) == "table" and fieldState.active then
-							return true
-						end
-					end
-				end
-			end
-		end
-	end
-	return false
-end
 
 function marketCommitItemPrice(side, item, textValue)
 	if type(item) ~= "table" then
@@ -4521,33 +4305,6 @@ function undoLastDeletedListItem(listType)
 	return true
 end
 
-function handleListDeleteUndoHotkey()
-	if not menuVisible[0] or (selectedMenuPage ~= 1 and selectedMenuPage ~= 2) then
-		return
-	end
-
-	if not isKeyDown(modificationState.marketUndoVkeys.VK_CONTROL) or not isKeyJustPressed(modificationState.marketUndoVkeys.VK_Z) then
-		return
-	end
-
-	-- Do not steal the native Ctrl+Z from active text inputs.
-	local io = imgui.GetIO()
-	local anyItemActive = false
-	if imgui.IsAnyItemActive ~= nil then
-		local ok, active = pcall(imgui.IsAnyItemActive)
-		anyItemActive = ok and active == true
-	end
-
-	if (io and io.WantTextInput) or anyItemActive then
-		return
-	end
-
-	if selectedMenuPage == 1 then
-		undoLastDeletedListItem("sell")
-	else
-		undoLastDeletedListItem("buy")
-	end
-end
 local normalizedItems = {
 	buy = {},
 	sell = {}
@@ -4606,7 +4363,7 @@ ini = inicfg.load({
 		myServerId = "",
 		first_inject = true,
 		interface_choice_done = false,
-		interface_mode = "lua",
+		interface_mode = "html",
 		marketplaceSelectedItem = 1,
 		isEnabledSputnikWords = true,
 		telegram_reserve = false,
@@ -4705,19 +4462,6 @@ if ini and ini.cfg and ini.cfg.menu_scale_120_migration ~= true then
 	pcall(inicfg.save, ini, iniPath)
 end
 
-ARZ_INTERFACE_CHOOSER = {
-	-- The chooser is controlled only by Baron's explicit interface_choose step.
-	-- Never show its preview automatically during script startup/reload.
-	visible = imguiNew.bool(false),
-	ready = false,
-	selection = nil,
-	phase = "preview",
-	transition_started = 0,
-	fade_duration = 320,
-	loading_duration = 720,
-	finalizing = false
-}
-
 -- ============================================================
 -- Baron assistant. Isolated onboarding/tutorial module.
 -- State lives outside ArzMarket.ini so tutorial progress does not
@@ -4794,9 +4538,6 @@ function arzBaronArmSessionGate()
 	ARZ_BARON_SESSION_MANUAL_OVERRIDE = false
 	ARZ_BARON_PENDING_STAGE_SYNC = nil
 	ARZ_BARON_SHOWCASE_MODE = nil
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
-		ARZ_INTERFACE_CHOOSER.visible[0] = false
-	end
 	return ARZ_BARON_SESSION_READY_AT_MS
 end
 
@@ -4805,8 +4546,12 @@ function arzBaronOpenSessionGateForManualCommand()
 	ARZ_BARON_SESSION_MANUAL_OVERRIDE = true
 	ARZ_BARON_PENDING_STAGE_SYNC = nil
 	ARZ_BARON_SHOWCASE_MODE = nil
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then
-		ARZ_INTERFACE_CHOOSER.visible[0] = false
+	-- A manual command is an explicit request to see Baron now. Open both the
+	-- host-side session gate and the assistant's own display gate, otherwise
+	-- /crr could fall through to the normal UI during the initial 40-second
+	-- delay and bypass mandatory onboarding.
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.openDisplayGateNow) == "function" then
+		pcall(ARZ_BARON_ASSISTANT.openDisplayGateNow)
 	end
 	return true
 end
@@ -4818,103 +4563,16 @@ function arzBaronSessionGateOpen()
 end
 
 function arzBaronApplyOnboardingStage(moduleId, stepId)
-	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
-	if tostring(moduleId or "") ~= "onboarding" then return false end
-	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true then return false end
-	stepId = tostring(stepId or "")
-
-	local function hideChooser(resetSelection)
-		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
-		if resetSelection then
-			ARZ_INTERFACE_CHOOSER.selection = nil
-			ARZ_INTERFACE_CHOOSER.phase = "preview"
-			ARZ_INTERFACE_CHOOSER.transition_started = 0
-			ARZ_INTERFACE_CHOOSER.finalizing = false
-		end
-		ARZ_INTERFACE_LUA_PREVIEW = nil
-		if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
-	end
-
-	if stepId == "welcome" or stepId == "interfaces_intro" then
-		ARZ_BARON_SHOWCASE_MODE = "intro"
-		hideChooser(true)
-		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-		menuOpen = false
-		if menuVisible then menuVisible[0] = false end
-		if type(resetIO) == "function" then pcall(resetIO) end
-		return true
-	end
-
-	if stepId == "lua_intro_1" or stepId == "lua_look" then
-		ARZ_BARON_SHOWCASE_MODE = "lua"
-		hideChooser(true)
-		if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() and type(arzUiExtensionsCloseHtml) == "function" then
-			pcall(arzUiExtensionsCloseHtml)
-		end
-		selectedMenuPage = 2
-		ini.cfg.lastCrrSelect = 2
-		if not (menuOpen == true and menuVisible and menuVisible[0] == true) then
-			menuOpen = true
-			if menuVisible then menuVisible[0] = true end
-			kifir = 1
-			onOpenMenu = true
-			zzztime = os.clock()
-		end
-		return true
-	end
-
-	if stepId == "html_intro_1" or stepId == "html_look" then
-		ARZ_BARON_SHOWCASE_MODE = "html"
-		hideChooser(true)
-		if menuVisible and menuVisible[0] == true then
-			menuOpen = false
-			menuVisible[0] = false
-			if type(resetIO) == "function" then pcall(resetIO) end
-		end
-		if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() then
-			return true
-		end
-		if type(arzUiExtensionsOpenHtml) == "function" then
-			local ok, opened = pcall(arzUiExtensionsOpenHtml, "buy", nil, { temporary = true })
-			return ok and opened ~= false
-		end
-		return false
-	end
-
-	if stepId == "interface_choose" or stepId == "interface_loading" then
-		ARZ_BARON_SHOWCASE_MODE = "compare"
-		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-		menuOpen = false
-		if menuVisible then menuVisible[0] = false end
-		if type(resetIO) == "function" then pcall(resetIO) end
-		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
-		if stepId == "interface_choose" then
-			ARZ_INTERFACE_CHOOSER.selection = nil
-			ARZ_INTERFACE_CHOOSER.phase = "preview"
-			ARZ_INTERFACE_CHOOSER.transition_started = 0
-			ARZ_INTERFACE_CHOOSER.finalizing = false
-		end
-		return true
-	end
-
-	if stepId == "lua_disabled_1" or stepId == "lua_disabled_1_more" or stepId == "lua_disabled_2" or stepId == "lua_disabled_3" or stepId == "lua_redirect_offer" then
-		ARZ_BARON_SHOWCASE_MODE = nil
-		hideChooser(true)
-		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-		menuOpen = true
-		if menuVisible then menuVisible[0] = true end
-		kifir = 1
-		onOpenMenu = true
-		zzztime = os.clock()
-		return true
-	end
-
-	if stepId == "tutorial_offer" then
-		ARZ_BARON_SHOWCASE_MODE = nil
-		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
-		return true
-	end
-	return false
+    if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
+    if tostring(moduleId or "") ~= "onboarding" then return false end
+    if tostring(stepId or "") ~= "welcome" then return false end
+    ARZ_BARON_SHOWCASE_MODE = "intro"
+    if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
+    if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
+    menuOpen = false
+    if menuVisible then menuVisible[0] = false end
+    if type(resetIO) == "function" then pcall(resetIO) end
+    return true
 end
 
 function arzBaronProcessPendingStageSync()
@@ -4922,8 +4580,17 @@ function arzBaronProcessPendingStageSync()
     local pending = ARZ_BARON_PENDING_STAGE_SYNC
     if type(pending) ~= "table" then return false end
     ARZ_BARON_PENDING_STAGE_SYNC = nil
-    if type(arzBaronApplyOnboardingStage) ~= "function" then return false end
-    return arzBaronApplyOnboardingStage(pending.moduleId, pending.stepId)
+    local moduleId = tostring(pending.moduleId or "")
+    if moduleId == "onboarding" then
+        return type(arzBaronApplyOnboardingStage) == "function" and arzBaronApplyOnboardingStage(moduleId, pending.stepId) or false
+    end
+    if moduleId == "tutorial_html" then
+        ini.cfg.interface_mode = "html"
+        ini.cfg.interface_choice_done = true
+        if type(arzIniSave) == "function" then pcall(arzIniSave) end
+        return type(arzBaronOpenSavedProgress) == "function" and arzBaronOpenSavedProgress() or false
+    end
+    return false
 end
 
 function arzBaronResumeOnboardingShowcase()
@@ -4936,10 +4603,55 @@ function arzBaronResumeOnboardingShowcase()
 	local ok, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
 	if not ok or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
 	if assistantState.current_module ~= "onboarding" then return false end
-	if tostring(assistantState.current_step or "") == "tutorial_offer" and type(arzBaronOpenSavedProgress) == "function" then
-		return arzBaronOpenSavedProgress()
-	end
 	return arzBaronApplyOnboardingStage(assistantState.current_module, assistantState.current_step)
+end
+
+function arzBaronScheduleAutomaticResume()
+	if not lua_thread or type(lua_thread.create) ~= "function" then return false end
+	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
+
+	lua_thread.create(function()
+		local resumeAttempts = 0
+		while true do
+			if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return end
+
+			local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
+			if not okState or type(assistantState) ~= "table" then return end
+			if assistantState.active ~= true or tostring(assistantState.current_step or "") == "dormant" then return end
+
+			local moduleId = tostring(assistantState.current_module or "")
+			local stepId = tostring(assistantState.current_step or "")
+
+			-- A manual command may have resumed the same session before the timer.
+			-- Do not reopen or reset a surface that is already showing the saved step.
+			if moduleId == "onboarding" and stepId == "welcome" and ARZ_BARON_SHOWCASE_MODE == "intro" then return end
+			if moduleId == "tutorial_html" and type(arzUiExtensionsIsHtmlOpen) == "function" then
+				local okHtml, htmlOpen = pcall(arzUiExtensionsIsHtmlOpen)
+				if okHtml and htmlOpen == true then return end
+			end
+
+			if type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() then
+				local assistantReady = true
+				if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
+					local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
+					assistantReady = okActive and active == true
+				end
+
+				if assistantReady then
+					local okResume, resumed = pcall(arzBaronOpenSavedProgress)
+					if okResume and resumed == true then return end
+					resumeAttempts = resumeAttempts + 1
+					if resumeAttempts >= 20 then
+						print("[ArzMarket][Baron] automatic tutorial resume failed after 20 attempts")
+						return
+					end
+				end
+			end
+
+			wait(100)
+		end
+	end)
+	return true
 end
 
 function arzBaronOpenSavedProgress()
@@ -4963,32 +4675,11 @@ function arzBaronOpenSavedProgress()
 	end
 
 	if moduleId == "onboarding" then
-		local applied = arzBaronApplyOnboardingStage(moduleId, stepId) == true
-		-- tutorial_offer belongs to onboarding, but it must reopen the already
-		-- selected interface rather than falling back to Lua after ESC.
-		if stepId == "tutorial_offer" then
-			local mode = assistantState.interface == "html" and "html" or "lua"
-			if mode == "html" then
-				menuOpen = false
-				if menuVisible then menuVisible[0] = false end
-				if type(resetIO) == "function" then pcall(resetIO) end
-				local page = savedPage ~= "" and savedPage or arzBaronCurrentPageName()
-				if type(arzUiExtensionsOpenHtml) == "function" then pcall(arzUiExtensionsOpenHtml, page) end
-			else
-				if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-				menuOpen = true
-				if menuVisible then menuVisible[0] = true end
-				kifir = 1
-				onOpenMenu = true
-				zzztime = os.clock()
-			end
-			return true
-		end
-		return applied
+		return arzBaronApplyOnboardingStage(moduleId, stepId) == true
 	end
 
-	if moduleId ~= "tutorial_html" and moduleId ~= "tutorial_lua" then return false end
-	local mode = assistantState.interface == "html" and "html" or "lua"
+	if moduleId ~= "tutorial_html" then return false end
+	local mode = "html"
 	local snapshot = arzBaronAssistantSnapshot(nil, mode) or {}
 	local requestedPage = pageMap[savedPage] and savedPage or tostring(snapshot.requiredPage or snapshot.expectedPage or "")
 	if requestedPage == "" then requestedPage = arzBaronCurrentPageName() end
@@ -4997,7 +4688,6 @@ function arzBaronOpenSavedProgress()
 		ini.cfg.lastCrrSelect = selectedMenuPage
 	end
 	ARZ_BARON_SHOWCASE_MODE = nil
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
 
 	if mode == "html" then
 		menuOpen = false
@@ -5020,13 +4710,6 @@ function arzBaronOpenSavedProgress()
 		return false
 	end
 
-	if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-	menuOpen = true
-	if menuVisible then menuVisible[0] = true end
-	kifir = 1
-	onOpenMenu = true
-	zzztime = os.clock()
-	return true
 end
 
 function arzBaronLoadAssistant()
@@ -5043,7 +4726,7 @@ function arzBaronLoadAssistant()
 	end
 	local context = {
 		firstLaunch = ini.cfg.interface_choice_done ~= true,
-		interface = ini.cfg.interface_mode == "html" and "html" or "lua",
+		interface = "html",
 		assetBasePath = getWorkingDirectory() .. "\\ArzMarket\\html\\assets\\baron",
 		moduleBasePath = getWorkingDirectory() .. "\\modules\\ArzMarketQuant",
 		nowMs = function()
@@ -5136,10 +4819,6 @@ function arzBaronLoadAssistant()
 			end
 			return true
 		end,
-		beginInterfaceSelection = function(mode)
-			if type(arzInterfaceBeginSelection) ~= "function" then return false end
-			return arzInterfaceBeginSelection(mode)
-		end,
 		onStepChanged = function(moduleId, stepId)
 			-- Never open/close Lua/CEF surfaces from the HTTP request coroutine.
 			-- Queue the transition and apply it from the normal ImGui frame instead.
@@ -5168,39 +4847,14 @@ function arzBaronLoadAssistant()
 			resetTransientUi = function(clearPending)
 				if clearPending == true then ARZ_BARON_PENDING_STAGE_SYNC = nil end
 				ARZ_BARON_SHOWCASE_MODE = nil
-				ARZ_INTERFACE_LUA_PREVIEW = nil
-				if type(arzUiExtensionsCloseHtmlPreview) == "function" then
+								if type(arzUiExtensionsCloseHtmlPreview) == "function" then
 					pcall(arzUiExtensionsCloseHtmlPreview)
 				end
 				return true
 			end,
-			setChooserVisible = function(visible)
-				if not ARZ_INTERFACE_CHOOSER then return true end
-				local allowVisible = visible == true and (type(arzBaronSessionGateOpen) ~= "function" or arzBaronSessionGateOpen())
-				if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = allowVisible == true end
-				ARZ_INTERFACE_CHOOSER.selection = nil
-				ARZ_INTERFACE_CHOOSER.phase = "preview"
-				ARZ_INTERFACE_CHOOSER.transition_started = 0
-				ARZ_INTERFACE_CHOOSER.finalizing = false
-				return true
-			end,
 			setInterfaceConfig = function(mode, choiceDone)
-				if mode == "html" or mode == "lua" then ini.cfg.interface_mode = mode end
+				ini.cfg.interface_mode = "html"
 				ini.cfg.interface_choice_done = choiceDone == true
-				return true
-			end,
-			showLuaInterface = function(visible)
-				if visible == true then
-					menuOpen = true
-					if menuVisible then menuVisible[0] = true end
-					kifir = 1
-					onOpenMenu = true
-					zzztime = os.clock()
-				else
-					menuOpen = false
-					if menuVisible then menuVisible[0] = false end
-					if type(resetIO) == "function" then pcall(resetIO) end
-				end
 				return true
 			end,
 			showHtmlInterface = function(visible, page)
@@ -5257,7 +4911,7 @@ function arzBaronLoadAssistant()
 			end
 
 			return {
-				interface = mode == "html" and "html" or "lua",
+				interface = "html",
 				step = tostring(stepId or ""),
 				sell_inventory_empty = sellInventoryCount == 0,
 				sell_inventory_count = sellInventoryCount,
@@ -5274,10 +4928,6 @@ function arzBaronLoadAssistant()
 				local pageId = pageMap[tostring(payload.page or "")]
 				if not pageId then return false end
 				selectedMenuPage = pageId
-				if UI_ANIM_BUTTON then
-					UI_ANIM_BUTTON.pending_menu = nil
-					UI_ANIM_BUTTON.time = 0
-				end
 				return true
 			elseif action == "open_filter" then
 				local side = tostring(payload.page or "") == "buy" and "buy" or "sell"
@@ -5285,10 +4935,6 @@ function arzBaronLoadAssistant()
 				return true
 			elseif action == "open_settings_appearance" then
 				selectedMenuPage = 3
-				if UI_ANIM_BUTTON then
-					UI_ANIM_BUTTON.pending_menu = nil
-					UI_ANIM_BUTTON.time = 0
-				end
 				if type(modificationState) == "table" then
 					modificationState.settingsInterfaceOpen = true
 				end
@@ -5308,11 +4954,6 @@ function arzBaronLoadAssistant()
 		return false
 	end
 	ARZ_BARON_ASSISTANT = assistant
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and type(assistant.needsChooser) == "function" then
-		local gateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
-		local okChooser, needsChooser = pcall(assistant.needsChooser)
-		if okChooser then ARZ_INTERFACE_CHOOSER.visible[0] = gateOpen and needsChooser == true or false end
-	end
 	return true
 end
 
@@ -5328,7 +4969,7 @@ function arzBaronAssistantSnapshot(page, mode)
 	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.snapshot) ~= "function" then
 		return { active = false }
 	end
-	local value = ARZ_BARON_ASSISTANT.snapshot(page or arzBaronCurrentPageName(), mode or (ini.cfg.interface_mode == "html" and "html" or "lua"))
+	local value = ARZ_BARON_ASSISTANT.snapshot(page or arzBaronCurrentPageName(), "html")
 	return type(value) == "table" and value or { active = false }
 end
 
@@ -5338,13 +4979,8 @@ function arzBaronAssistantAction(action, payload)
 	local fn = nil
 	if action == "next" then fn = ARZ_BARON_ASSISTANT.next
 	elseif action == "skip" then fn = ARZ_BARON_ASSISTANT.skip
-	elseif action == "tutorial_accept" then fn = function() return ARZ_BARON_ASSISTANT.chooseTutorial(true) end
-	elseif action == "tutorial_decline" then fn = function() return ARZ_BARON_ASSISTANT.chooseTutorial(false) end
-	elseif action == "lua_redirect_yes" then fn = function() return ARZ_BARON_ASSISTANT.chooseLuaRedirect(true) end
-	elseif action == "lua_redirect_no" then fn = function() return ARZ_BARON_ASSISTANT.chooseLuaRedirect(false) end
 	elseif action == "future_details_yes" then fn = function() return ARZ_BARON_ASSISTANT.chooseFutureDetails(true) end
 	elseif action == "future_details_no" then fn = function() return ARZ_BARON_ASSISTANT.chooseFutureDetails(false) end
-	elseif action == "interface_select" then fn = function() return ARZ_BARON_ASSISTANT.selectInterface(payload and payload.mode) end
 	elseif action == "intro_skip" then fn = ARZ_BARON_ASSISTANT.skipIntro
 	elseif action == "event" then fn = function() return ARZ_BARON_ASSISTANT.event(payload and payload.name, payload) end
 	elseif action == "restart" then fn = function() return ARZ_BARON_ASSISTANT.restartTutorial(ini.cfg.interface_mode) end
@@ -5364,7 +5000,8 @@ function arzBaronAssistantAction(action, payload)
 end
 
 
-arzBaronLoadAssistant()
+-- Baron is loaded from main() after component bootstrap validates the required
+-- module file.  Do not try to load it eagerly on a clean first run.
 
 -- Global INI write lock. Once account/auth data already exists, ArzMarket starts
 -- in read-only mode so the current account can never replace the saved profile.
@@ -5392,10 +5029,11 @@ ARZ_FIRST_BOOTSTRAP_PENDING_PATH = "moonloader/config/ArzMarket/first_bootstrap_
 ARZ_FIRST_BOOTSTRAP_COMPLETED_PATH = "moonloader/config/ArzMarket/first_bootstrap_completed.flag"
 ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH = "moonloader/config/ArzMarket/managed_loader_verified.ini"
 ARZ_FIRST_BOOTSTRAP_FAILED_PATH = "moonloader/config/ArzMarket/managed_loader_failed.ini"
+ARZ_FIRST_BOOTSTRAP_PROGRESS_PATH = "moonloader/config/ArzMarket/managed_loader_progress.ini"
 ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME = "ArzMarket_Loader_by_Quant_Managed.lua"
 ARZ_FIRST_BOOTSTRAP_OLD_LOADER_NAME = "ArzMarket_Loader_by_Quant.lua"
 ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/ArzMarket_Loader_by_Quant_Managed.lua"
-ARZ_FIRST_BOOTSTRAP_MIN_MANAGED_LOADER_VERSION = "0.52"
+ARZ_FIRST_BOOTSTRAP_MIN_MANAGED_LOADER_VERSION = "0.59"
 ARZ_FIRST_BOOTSTRAP_ACTIVE = doesFileExist(ARZ_FIRST_BOOTSTRAP_PENDING_PATH)
 
 -- Fail closed before main() on a machine that has never completed bootstrap.
@@ -6181,6 +5819,13 @@ function arzFirstBootstrapIsAllowedGithubUrl(url)
 		or url:find("https://api.github.com/repos/NikitaQuant/ArzMarket-by-Quant/", 1, true) == 1
 end
 
+ARZ_NATIVE_DOWNLOAD_ATTEMPT_SEQUENCE = ARZ_NATIVE_DOWNLOAD_ATTEMPT_SEQUENCE or 0
+
+function arzNativeDownloadAttemptPath(path, tag)
+	ARZ_NATIVE_DOWNLOAD_ATTEMPT_SEQUENCE = ARZ_NATIVE_DOWNLOAD_ATTEMPT_SEQUENCE + 1
+	return tostring(path) .. ".arzdl." .. tostring(tag or "generic") .. "." .. tostring(os.time()) .. "." .. tostring(ARZ_NATIVE_DOWNLOAD_ATTEMPT_SEQUENCE)
+end
+
 function arzFirstBootstrapNativeDownload(url, path, timeoutSeconds)
 	if not ARZ_FIRST_BOOTSTRAP_ACTIVE then return false, "bootstrap_not_active" end
 	if not arzFirstBootstrapIsAllowedGithubUrl(url) then
@@ -6190,22 +5835,29 @@ function arzFirstBootstrapNativeDownload(url, path, timeoutSeconds)
 		return false, "native_downloader_unavailable"
 	end
 
-	pcall(os.remove, path)
+	local workPath = arzNativeDownloadAttemptPath(path, "bootstrap")
+	pcall(os.remove, workPath)
 	local finished = false
 	local success = false
+	local active = true
 	local downloadStatus = require("moonloader").download_status
 	local separator = tostring(url):find("?", 1, true) and "&" or "?"
 	local finalUrl = tostring(url) .. separator .. "_arz_first_bootstrap=" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
-	local ok, downloadId = pcall(ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD, finalUrl, path, function(_, status)
+	local ok, downloadId = pcall(ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD, finalUrl, workPath, function(_, status)
+		if not active then
+			if status == downloadStatus.STATUSEX_ENDDOWNLOAD or (tonumber(status) and tonumber(status) < 0) then pcall(os.remove, workPath) end
+			return
+		end
 		if status == downloadStatus.STATUSEX_ENDDOWNLOAD then
-			success = doesFileExist(path)
+			success = doesFileExist(workPath)
 			finished = true
 		elseif tonumber(status) and tonumber(status) < 0 then
 			finished = true
 		end
 	end)
 	if not ok or downloadId == nil or downloadId == -1 then
-		pcall(os.remove, path)
+		active = false
+		pcall(os.remove, workPath)
 		return false, "download_not_started"
 	end
 
@@ -6213,17 +5865,26 @@ function arzFirstBootstrapNativeDownload(url, path, timeoutSeconds)
 	local timeout = tonumber(timeoutSeconds) or 30
 	while not finished and os.time() - startedAt < timeout do wait(25) end
 	if not finished or not success then
-		pcall(os.remove, path)
+		active = false
+		if finished then pcall(os.remove, workPath) end
 		return false, finished and "download_failed" or "download_timeout"
 	end
 	wait(100)
-	local file = io.open(path, "rb")
-	if not file then return false, "download_missing" end
+	local file = io.open(workPath, "rb")
+	if not file then active = false return false, "download_missing" end
 	local size = file:seek("end") or 0
 	file:close()
 	if tonumber(size) <= 0 then
-		pcall(os.remove, path)
+		active = false
+		pcall(os.remove, workPath)
 		return false, "download_empty"
+	end
+	active = false
+	pcall(os.remove, path)
+	local renamed, renameError = os.rename(workPath, path)
+	if not renamed then
+		pcall(os.remove, workPath)
+		return false, "download_finalize_failed:" .. tostring(renameError)
 	end
 	return true
 end
@@ -6301,20 +5962,40 @@ function arzFirstBootstrapInstallManagedLoader(pending)
 
 	local managedPath = getWorkingDirectory() .. "\\" .. ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME
 	local tempPath = managedPath .. ".bootstrap.download"
+	local packagedValid, packagedVersion = false, nil
+	if doesFileExist(managedPath) then packagedValid, packagedVersion = arzFirstBootstrapValidateManagedLoader(managedPath) end
 	local downloaded, downloadError = arzFirstBootstrapNativeDownload(ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_URL, tempPath, 45)
-	if not downloaded then return false, "managed_loader_" .. tostring(downloadError) end
-
-	local managedValid, managedVersionOrError = arzFirstBootstrapValidateManagedLoader(tempPath)
-	if not managedValid then
-		pcall(os.remove, tempPath)
-		return false, tostring(managedVersionOrError)
+	local remoteVersion
+	if downloaded then
+		local managedValid, managedVersionOrError = arzFirstBootstrapValidateManagedLoader(tempPath)
+		if managedValid then remoteVersion = managedVersionOrError
+		else downloaded, downloadError = false, managedVersionOrError end
 	end
-	local remoteVersion = managedVersionOrError
+	local preferPackaged = packagedValid and (not downloaded or (arzFirstBootstrapCompareVersions(packagedVersion, remoteVersion) or -1) >= 0)
+	if preferPackaged then
+		pcall(os.remove, tempPath)
+		local loadedManaged = arzFirstBootstrapFindLoadedScript(ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME)
+		pcall(os.remove, ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
+		pcall(os.remove, ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+		if loadedManaged then
+			-- Do not unload/reload a running Lua script from another Lua state.
+			-- That can race MoonLoader callbacks/AutoReboot and crash inside lua51.dll.
+			print("[ArzMarket][Bootstrap] packaged managed loader already running v" .. tostring(packagedVersion))
+			return true, packagedVersion
+		end
+		if not script.load(managedPath) then return false, "packaged_managed_loader_load_failed" end
+		print("[ArzMarket][Bootstrap] packaged managed loader v" .. tostring(packagedVersion))
+		return true, packagedVersion
+	end
+	if not downloaded then pcall(os.remove, tempPath); return false, "managed_loader_" .. tostring(downloadError) end
 
 	local loadedManaged = arzFirstBootstrapFindLoadedScript(ARZ_FIRST_BOOTSTRAP_MANAGED_LOADER_NAME)
-	if loadedManaged then
-		pcall(function() loadedManaged:unload() end)
-		wait(50)
+	if loadedManaged and packagedValid and packagedVersion then
+		pcall(os.remove, tempPath)
+		pcall(os.remove, ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
+		pcall(os.remove, ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+		print("[ArzMarket][Bootstrap] managed loader already running v" .. tostring(packagedVersion) .. "; remote replacement deferred safely")
+		return true, packagedVersion
 	end
 
 	local backupPath = managedPath .. ".bootstrap_previous"
@@ -6344,10 +6025,6 @@ function arzFirstBootstrapInstallManagedLoader(pending)
 	end
 	pcall(os.remove, backupPath)
 
-	local oldLoaderPath = getWorkingDirectory() .. "\\" .. ARZ_FIRST_BOOTSTRAP_OLD_LOADER_NAME
-	if doesFileExist(oldLoaderPath) then
-		pcall(os.remove, oldLoaderPath)
-	end
 	print("[ArzMarket][Bootstrap] managed loader installed v" .. tostring(remoteVersion))
 	return true, remoteVersion
 end
@@ -6356,7 +6033,8 @@ function arzFirstBootstrapWaitManagedVerification(pending, timeoutSeconds)
 	local expectedSession = tostring(pending and pending.session or "")
 	if expectedSession == "" then return false, "pending_session_missing" end
 	local startedAt = os.time()
-	local timeout = tonumber(timeoutSeconds) or 90
+	local lastProgressAt = startedAt
+	local timeout = tonumber(timeoutSeconds) or 240
 	while os.time() - startedAt < timeout do
 		if doesFileExist(ARZ_FIRST_BOOTSTRAP_FAILED_PATH) then
 			local failed = arzFirstBootstrapReadKeyValue(ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
@@ -6370,6 +6048,14 @@ function arzFirstBootstrapWaitManagedVerification(pending, timeoutSeconds)
 				return true, tostring(verified.loader_version or "")
 			end
 		end
+		if doesFileExist(ARZ_FIRST_BOOTSTRAP_PROGRESS_PATH) then
+			local progress = arzFirstBootstrapReadKeyValue(ARZ_FIRST_BOOTSTRAP_PROGRESS_PATH)
+			local updatedAt = tonumber(progress.updated_at)
+			if tostring(progress.session or "") == expectedSession and updatedAt and updatedAt <= os.time() then
+				lastProgressAt = math.max(lastProgressAt, updatedAt)
+			end
+		end
+		if os.time() - lastProgressAt >= 60 then return false, "managed_verification_stalled" end
 		wait(50)
 	end
 	return false, "managed_loader_verification_timeout"
@@ -6399,6 +6085,7 @@ function arzFirstBootstrapEnsurePendingForInitialLoader()
 	local session = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
 	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
 	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_PROGRESS_PATH)
 
 	local content = table.concat({
 		"protocol=1",
@@ -6421,6 +6108,14 @@ function arzFirstBootstrapEnsurePendingForInitialLoader()
 	ARZ_FIRST_BOOTSTRAP_ACTIVE = true
 	print("[ArzMarket][Bootstrap] isolated bootstrap created, session=" .. session)
 	return true, session
+end
+
+function arzFirstBootstrapChat(message, color)
+	local text = tostring(message or "")
+	print("[ArzMarket][Bootstrap] " .. text)
+	if isSampAvailable() then
+		pcall(sampAddChatMessage, u8:decode(text), color or 0xFF70C8FF)
+	end
 end
 
 function arzFirstBootstrapComplete(pending)
@@ -6447,6 +6142,7 @@ function arzFirstBootstrapComplete(pending)
 	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_PENDING_PATH)
 	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_VERIFIED_PATH)
 	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_FAILED_PATH)
+	pcall(os.remove, ARZ_FIRST_BOOTSTRAP_PROGRESS_PATH)
 	ARZ_FIRST_BOOTSTRAP_ACTIVE = false
 	return true
 end
@@ -7695,7 +7391,7 @@ do
             return true
         end
         setString("authPremiumTokenAuth", key)
-        if info.UserTempKey ~= nil then setString("authUserTempKey", info.UserTempKey) end
+        setString("authUserTempKey", info.UserTempKey or "")
         updated.cfg.premiumTokenAuth = info.userStatus ~= 0 and 1 or 2
         updated.cfg.lastUpdatePremiumToken = info.userStatus ~= 0 and os.time() or -1
         if inicfg.save(updated, iniPath) ~= true then return false end
@@ -7788,6 +7484,9 @@ do
                     or (info.UserTempKey ~= nil and (type(info.UserTempKey) ~= "string"
                         or info.UserTempKey:find("[%z\r\n]"))) then failed(); return end
                 if not trustedSaveProfile(session, key, info) then failed(); return end
+                if type(arzNetworkAcceptPremiumAuth) == "function" then
+                    arzNetworkAcceptPremiumAuth(key, info.UserTempKey or "")
+                end
 
                 ARZ_ACCOUNT_BRIDGE_RUNTIME.profileAuthPending = false
                 isStartLoadPremium = nil
@@ -8065,7 +7764,7 @@ AUTO_AD_RECONNECT_STATE = AUTO_AD_RECONNECT_STATE or {
 	resumeAfter = 0
 }
 local menuThemePath = "moonloader/ArzMarket/js/menu_theme.json"
-local menuThemeConfig = gojson(menuThemePath):Load({
+menuThemeConfig = gojson(menuThemePath):Load({
 	selectedSputnik = "",
 	palette_key = "arzmarket_default",
 	color_text_market = {
@@ -8298,7 +7997,6 @@ elseif menuThemeConfig.palette_key ~= "arzmarket_default" then
 end
 
 
--- ============================================================
 -- ArzMarket custom color palette.
 -- Visual editor is intentionally ported from ai_helper.lua: SV square,
 -- vertical hue strip and bottom alpha strip. Changes are live; disk writes
@@ -8719,406 +8417,6 @@ function arzGlobalPaletteApplyConfig()
 	return colors
 end
 
-function arzGlobalPaletteApplyRuntime()
-	arzGlobalPaletteApplyConfig()
-	if type(arzPaletteSyncRuntime) == "function" then arzPaletteSyncRuntime() end
-	if type(imgui.FrameTheme) == "function" then imgui.FrameTheme() end
-end
-
-function arzGlobalPaletteSet(payload)
-	local palette = arzGlobalPaletteEnsureStorage()
-	local data = type(payload) == "table" and payload or {}
-	if data.reset == true then
-		palette.base = "#4B8DFF"
-		palette.depth = 72
-		palette.saturation = 82
-		palette.contrast = 72
-		palette.glow = 80
-		local defaultColor = arzPaletteHex(palette.base)
-		palette.picker_hue, palette.picker_saturation, palette.picker_value = arzCustomPaletteRgbToHsv(defaultColor[1], defaultColor[2], defaultColor[3])
-		if data.enabled ~= nil then palette.enabled = data.enabled == true end
-	else
-		if data.enabled ~= nil then palette.enabled = data.enabled == true end
-		if data.base ~= nil then palette.base = arzGlobalPaletteNormalizeHex(data.base) end
-		if data.depth ~= nil then palette.depth = arzGlobalPalettePercent(data.depth, palette.depth) end
-		if data.saturation ~= nil then palette.saturation = arzGlobalPalettePercent(data.saturation, palette.saturation) end
-		if data.contrast ~= nil then palette.contrast = arzGlobalPalettePercent(data.contrast, palette.contrast) end
-		if data.glow ~= nil then palette.glow = arzGlobalPalettePercent(data.glow, palette.glow) end
-		if data.picker_hue ~= nil then palette.picker_hue = arzPaletteClamp(tonumber(data.picker_hue) or palette.picker_hue or 0) end
-		if data.picker_saturation ~= nil then palette.picker_saturation = arzPaletteClamp(tonumber(data.picker_saturation) or palette.picker_saturation or 0) end
-		if data.picker_value ~= nil then palette.picker_value = arzPaletteClamp(tonumber(data.picker_value) or palette.picker_value or 0) end
-		if data.base ~= nil and data.picker_hue == nil and data.picker_saturation == nil and data.picker_value == nil then
-			local currentColor = arzPaletteHex(palette.base)
-			palette.picker_hue, palette.picker_saturation, palette.picker_value = arzCustomPaletteRgbToHsv(currentColor[1], currentColor[2], currentColor[3])
-		end
-	end
-	if palette.enabled == true then
-		menuThemeConfig.custom_palette_enabled = false
-		arzGlobalPaletteApplyRuntime()
-	else
-		arzPaletteApplyConfig(menuThemeConfig.palette_key or "arzmarket_default")
-		if menuThemeConfig.custom_palette_enabled == true then arzCustomPaletteApplyOverrides() end
-		arzCustomPaletteRefreshStyle()
-	end
-	return writeJsonFile(menuThemeConfig, menuThemePath) == true
-end
-
-function arzCustomPaletteU32(r, g, b, alpha)
-	return imgui.GetColorU32Vec4(imgui.ImVec4(
-		arzCustomPaletteClamp(r),
-		arzCustomPaletteClamp(g),
-		arzCustomPaletteClamp(b),
-		arzCustomPaletteClamp(alpha == nil and 1 or alpha)
-	))
-end
-
-function arzCustomPalettePicker(idPrefix, color, totalWidth)
-	local changed = false
-	local c = arzCustomPaletteCopy(color)
-	local h, s, v = arzCustomPaletteRgbToHsv(c[1], c[2], c[3])
-	local alpha = c[4]
-	local gap = 12
-	local hueWidth = 18
-	local available = tonumber(totalWidth) or 250
-	local squareSize = math.floor(math.max(140, math.min(220, available - hueWidth - gap)))
-	local drawList = imgui.GetWindowDrawList()
-	local squarePos = imgui.GetCursorScreenPos()
-
-	imgui.InvisibleButton(idPrefix .. "##sv", imgui.ImVec2(squareSize, squareSize))
-	local squareActive = imgui.IsItemHovered() and imgui.IsMouseDown(0)
-	local hueR, hueG, hueB = arzCustomPaletteHsvToRgb(h, 1, 1)
-	local white = arzCustomPaletteU32(1, 1, 1, 1)
-	local hueColor = arzCustomPaletteU32(hueR, hueG, hueB, 1)
-	local black = arzCustomPaletteU32(0, 0, 0, 1)
-	local transparent = arzCustomPaletteU32(0, 0, 0, 0)
-	local border = arzCustomPaletteU32(1, 1, 1, 0.22)
-	local markerDark = arzCustomPaletteU32(0, 0, 0, 0.90)
-	local markerLight = arzCustomPaletteU32(1, 1, 1, 0.98)
-
-	drawList:AddRectFilledMultiColor(
-		squarePos,
-		imgui.ImVec2(squarePos.x + squareSize, squarePos.y + squareSize),
-		white, hueColor, hueColor, white
-	)
-	drawList:AddRectFilledMultiColor(
-		squarePos,
-		imgui.ImVec2(squarePos.x + squareSize, squarePos.y + squareSize),
-		transparent, transparent, black, black
-	)
-	drawList:AddRect(squarePos, imgui.ImVec2(squarePos.x + squareSize, squarePos.y + squareSize), border, 3, 0, 1.5)
-
-	if squareActive then
-		local mouse = imgui.GetMousePos()
-		s = arzCustomPaletteClamp((mouse.x - squarePos.x) / math.max(1, squareSize))
-		v = arzCustomPaletteClamp(1 - ((mouse.y - squarePos.y) / math.max(1, squareSize)))
-		changed = true
-	end
-
-	local cursorX = squarePos.x + s * squareSize
-	local cursorY = squarePos.y + (1 - v) * squareSize
-	drawList:AddCircle(imgui.ImVec2(cursorX, cursorY), 6, markerDark, 16, 2)
-	drawList:AddCircle(imgui.ImVec2(cursorX, cursorY), 5, markerLight, 16, 2)
-
-	imgui.SameLine()
-	local huePos = imgui.GetCursorScreenPos()
-	imgui.InvisibleButton(idPrefix .. "##hue", imgui.ImVec2(hueWidth, squareSize))
-	local hueActive = imgui.IsItemHovered() and imgui.IsMouseDown(0)
-	local hueStops = {
-		{ 1, 0, 0 }, { 1, 1, 0 }, { 0, 1, 0 }, { 0, 1, 1 },
-		{ 0, 0, 1 }, { 1, 0, 1 }, { 1, 0, 0 }
-	}
-	local segmentHeight = squareSize / 6
-	for i = 1, 6 do
-		local y1 = huePos.y + (i - 1) * segmentHeight
-		local y2 = huePos.y + i * segmentHeight
-		local first = hueStops[i]
-		local second = hueStops[i + 1]
-		drawList:AddRectFilledMultiColor(
-			imgui.ImVec2(huePos.x, y1), imgui.ImVec2(huePos.x + hueWidth, y2),
-			arzCustomPaletteU32(first[1], first[2], first[3], 1),
-			arzCustomPaletteU32(first[1], first[2], first[3], 1),
-			arzCustomPaletteU32(second[1], second[2], second[3], 1),
-			arzCustomPaletteU32(second[1], second[2], second[3], 1)
-		)
-	end
-	drawList:AddRect(huePos, imgui.ImVec2(huePos.x + hueWidth, huePos.y + squareSize), border, 3, 0, 1.5)
-	if hueActive then
-		local mouse = imgui.GetMousePos()
-		h = arzCustomPaletteClamp((mouse.y - huePos.y) / math.max(1, squareSize))
-		changed = true
-	end
-	local hueY = huePos.y + h * squareSize
-	drawList:AddRectFilled(imgui.ImVec2(huePos.x - 2, hueY - 2), imgui.ImVec2(huePos.x + hueWidth + 2, hueY + 2), markerDark, 1)
-	drawList:AddRectFilled(imgui.ImVec2(huePos.x - 1, hueY - 1), imgui.ImVec2(huePos.x + hueWidth + 1, hueY + 1), markerLight, 1)
-
-	local r, g, b = arzCustomPaletteHsvToRgb(h, s, v)
-	c[1], c[2], c[3] = r, g, b
-	imgui.Dummy(imgui.ImVec2(0, 10))
-	local alphaPos = imgui.GetCursorScreenPos()
-	local alphaWidth = squareSize + hueWidth + gap
-	imgui.InvisibleButton(idPrefix .. "##alpha", imgui.ImVec2(alphaWidth, 16))
-	local alphaActive = imgui.IsItemHovered() and imgui.IsMouseDown(0)
-	drawList:AddRectFilledMultiColor(
-		alphaPos,
-		imgui.ImVec2(alphaPos.x + alphaWidth, alphaPos.y + 16),
-		arzCustomPaletteU32(c[1], c[2], c[3], 0),
-		arzCustomPaletteU32(c[1], c[2], c[3], 1),
-		arzCustomPaletteU32(c[1], c[2], c[3], 1),
-		arzCustomPaletteU32(c[1], c[2], c[3], 0)
-	)
-	drawList:AddRect(alphaPos, imgui.ImVec2(alphaPos.x + alphaWidth, alphaPos.y + 16), border, 3, 0, 1.5)
-	if alphaActive then
-		local mouse = imgui.GetMousePos()
-		alpha = arzCustomPaletteClamp((mouse.x - alphaPos.x) / math.max(1, alphaWidth))
-		changed = true
-	end
-	c[4] = alpha
-	local alphaX = alphaPos.x + alpha * alphaWidth
-	drawList:AddRectFilled(imgui.ImVec2(alphaX - 2, alphaPos.y - 1), imgui.ImVec2(alphaX + 2, alphaPos.y + 17), markerDark, 1)
-	drawList:AddRectFilled(imgui.ImVec2(alphaX - 1, alphaPos.y), imgui.ImVec2(alphaX + 1, alphaPos.y + 16), markerLight, 1)
-	return c, changed
-end
-
-function arzCustomPaletteSnapshotFields()
-	local result = {}
-	for _, meta in ipairs(arzCustomPaletteAllTargets()) do
-		if result[meta.field] == nil then
-			result[meta.field] = arzCustomPaletteCopyForField(meta, menuThemeConfig[meta.field], menuThemeConfig[meta.field])
-		end
-	end
-	return result
-end
-
-function arzCustomPalettePresetBaseFor(meta)
-	if meta == nil then return { 1, 1, 1, 1 } end
-	local snapshot = arzCustomPaletteSnapshotFields()
-	local selectedKey = tostring(menuThemeConfig.palette_key or "arzmarket_default")
-	arzPaletteApplyConfig(selectedKey)
-	local result = arzCustomPaletteCopy(menuThemeConfig[meta.field])
-	for field, value in pairs(snapshot) do menuThemeConfig[field] = value end
-	menuThemeConfig.palette_key = selectedKey
-	return result
-end
-
-function arzCustomPaletteResetTarget(meta)
-	if meta == nil then return end
-	arzCustomPaletteEnsureStorage(false)
-	menuThemeConfig.custom_palette[meta.key] = arzCustomPalettePresetBaseFor(meta)
-	arzCustomPaletteApplyOverrides()
-	arzCustomPaletteRefreshStyle()
-	ARZ_CUSTOM_PALETTE_STATE.hexSyncKey = ""
-end
-
-function arzCustomPaletteResetGroup(groupKey)
-	local group = ARZ_CUSTOM_PALETTE_GROUPS[groupKey]
-	if group == nil then return end
-	for _, meta in ipairs(group.targets or {}) do
-		menuThemeConfig.custom_palette[meta.key] = arzCustomPalettePresetBaseFor(meta)
-	end
-	arzCustomPaletteApplyOverrides()
-	arzCustomPaletteRefreshStyle()
-	ARZ_CUSTOM_PALETTE_STATE.hexSyncKey = ""
-end
-
-function arzCustomPaletteResetAll()
-	arzPaletteApplyConfig(menuThemeConfig.palette_key or "arzmarket_default")
-	arzCustomPaletteEnsureStorage(true)
-	arzCustomPaletteApplyOverrides()
-	arzCustomPaletteRefreshStyle()
-	ARZ_CUSTOM_PALETTE_STATE.hexSyncKey = ""
-end
-
-function arzCustomPaletteSetEnabled(enabled)
-	if enabled then
-		arzGlobalPaletteEnsureStorage().enabled = false
-		arzPaletteApplyConfig(menuThemeConfig.palette_key or "arzmarket_default")
-		arzCustomPaletteEnsureStorage(false)
-		menuThemeConfig.custom_palette_enabled = true
-		arzCustomPaletteApplyOverrides()
-	else
-		menuThemeConfig.custom_palette_enabled = false
-		arzPaletteApplyConfig(menuThemeConfig.palette_key or "arzmarket_default")
-	end
-	arzCustomPaletteRefreshStyle()
-	writeJsonFile(menuThemeConfig, menuThemePath)
-end
-
-function arzCustomPaletteSelectButton(selected, label, id, width)
-	if selected then
-		imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(menuThemeConfig.active_selector_color[1], menuThemeConfig.active_selector_color[2], menuThemeConfig.active_selector_color[3], 0.90))
-		imgui.PushStyleColor(imgui.Col.Border, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], 1))
-		imgui.GetStyle().FrameBorderSize = 1
-	end
-	local clicked = imgui.Button(label .. "##" .. id, imgui.ImVec2(width, 32))
-	if selected then
-		imgui.GetStyle().FrameBorderSize = 0
-		imgui.PopStyleColor(2)
-	end
-	return clicked
-end
-
-function arzCustomPalettePreview(label, color, width)
-	local c = arzCustomPaletteCopy(color)
-	local luminance = c[1] * 0.299 + c[2] * 0.587 + c[3] * 0.114
-	local textColor = luminance > 0.62 and imgui.ImVec4(0.08, 0.10, 0.14, 1) or imgui.ImVec4(0.96, 0.98, 1, 1)
-	local value = imgui.ImVec4(c[1], c[2], c[3], c[4])
-	imgui.PushStyleColor(imgui.Col.Button, value)
-	imgui.PushStyleColor(imgui.Col.ButtonHovered, value)
-	imgui.PushStyleColor(imgui.Col.ButtonActive, value)
-	imgui.PushStyleColor(imgui.Col.Text, textColor)
-	imgui.Button(label, imgui.ImVec2(width, 32))
-	imgui.PopStyleColor(4)
-end
-
-function renderArzCustomPaletteSettings()
-	arzCustomPaletteEnsureStorage(false)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-	imgui.CenterText("Пользовательская палитра интерфейса")
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-	local enabled = menuThemeConfig.custom_palette_enabled == true
-	local toggleLabel = enabled and "Выключить пользовательскую палитру" or "Включить пользовательскую палитру"
-	local available = math.max(240, tonumber(imgui.GetContentRegionAvail().x) or 240)
-	local uiScale = getMenuUiScale()
-	local paletteRainbow = rainbow(0.35, 1.0)
-	local oldFrameBorderSize = imgui.GetStyle().FrameBorderSize
-	imgui.GetStyle().FrameBorderSize = math.max(2, 2 * uiScale)
-	imgui.PushStyleColor(imgui.Col.Border, imgui.ImVec4(paletteRainbow[1], paletteRainbow[2], paletteRainbow[3], 1.0))
-	imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(paletteRainbow[1], paletteRainbow[2], paletteRainbow[3], 1.0))
-	imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(paletteRainbow[1], paletteRainbow[2], paletteRainbow[3], 0.12))
-	imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(paletteRainbow[1], paletteRainbow[2], paletteRainbow[3], 0.24))
-	imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(paletteRainbow[1], paletteRainbow[2], paletteRainbow[3], 0.36))
-	imgui.PushFont(fonts[20])
-	local paletteToggleClicked = imgui.Button(toggleLabel .. "##arz_custom_palette_toggle", imgui.ImVec2(math.min(available, 460 * uiScale), 40))
-	imgui.PopFont()
-	imgui.PopStyleColor(5)
-	imgui.GetStyle().FrameBorderSize = oldFrameBorderSize
-	if paletteToggleClicked then
-		arzCustomPaletteSetEnabled(not enabled)
-		enabled = menuThemeConfig.custom_palette_enabled == true
-	end
-	if not enabled then
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 6)
-		return
-	end
-
-	local groupKey, group, meta = arzCustomPaletteCurrentTarget()
-	arzCustomPaletteSyncHex(meta)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 6)
-	imgui.TextDisabled("Что вы хотите изменить:")
-	local gap = imgui.GetStyle().ItemSpacing.x
-	local contentWidth = math.max(240, tonumber(imgui.GetContentRegionAvail().x) or 240)
-	local groupColumns = contentWidth >= 600 and 3 or 2
-	local groupWidth = math.max(105, (contentWidth - gap * (groupColumns - 1)) / groupColumns)
-	local groupColumn = 0
-	for _, key in ipairs(ARZ_CUSTOM_PALETTE_GROUP_ORDER) do
-		local groupMeta = ARZ_CUSTOM_PALETTE_GROUPS[key]
-		if arzCustomPaletteSelectButton(groupKey == key, groupMeta.label, "arz_custom_group_" .. key, groupWidth) then
-			ARZ_CUSTOM_PALETTE_STATE.group = key
-			ARZ_CUSTOM_PALETTE_STATE.target = groupMeta.targets[1].key
-			groupKey, group, meta = arzCustomPaletteCurrentTarget()
-			ARZ_CUSTOM_PALETTE_STATE.hexSyncKey = ""
-			arzCustomPaletteSyncHex(meta)
-		end
-		groupColumn = groupColumn + 1
-		if groupColumn < groupColumns and key ~= ARZ_CUSTOM_PALETTE_GROUP_ORDER[#ARZ_CUSTOM_PALETTE_GROUP_ORDER] then
-			imgui.SameLine()
-		else
-			groupColumn = 0
-		end
-	end
-
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 6)
-	imgui.TextDisabled("Какой именно цвет редактировать:")
-	local targetCount = #(group.targets or {})
-	local targetColumns = targetCount >= 4 and 2 or math.max(1, math.min(3, targetCount))
-	local targetWidth = math.max(105, (contentWidth - gap * (targetColumns - 1)) / targetColumns)
-	local targetColumn = 0
-	for _, targetMeta in ipairs(group.targets or {}) do
-		if arzCustomPaletteSelectButton(meta and meta.key == targetMeta.key, targetMeta.label, "arz_custom_target_" .. targetMeta.key, targetWidth) then
-			ARZ_CUSTOM_PALETTE_STATE.target = targetMeta.key
-			meta = targetMeta
-			ARZ_CUSTOM_PALETTE_STATE.hexSyncKey = ""
-			arzCustomPaletteSyncHex(meta)
-		end
-		targetColumn = targetColumn + 1
-		if targetColumn < targetColumns and targetMeta ~= group.targets[#group.targets] then
-			imgui.SameLine()
-		else
-			targetColumn = 0
-		end
-	end
-
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 8)
-	imgui.TextDisabled("Квадрат меняет насыщенность и яркость. Полоса справа меняет оттенок. Полоса снизу меняет прозрачность.")
-	local pickerWidth = math.min(250, math.max(180, contentWidth - 20))
-	local cursor = imgui.GetCursorPos()
-	imgui.SetCursorPosX(cursor.x + math.max(0, (contentWidth - pickerWidth) / 2))
-	local currentColor = arzCustomPaletteCopy(menuThemeConfig.custom_palette[meta.key])
-	local newColor, changed = arzCustomPalettePicker("arz_custom_palette_" .. tostring(meta.key), currentColor, pickerWidth)
-	if changed then
-		menuThemeConfig.custom_palette[meta.key] = newColor
-		menuThemeConfig[meta.field] = arzCustomPaletteCopy(newColor)
-		arzCustomPaletteRefreshStyle()
-		ARZ_CUSTOM_PALETTE_STATE.hexSyncKey = ""
-		arzCustomPaletteSyncHex(meta)
-		ARZ_CUSTOM_PALETTE_STATE.hexStatus = ""
-	end
-
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 8)
-	imgui.TextDisabled("Ввести HEX вручную:")
-	imgui.SetNextItemWidth(math.min(contentWidth, 320))
-	if imgui.InputText("##arz_custom_palette_hex", ARZ_CUSTOM_PALETTE_STATE.hexBuffer, ffi.sizeof(ARZ_CUSTOM_PALETTE_STATE.hexBuffer)) then
-		local rawHex = ffi.string(ARZ_CUSTOM_PALETTE_STATE.hexBuffer)
-		local parsed = arzCustomPaletteParseHex(rawHex, currentColor[4])
-		if parsed then
-			menuThemeConfig.custom_palette[meta.key] = parsed
-			menuThemeConfig[meta.field] = arzCustomPaletteCopy(parsed)
-			arzCustomPaletteRefreshStyle()
-			ARZ_CUSTOM_PALETTE_STATE.hexStatus = "HEX применён"
-			ARZ_CUSTOM_PALETTE_STATE.hexSyncKey = tostring(meta.key) .. ":" .. arzCustomPaletteColorToHex(parsed, parsed[4] < 0.999)
-		elseif #rawHex >= 7 then
-			ARZ_CUSTOM_PALETTE_STATE.hexStatus = "Некорректный HEX"
-		else
-			ARZ_CUSTOM_PALETTE_STATE.hexStatus = ""
-		end
-	end
-	imgui.SameLine()
-	imgui.TextDisabled("Формат: #RRGGBB или #RRGGBBAA.")
-	if ARZ_CUSTOM_PALETTE_STATE.hexStatus ~= "" then
-		imgui.TextDisabled(ARZ_CUSTOM_PALETTE_STATE.hexStatus)
-	end
-
-	local actual = arzCustomPaletteCopy(menuThemeConfig.custom_palette[meta.key])
-	local rgbText = string.format("RGB: %d, %d, %d", math.floor(actual[1] * 255 + 0.5), math.floor(actual[2] * 255 + 0.5), math.floor(actual[3] * 255 + 0.5))
-	local alphaText = string.format("Alpha: %d%%", math.floor(actual[4] * 100 + 0.5))
-	imgui.TextDisabled(arzCustomPaletteColorToHex(actual, actual[4] < 0.999) .. "   " .. rgbText .. "   " .. alphaText)
-	arzCustomPalettePreview("Предпросмотр", actual, math.min(contentWidth, 360))
-
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 8)
-	local actionColumns = contentWidth >= 620 and 2 or 1
-	local actionWidth = math.max(150, (contentWidth - gap * (actionColumns - 1)) / actionColumns)
-	if imgui.Button("Сбросить цвет" .. "##arz_custom_reset_one", imgui.ImVec2(actionWidth, 32)) then
-		arzCustomPaletteResetTarget(meta)
-		writeJsonFile(menuThemeConfig, menuThemePath)
-	end
-	if actionColumns == 2 then imgui.SameLine() end
-	if imgui.Button("Сбросить группу" .. "##arz_custom_reset_group", imgui.ImVec2(actionWidth, 32)) then
-		arzCustomPaletteResetGroup(groupKey)
-		writeJsonFile(menuThemeConfig, menuThemePath)
-	end
-	if imgui.Button("Сбросить всё к теме" .. "##arz_custom_reset_all", imgui.ImVec2(actionWidth, 32)) then
-		arzCustomPaletteResetAll()
-		writeJsonFile(menuThemeConfig, menuThemePath)
-	end
-	if actionColumns == 2 then imgui.SameLine() end
-	if imgui.Button("Сохранить палитру" .. "##arz_custom_save", imgui.ImVec2(actionWidth, 32)) then
-		writeJsonFile(menuThemeConfig, menuThemePath)
-		ARZ_CUSTOM_PALETTE_STATE.hexStatus = "Палитра сохранена."
-	end
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 6)
-end
-
 -- Keep old configs compatible and restore custom overrides before runtime
 -- color buffers are created further below.
 arzCustomPaletteEnsureStorage(false)
@@ -9145,7 +8443,6 @@ marketState = {
 	REPLACE_DELAY = 0.2,
 	isEnableCursor = false,
 	fullLogsDialog = "",
-	selectAfterLoad = -1,
 	openAfterCloseMenu = false,
 	host = "https://api.arz.market",
 	reservehost = "https://reserve-api.arz.market",
@@ -9905,1243 +9202,50 @@ LAVKA_HELPER_OWN_SHOP = LAVKA_HELPER_OWN_SHOP or {
 	serial = 0,
 	anchorRefined = false
 }
-LAVKA_HELPER_OWN_SHOP_LEAVE_DISTANCE = 12.0
-LAVKA_HELPER_OWN_SHOP_LEAVE_CONFIRM = 0.8
-
--- The placement helper renders a LOCAL player-centered area. Red means
--- placement is allowed. The original 5/25 m forbidden circles are subtracted
--- from that local area, so the red surface appears BETWEEN the circles near
--- the player instead of being pushed away from the player.
-local updateAndRenderLavkaHelper, invalidateLavkaHelperGrid, lavkaHelperOnCreate3DText, lavkaHelperOnRemove3DText = (function()
-local LAVKA_HELPER_SCAN_INTERVAL = 1.00
-local LAVKA_HELPER_GRID_INTERVAL = 0.70
-local LAVKA_HELPER_BUILD_COLUMNS_PER_FRAME = 2
-local LAVKA_HELPER_MIN_MOVE_THRESHOLD = 1.75
-local LAVKA_HELPER_DIAGNOSTIC_INTERVAL = 5.0
-local LAVKA_HELPER_Z_THRESHOLD = 8.0
-local LAVKA_HELPER_BUCKET_SIZE = 20.0
-local LAVKA_HELPER_GROUND_OFFSET = 0.035
-local LAVKA_HELPER_RAY_UP = 2.50
-local LAVKA_HELPER_RAY_DOWN = 2.25
-local LAVKA_HELPER_MAX_TRIANGLE_HEIGHT_DELTA = 1.50
-
--- Direct3D9 world-space renderer. Geometry is generated in GTA world XYZ,
--- while Direct3D performs the view/projection/clipping. Rendering is done in
--- MoonLoader's onD3DPresent event, not from the gameplay logic loop.
-local D3DPT_TRIANGLELIST = 4
-local D3DFMT_INDEX16 = 101
-local D3DFVF_XYZ = 0x002
-local D3DFVF_DIFFUSE = 0x040
-local LAVKA_HELPER_FVF = D3DFVF_XYZ + D3DFVF_DIFFUSE
-local D3DSBT_ALL = 1
-
-local D3DTS_WORLD = 256
-local D3DRS_ZENABLE = 7
-local D3DRS_ZWRITEENABLE = 14
-local D3DRS_ALPHATESTENABLE = 15
-local D3DRS_SRCBLEND = 19
-local D3DRS_DESTBLEND = 20
-local D3DRS_CULLMODE = 22
-local D3DRS_ALPHABLENDENABLE = 27
-local D3DRS_FOGENABLE = 28
-local D3DRS_CLIPPING = 136
-local D3DRS_LIGHTING = 137
-local D3DRS_COLORWRITEENABLE = 168
-local D3DRS_SCISSORTESTENABLE = 174
-local D3DRS_SEPARATEALPHABLENDENABLE = 206
-local D3DBLEND_SRCALPHA = 5
-local D3DBLEND_INVSRCALPHA = 6
-local D3DCULL_NONE = 1
-local D3DTSS_COLOROP = 1
-local D3DTSS_COLORARG1 = 2
-local D3DTSS_ALPHAOP = 4
-local D3DTSS_ALPHAARG1 = 5
-local D3DTOP_DISABLE = 1
-local D3DTOP_SELECTARG1 = 2
-local D3DTA_DIFFUSE = 0
-
-local D3D_VTBL_CREATE_STATE_BLOCK = 59
-local D3D_VTBL_SET_TRANSFORM = 44
-local D3D_VTBL_SET_RENDER_STATE = 57
-local D3D_VTBL_SET_TEXTURE = 65
-local D3D_VTBL_SET_TEXTURE_STAGE_STATE = 67
-local D3D_VTBL_DRAW_INDEXED_PRIMITIVE_UP = 84
-local D3D_VTBL_SET_FVF = 89
-local D3D_VTBL_SET_VERTEX_SHADER = 92
-local D3D_VTBL_SET_PIXEL_SHADER = 107
-local STATEBLOCK_VTBL_RELEASE = 2
-local STATEBLOCK_VTBL_APPLY = 5
-
-local LAVKA_HELPER_MAX_BATCH_VERTICES = 6000
-local LAVKA_HELPER_MAX_BATCH_INDICES = 12000
-
-local d3d = {
-	cdefReady = false,
-	initTried = false,
-	available = false,
-	error = nil,
-	device = nil,
-	createStateBlock = nil,
-	setTransform = nil,
-	setRenderState = nil,
-	setTexture = nil,
-	setTextureStageState = nil,
-	drawIndexedPrimitiveUP = nil,
-	setFVF = nil,
-	setVertexShader = nil,
-	setPixelShader = nil
-}
-
-local cache = {
-	zones = {},
-	vertices = {},
-	triangles = {},
-	batches = {},
-	nextScan = 0,
-	nextGridBuild = 0,
-	zonesRevision = 0,
-	builtRevision = -1,
-	lastPlayerX = nil,
-	lastPlayerY = nil,
-	lastPlayerZ = nil,
-	lastRenderRadius = nil,
-	lastCellSize = nil,
-	groundCache = {},
-	groundSourceCache = {},
-	groundCacheContext = nil,
-	groundCacheCount = 0,
-	groundRayMode = nil,
-	lastBuildMs = 0,
-	gridBuildThread = nil,
-	buildSerial = 0,
-	buildErrorReported = false,
-	enabled = false,
-	nextDiagnosticLog = 0,
-	renderErrorReported = false,
-	d3dUnavailableReported = false,
-	allowedCells = 0,
-	forbiddenCells = 0,
-	groundResolved = 0,
-	groundFallback = 0,
-	groundFailed = 0,
-	relevantZoneCount = 0,
-	renderedTriangles = 0,
-	drawFailedBatches = 0,
-	lastInterior = nil,
-	fastRescanUntil = 0
-}
-
-local function clearCache()
-	cache.buildSerial = (cache.buildSerial or 0) + 1
-	cache.gridBuildThread = nil
-	cache.zones = {}
-	cache.vertices = {}
-	cache.triangles = {}
-	cache.batches = {}
-	cache.nextScan = 0
-	cache.nextGridBuild = 0
-	cache.zonesRevision = 0
-	cache.builtRevision = -1
-	cache.lastPlayerX = nil
-	cache.lastPlayerY = nil
-	cache.lastPlayerZ = nil
-	cache.lastRenderRadius = nil
-	cache.lastCellSize = nil
-	cache.groundCache = {}
-	cache.groundSourceCache = {}
-	cache.groundCacheContext = nil
-	cache.groundCacheCount = 0
-	cache.groundRayMode = nil
-	cache.lastBuildMs = 0
-	cache.buildErrorReported = false
-	cache.nextDiagnosticLog = 0
-	cache.renderErrorReported = false
-	cache.d3dUnavailableReported = false
-	cache.allowedCells = 0
-	cache.forbiddenCells = 0
-	cache.groundResolved = 0
-	cache.groundFallback = 0
-	cache.groundFailed = 0
-	cache.relevantZoneCount = 0
-	cache.renderedTriangles = 0
-	cache.drawFailedBatches = 0
-	cache.lastInterior = nil
-	cache.fastRescanUntil = 0
+-- These wrappers can be reached by SA-MP/D3D callbacks before main() finishes
+-- first-run component/bootstrap verification.  The module is intentionally loaded
+-- only after required files are validated, so the pre-init path must be a no-op.
+-- Once mod_runtime is initialized the same wrappers dispatch to the real module.
+local function updateAndRenderLavkaHelper(...)
+	local module = type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.mod_runtime or nil
+	if type(module) ~= "table" or type(module.updateAndRenderLavkaHelper) ~= "function" then return nil end
+	return module.updateAndRenderLavkaHelper(...)
+end
+local function invalidateLavkaHelperGrid(...)
+	local module = type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.mod_runtime or nil
+	if type(module) ~= "table" or type(module.invalidateLavkaHelperGrid) ~= "function" then return nil end
+	return module.invalidateLavkaHelperGrid(...)
+end
+local function lavkaHelperOnCreate3DText(...)
+	local module = type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.mod_runtime or nil
+	if type(module) ~= "table" or type(module.lavkaHelperOnCreate3DText) ~= "function" then return nil end
+	return module.lavkaHelperOnCreate3DText(...)
+end
+local function lavkaHelperOnRemove3DText(...)
+	local module = type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.mod_runtime or nil
+	if type(module) ~= "table" or type(module.lavkaHelperOnRemove3DText) ~= "function" then return nil end
+	return module.lavkaHelperOnRemove3DText(...)
 end
 
-local function getCellSize(radius)
-	-- Keep the rounded clipped border, but build far fewer cells while walking.
-	-- The helper is a placement guide, so sub-meter terrain sampling is not worth
-	-- the CPU and native-call cost on every movement rebuild.
-	if radius <= 12 then
-		return 0.70
-	elseif radius <= 22 then
-		return 0.95
-	elseif radius <= 35 then
-		return 1.20
-	end
-	return 1.50
+-- Module extraction moved several event-facing functions out of the main chunk.
+-- SA-MP callbacks may fire while first-run bootstrap is still downloading those
+-- files, before the module init functions have installed the real globals.  Keep
+-- temporary no-op compatibility shims only for that bootstrap window.  Each
+-- module overwrites its shim with the original implementation during init().
+if type(sendTelegramNotification) ~= "function" then
+	function sendTelegramNotification(...) return false end
 end
-
-local function zoneSort(a, b)
-	if a.x ~= b.x then return a.x < b.x end
-	if a.y ~= b.y then return a.y < b.y end
-	if a.z ~= b.z then return a.z < b.z end
-	if a.radius ~= b.radius then return a.radius < b.radius end
-	return a.type < b.type
-end
-
-local function zonesEqual(a, b)
-	if #a ~= #b then return false end
-	for i = 1, #a do
-		local x, y = a[i], b[i]
-		if x.x ~= y.x or x.y ~= y.y or x.z ~= y.z or x.radius ~= y.radius or x.type ~= y.type then
-			return false
-		end
-	end
-	return true
-end
-
--- Server 3D labels are streamed while the player moves. Keep the create/remove
--- events as an authoritative live source and use the SA-MP pool scan as a
--- fallback. This fixes the case where the helper is enabled before any shop
--- labels are streamed and the player later runs into a shop area.
-local streamedZoneLabels = {}
-
-lavkaHelperFindNearestStreamedShopZone = function(px, py, pz, maxDistance)
-	px, py, pz = tonumber(px), tonumber(py), tonumber(pz)
-	maxDistance = tonumber(maxDistance) or 18.0
-	if not px or not py or not pz then return nil end
-	local best, bestDistance = nil, maxDistance
-	for _, zone in pairs(streamedZoneLabels) do
-		if type(zone) == "table" and zone.type == "shop" then
-			local dx = (tonumber(zone.x) or 0) - px
-			local dy = (tonumber(zone.y) or 0) - py
-			local dz = (tonumber(zone.z) or 0) - pz
-			local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
-			if distance <= bestDistance then
-				bestDistance = distance
-				best = zone
-			end
-		end
-	end
-	if best then
-		return tonumber(best.x), tonumber(best.y), tonumber(best.z), bestDistance
-	end
-	return nil
-end
-
-local function classifyLavkaZone(text3d, x, y, z)
-	if type(text3d) ~= "string" or type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
-		return nil
-	end
-	if text3d:find(u8:decode("Управления товарами.")) then
-		return {x = x, y = y, z = z, radius = 5.0, type = "shop"}
-	elseif text3d:find(u8:decode("Номер бизнеса")) then
-		return {x = x, y = y, z = z - 1.0, radius = 25.0, type = "business"}
-	end
-	return nil
-end
-
-local function onStreamedZoneCreate(textId, text3d, position)
-	local id = tonumber(textId)
-	if id == nil or type(position) ~= "table" then return end
-	local zone = classifyLavkaZone(text3d, tonumber(position.x), tonumber(position.y), tonumber(position.z))
-	if zone then
-		streamedZoneLabels[id] = zone
-		cache.nextScan = 0
-		cache.nextGridBuild = 0
-		cache.builtRevision = -1
-	end
-end
-
-local function onStreamedZoneRemove(textId)
-	local id = tonumber(textId)
-	if id ~= nil and streamedZoneLabels[id] ~= nil then
-		streamedZoneLabels[id] = nil
-		cache.nextScan = 0
-		cache.nextGridBuild = 0
-		cache.builtRevision = -1
-	end
-end
-
-local function scanZones(now)
-	local zonesById = {}
-	for textId, zone in pairs(streamedZoneLabels) do
-		zonesById[textId] = {
-			x = zone.x,
-			y = zone.y,
-			z = zone.z,
-			radius = zone.radius,
-			type = zone.type
-		}
-	end
-
-	-- Scan the whole SA-MP 3D-text pool in one pass so a streamed shop/business
-	-- label cannot be missed between chunks or reconnect/interior transitions.
-	for textId = 0, 2048 do
-		if sampIs3dTextDefined(textId) then
-			local ok, text3d, _, x, y, z = pcall(sampGet3dTextInfoById, textId)
-			if ok then
-				local zone = classifyLavkaZone(text3d, x, y, z)
-				if zone then
-					zonesById[textId] = zone
-				end
-			end
-		end
-	end
-
-	local zones = {}
-	for _, zone in pairs(zonesById) do
-		zones[#zones + 1] = zone
-	end
-
-	table.sort(zones, zoneSort)
-	if not zonesEqual(cache.zones, zones) then
-		cache.zones = zones
-		cache.zonesRevision = cache.zonesRevision + 1
-		cache.nextGridBuild = 0
-	end
-
-	local scanDelay = now < (cache.fastRescanUntil or 0) and 0.35 or LAVKA_HELPER_SCAN_INTERVAL
-	cache.nextScan = now + scanDelay
-end
-
-local function addZoneToBuckets(buckets, zone)
-	local r = zone.radius
-	local minX = math.floor((zone.x - r) / LAVKA_HELPER_BUCKET_SIZE)
-	local maxX = math.floor((zone.x + r) / LAVKA_HELPER_BUCKET_SIZE)
-	local minY = math.floor((zone.y - r) / LAVKA_HELPER_BUCKET_SIZE)
-	local maxY = math.floor((zone.y + r) / LAVKA_HELPER_BUCKET_SIZE)
-	for bx = minX, maxX do
-		local column = buckets[bx]
-		if not column then
-			column = {}
-			buckets[bx] = column
-		end
-		for by = minY, maxY do
-			local bucket = column[by]
-			if not bucket then
-				bucket = {}
-				column[by] = bucket
-			end
-			bucket[#bucket + 1] = zone
-		end
-	end
-end
-
-local function getBucket(buckets, wx, wy)
-	local bx = math.floor(wx / LAVKA_HELPER_BUCKET_SIZE)
-	local column = buckets[bx]
-	if not column then return nil end
-	return column[math.floor(wy / LAVKA_HELPER_BUCKET_SIZE)]
-end
-
-local function insideForbidden(x, y, zones)
-	if not zones then return false end
-	for i = 1, #zones do
-		local zone = zones[i]
-		local dx = x - zone.x
-		local dy = y - zone.y
-		if dx * dx + dy * dy <= zone.radius * zone.radius then
-			return true
-		end
-	end
-	return false
-end
-
-local groundRayCall = nil
-
-local function groundRay7(wx, wy, topZ, bottomZ, includeObjects)
-	return processLineOfSight(
-		wx, wy, topZ,
-		wx, wy, bottomZ,
-		true, false, false, includeObjects == true, false, false, false
-	)
-end
-
-local function groundRay8(wx, wy, topZ, bottomZ, includeObjects)
-	return processLineOfSight(
-		wx, wy, topZ,
-		wx, wy, bottomZ,
-		true, false, false, includeObjects == true, false, false, false, false
-	)
-end
-
-local function extractGroundHit(hit, colPoint)
-	if hit == true and type(colPoint) == "table" and type(colPoint.pos) == "table" then
-		local z = tonumber(colPoint.pos[3])
-		if z and z == z then return z end
-	end
-	return nil
-end
-
-local function castGroundRay(wx, wy, topZ, bottomZ, includeObjects)
-	-- MoonLoader 0.26.x documents the 7-flag 0BFF signature. Detect the actual
-	-- runtime signature only once. The old code deliberately tried an 8-flag call
-	-- inside pcall for EVERY vertex and then retried with 7 flags, multiplying the
-	-- cost of thousands of ground tests during movement.
-	if groundRayCall then
-		local hit, colPoint = groundRayCall(wx, wy, topZ, bottomZ, includeObjects)
-		return extractGroundHit(hit, colPoint)
-	end
-
-	local ok7, hit7, col7 = pcall(groundRay7, wx, wy, topZ, bottomZ, includeObjects)
-	if ok7 then
-		groundRayCall = groundRay7
-		cache.groundRayMode = 7
-		return extractGroundHit(hit7, col7)
-	end
-
-	local ok8, hit8, col8 = pcall(groundRay8, wx, wy, topZ, bottomZ, includeObjects)
-	if ok8 then
-		groundRayCall = groundRay8
-		cache.groundRayMode = 8
-		return extractGroundHit(hit8, col8)
-	end
-
-	cache.groundRayMode = -1
-	return nil
-end
-
-local function resolveGround(wx, wy, referenceZ, level, cellSize)
-	local qx = math.floor(wx * 100 + 0.5)
-	local qy = math.floor(wy * 100 + 0.5)
-	local row = cache.groundCache[qx]
-	if row then
-		local z = row[qy]
-		if z ~= nil then
-			local sourceRow = cache.groundSourceCache[qx]
-			return z, sourceRow and sourceRow[qy] == true
-		end
-	end
-
-	local topZ = referenceZ + LAVKA_HELPER_RAY_UP
-	local bottomZ = referenceZ - LAVKA_HELPER_RAY_DOWN
-	local z = castGroundRay(wx, wy, topZ, bottomZ, false)
-	local fromWorld = true
-
-	if z == nil then
-		z = castGroundRay(wx, wy, topZ, bottomZ, true)
-		fromWorld = false
-	end
-
-	if z == nil then return nil, false end
-
-	z = z + LAVKA_HELPER_GROUND_OFFSET
-	if not row then
-		row = {}
-		cache.groundCache[qx] = row
-	end
-	row[qy] = z
-	local sourceRow = cache.groundSourceCache[qx]
-	if not sourceRow then
-		sourceRow = {}
-		cache.groundSourceCache[qx] = sourceRow
-	end
-	sourceRow[qy] = fromWorld
-	cache.groundCacheCount = cache.groundCacheCount + 1
-	return z, fromWorld
-end
-
-local function initD3D()
-	if d3d.initTried then return d3d.available end
-	d3d.initTried = true
-
-	if not d3d.cdefReady then
-		local ok, err = pcall(ffi.cdef, [[
-			typedef struct { float m[4][4]; } ArzLavkaD3DMatrix;
-			typedef struct { float x; float y; float z; unsigned int color; } ArzLavkaD3DVertex;
-			typedef int (__stdcall * ArzLavkaCreateStateBlockFn)(void*, int, void**);
-			typedef int (__stdcall * ArzLavkaSetTransformFn)(void*, int, const ArzLavkaD3DMatrix*);
-			typedef int (__stdcall * ArzLavkaSetRenderStateFn)(void*, int, unsigned int);
-			typedef int (__stdcall * ArzLavkaSetTextureFn)(void*, unsigned int, void*);
-			typedef int (__stdcall * ArzLavkaSetTextureStageStateFn)(void*, unsigned int, int, unsigned int);
-			typedef int (__stdcall * ArzLavkaDrawIndexedPrimitiveUPFn)(void*, int, unsigned int, unsigned int, unsigned int, const void*, int, const void*, unsigned int);
-			typedef int (__stdcall * ArzLavkaSetFVFFn)(void*, unsigned int);
-			typedef int (__stdcall * ArzLavkaSetVertexShaderFn)(void*, void*);
-			typedef int (__stdcall * ArzLavkaSetPixelShaderFn)(void*, void*);
-			typedef unsigned long (__stdcall * ArzLavkaComReleaseFn)(void*);
-			typedef int (__stdcall * ArzLavkaStateBlockApplyFn)(void*);
-		]])
-		if not ok then
-			d3d.error = "ffi.cdef failed: " .. tostring(err)
-			return false
-		end
-		d3d.cdefReady = true
-	end
-
-	local deviceAddress = tonumber(getD3DDevicePtr()) or 0
-	if deviceAddress < 0x10000 then
-		d3d.error = "getD3DDevicePtr returned invalid pointer"
-		return false
-	end
-
-	local initOk, initErr = pcall(function()
-		d3d.device = ffi.cast("void*", deviceAddress)
-		local vtbl = ffi.cast("void***", d3d.device)[0]
-		if vtbl == nil or vtbl == ffi.NULL then error("IDirect3DDevice9 vtable is null") end
-		d3d.createStateBlock = ffi.cast("ArzLavkaCreateStateBlockFn", vtbl[D3D_VTBL_CREATE_STATE_BLOCK])
-		d3d.setTransform = ffi.cast("ArzLavkaSetTransformFn", vtbl[D3D_VTBL_SET_TRANSFORM])
-		d3d.setRenderState = ffi.cast("ArzLavkaSetRenderStateFn", vtbl[D3D_VTBL_SET_RENDER_STATE])
-		d3d.setTexture = ffi.cast("ArzLavkaSetTextureFn", vtbl[D3D_VTBL_SET_TEXTURE])
-		d3d.setTextureStageState = ffi.cast("ArzLavkaSetTextureStageStateFn", vtbl[D3D_VTBL_SET_TEXTURE_STAGE_STATE])
-		d3d.drawIndexedPrimitiveUP = ffi.cast("ArzLavkaDrawIndexedPrimitiveUPFn", vtbl[D3D_VTBL_DRAW_INDEXED_PRIMITIVE_UP])
-		d3d.setFVF = ffi.cast("ArzLavkaSetFVFFn", vtbl[D3D_VTBL_SET_FVF])
-		d3d.setVertexShader = ffi.cast("ArzLavkaSetVertexShaderFn", vtbl[D3D_VTBL_SET_VERTEX_SHADER])
-		d3d.setPixelShader = ffi.cast("ArzLavkaSetPixelShaderFn", vtbl[D3D_VTBL_SET_PIXEL_SHADER])
-	end)
-	if not initOk then
-		d3d.error = tostring(initErr)
-		return false
-	end
-	d3d.available = true
-	return true
-end
-
-local function makeIdentityMatrix()
-	local matrix = ffi.new("ArzLavkaD3DMatrix[1]")
-	matrix[0].m[0][0] = 1
-	matrix[0].m[1][1] = 1
-	matrix[0].m[2][2] = 1
-	matrix[0].m[3][3] = 1
-	return matrix
-end
-
-local identityMatrix = nil
-
-function d3d.resetBindings()
-	d3d.initTried = false
-	d3d.available = false
-	d3d.error = nil
-	d3d.device = nil
-	d3d.createStateBlock = nil
-	d3d.setTransform = nil
-	d3d.setRenderState = nil
-	d3d.setTexture = nil
-	d3d.setTextureStageState = nil
-	d3d.drawIndexedPrimitiveUP = nil
-	d3d.setFVF = nil
-	d3d.setVertexShader = nil
-	d3d.setPixelShader = nil
-	identityMatrix = nil
-	cache.d3dUnavailableReported = false
-	cache.renderErrorReported = false
-end
-
-local function getLavkaHelperColorU32()
-	local r = math.max(0, math.min(255, math.floor(tonumber(ini.cfg.lavka_helper_color_r) or 255)))
-	local g = math.max(0, math.min(255, math.floor(tonumber(ini.cfg.lavka_helper_color_g) or 45)))
-	local b = math.max(0, math.min(255, math.floor(tonumber(ini.cfg.lavka_helper_color_b) or 45)))
-	local alphaPercent = math.max(0, math.min(100, tonumber(ini.cfg.lavka_helper_alpha) or 38))
-	local a = math.max(0, math.min(255, math.floor(alphaPercent * 255 / 100 + 0.5)))
-	return a * 0x1000000 + r * 0x10000 + g * 0x100 + b
-end
-
-local function buildBatches(vertices, triangles)
-	if #triangles == 0 or not initD3D() then return {} end
-	local batches = {}
-	local helperColor = getLavkaHelperColorU32()
-	local map = {}
-	local offsets = {}
-	local indices = {}
-
-	local function flush()
-		if #indices == 0 then return end
-		local vertexCount = #offsets
-		local indexCount = #indices
-		local v = ffi.new("ArzLavkaD3DVertex[?]", vertexCount)
-		local ix = ffi.new("unsigned short[?]", indexCount)
-		for i = 1, vertexCount do
-			local source = offsets[i]
-			v[i - 1].x = vertices[source]
-			v[i - 1].y = vertices[source + 1]
-			v[i - 1].z = vertices[source + 2]
-			v[i - 1].color = helperColor
-		end
-		for i = 1, indexCount do ix[i - 1] = indices[i] end
-		batches[#batches + 1] = {vertices = v, indices = ix, vertexCount = vertexCount, indexCount = indexCount}
-	end
-
-	local function reset()
-		map = {}
-		offsets = {}
-		indices = {}
-	end
-
-	local function add(source)
-		local idx = map[source]
-		if idx == nil then
-			idx = #offsets
-			map[source] = idx
-			offsets[#offsets + 1] = source
-		end
-		indices[#indices + 1] = idx
-	end
-
-	for p = 1, #triangles, 3 do
-		local a, b, c = triangles[p], triangles[p + 1], triangles[p + 2]
-		local need = 0
-		if map[a] == nil then need = need + 1 end
-		if map[b] == nil and b ~= a then need = need + 1 end
-		if map[c] == nil and c ~= a and c ~= b then need = need + 1 end
-		if #indices > 0 and (#indices + 3 > LAVKA_HELPER_MAX_BATCH_INDICES or #offsets + need > LAVKA_HELPER_MAX_BATCH_VERTICES) then
-			flush()
-			reset()
-		end
-		add(a); add(b); add(c)
-	end
-	flush()
-	return batches
-end
-
-local function applyColorToBatches()
-	local helperColor = getLavkaHelperColorU32()
-	for i = 1, #cache.batches do
-		local batch = cache.batches[i]
-		if batch and batch.vertices and tonumber(batch.vertexCount) then
-			for vertexIndex = 0, batch.vertexCount - 1 do
-				batch.vertices[vertexIndex].color = helperColor
-			end
-		end
-	end
-end
-
-local function rebuildGrid(playerX, playerY, playerZ, radius, now, buildSerial)
-	local buildStarted = os.clock()
-	local zonesSnapshot = cache.zones
-	local zonesRevisionAtStart = cache.zonesRevision
-	local cellSize = getCellSize(radius)
-	local minGX = math.floor((playerX - radius) / cellSize) - 1
-	local maxGX = math.ceil((playerX + radius) / cellSize) + 1
-	local minGY = math.floor((playerY - radius) / cellSize) - 1
-	local maxGY = math.ceil((playerY + radius) / cellSize) + 1
-	local buckets = {}
-	local level = math.floor(playerZ / 5)
-	local surfaceBand = math.floor(playerZ / 2.0)
-	local groundContext = tostring(level) .. ":" .. tostring(surfaceBand) .. ":" .. string.format("%.2f", cellSize)
-	if cache.groundCacheContext ~= groundContext then
-		cache.groundCache = {}
-		cache.groundSourceCache = {}
-		cache.groundCacheCount = 0
-		cache.groundCacheContext = groundContext
-	end
-	local vertices = {}
-	local triangles = {}
-	local vertexMap = {}
-	local fieldCache = {}
-	local allowed, forbidden, exactGround, fallbackGround, failedGround, relevant = 0, 0, 0, 0, 0, 0
-
-	-- Use one stable ground level for the local placement overlay.
-	-- The old implementation called processLineOfSight for the player and then
-	-- again for large numbers of grid vertices while walking. That native-call
-	-- burst caused freezes and could provoke native C++ exceptions in the client.
-	local referenceZ = playerZ
-	local okH, h = pcall(getCharHeightAboveGround, PLAYER_PED)
-	if okH and type(h) == "number" and h == h and h >= 0 and h < 10 then
-		referenceZ = playerZ - h
-	end
-
-	-- Keep a rolling cache large enough to survive normal movement. The previous
-	-- 45k hard clear caused a full burst of fresh LOS calls after a few minutes.
-	if cache.groundCacheCount > 120000 then
-		cache.groundCache = {}
-		cache.groundSourceCache = {}
-		cache.groundCacheCount = 0
-	end
-
-	for i = 1, #zonesSnapshot do
-		local zone = zonesSnapshot[i]
-		local dx, dy = zone.x - playerX, zone.y - playerY
-		local maxDistance = radius + zone.radius + cellSize * 2
-		if math.abs(zone.z - playerZ) < LAVKA_HELPER_Z_THRESHOLD and dx * dx + dy * dy <= maxDistance * maxDistance then
-			addZoneToBuckets(buckets, zone)
-			relevant = relevant + 1
-		end
-	end
-
-	if relevant == 0 then
-		cache.vertices, cache.triangles, cache.batches = {}, {}, {}
-		cache.allowedCells, cache.forbiddenCells = 0, 0
-		cache.groundResolved, cache.groundFallback, cache.groundFailed = 0, 0, 0
-		cache.relevantZoneCount = 0
-		cache.builtRevision = zonesRevisionAtStart
-		cache.lastPlayerX, cache.lastPlayerY, cache.lastPlayerZ = playerX, playerY, playerZ
-		cache.lastRenderRadius, cache.lastCellSize = radius, cellSize
-		cache.nextGridBuild = now + LAVKA_HELPER_GRID_INTERVAL
-		cache.lastBuildMs = (os.clock() - buildStarted) * 1000.0
-		return
-	end
-
-	-- Signed field used for a marching-squares style smooth boundary.
-	-- field <= 0 means visible red area:
-	--   inside player's N-radius AND outside every original 5/25 m forbidden circle.
-	local function sampleField(gx, gy)
-		local row = fieldCache[gx]
-		if row then
-			local got = row[gy]
-			if got ~= nil then return gx * cellSize, gy * cellSize, got end
-		else
-			row = {}
-			fieldCache[gx] = row
-		end
-
-		local wx, wy = gx * cellSize, gy * cellSize
-		local pdx, pdy = wx - playerX, wy - playerY
-		-- Squared-distance early path avoids sqrt for the overwhelmingly common
-		-- samples that are clearly outside the player's radius. We still calculate
-		-- the signed distance where clipping/interpolation needs it.
-		local field = math.sqrt(pdx * pdx + pdy * pdy) - radius
-		local zones = getBucket(buckets, wx, wy)
-
-		if zones then
-			for i = 1, #zones do
-				local zone = zones[i]
-				local zx, zy = wx - zone.x, wy - zone.y
-				local blockedField = zone.radius - math.sqrt(zx * zx + zy * zy)
-				if blockedField > field then field = blockedField end
-			end
-		end
-
-		row[gy] = field
-		return wx, wy, field
-	end
-
-	local function vertexOffsetXY(wx, wy)
-		local qx = math.floor(wx * 100 + 0.5)
-		local qy = math.floor(wy * 100 + 0.5)
-		local row = vertexMap[qx]
-		if row then
-			local got = row[qy]
-			if got then return got end
-		else
-			row = {}
-			vertexMap[qx] = row
-		end
-
-		local z = referenceZ + LAVKA_HELPER_GROUND_OFFSET
-		fallbackGround = fallbackGround + 1
-
-		local off = #vertices + 1
-		vertices[off], vertices[off + 1], vertices[off + 2] = wx, wy, z
-		row[qy] = off
-		return off
-	end
-
-	local function addTriangleXY(ax, ay, bx, by, cx, cy)
-		local a = vertexOffsetXY(ax, ay)
-		local b = vertexOffsetXY(bx, by)
-		local c = vertexOffsetXY(cx, cy)
-		if not a or not b or not c then return false end
-
-		local za, zb, zc = vertices[a + 2], vertices[b + 2], vertices[c + 2]
-		local minZ = math.min(za, zb, zc)
-		local maxZ = math.max(za, zb, zc)
-		if maxZ - minZ > LAVKA_HELPER_MAX_TRIANGLE_HEIGHT_DELTA then
-			failedGround = failedGround + 1
-			return false
-		end
-
-		triangles[#triangles + 1] = a
-		triangles[#triangles + 1] = b
-		triangles[#triangles + 1] = c
-		return true
-	end
-
-	local function intersect(x1, y1, f1, x2, y2, f2)
-		local denom = f1 - f2
-		local t = 0.5
-		if math.abs(denom) > 0.000001 then t = f1 / denom end
-		if t < 0 then t = 0 elseif t > 1 then t = 1 end
-		return x1 + (x2 - x1) * t, y1 + (y2 - y1) * t
-	end
-
-	-- Clip one triangle against the interpolated field <= 0. This is effectively
-	-- marching triangles: boundary points are placed between samples instead of
-	-- snapping to whole grid cells, so circles become visibly rounded/smooth.
-	local function emitClippedTriangle(ax, ay, af, bx, by, bf, cx, cy, cf)
-		local ai, bi, ci = af <= 0, bf <= 0, cf <= 0
-		local count = (ai and 1 or 0) + (bi and 1 or 0) + (ci and 1 or 0)
-		if count == 0 then return 0 end
-		if count == 3 then
-			return addTriangleXY(ax, ay, bx, by, cx, cy) and 1 or 0
-		end
-
-		if count == 1 then
-			if ai then
-				local abx, aby = intersect(ax, ay, af, bx, by, bf)
-				local acx, acy = intersect(ax, ay, af, cx, cy, cf)
-				return addTriangleXY(ax, ay, abx, aby, acx, acy) and 1 or 0
-			elseif bi then
-				local bcx, bcy = intersect(bx, by, bf, cx, cy, cf)
-				local bax, bay = intersect(bx, by, bf, ax, ay, af)
-				return addTriangleXY(bx, by, bcx, bcy, bax, bay) and 1 or 0
-			else
-				local cax, cay = intersect(cx, cy, cf, ax, ay, af)
-				local cbx, cby = intersect(cx, cy, cf, bx, by, bf)
-				return addTriangleXY(cx, cy, cax, cay, cbx, cby) and 1 or 0
-			end
-		end
-
-		-- Two inside, one outside -> clipped quad, triangulated as a fan.
-		local made = 0
-		if ai and bi then
-			local bcx, bcy = intersect(bx, by, bf, cx, cy, cf)
-			local cax, cay = intersect(cx, cy, cf, ax, ay, af)
-			if addTriangleXY(ax, ay, bx, by, bcx, bcy) then made = made + 1 end
-			if addTriangleXY(ax, ay, bcx, bcy, cax, cay) then made = made + 1 end
-		elseif bi and ci then
-			local cax, cay = intersect(cx, cy, cf, ax, ay, af)
-			local abx, aby = intersect(ax, ay, af, bx, by, bf)
-			if addTriangleXY(bx, by, cx, cy, cax, cay) then made = made + 1 end
-			if addTriangleXY(bx, by, cax, cay, abx, aby) then made = made + 1 end
-		else
-			local abx, aby = intersect(ax, ay, af, bx, by, bf)
-			local bcx, bcy = intersect(bx, by, bf, cx, cy, cf)
-			if addTriangleXY(cx, cy, ax, ay, abx, aby) then made = made + 1 end
-			if addTriangleXY(cx, cy, abx, aby, bcx, bcy) then made = made + 1 end
-		end
-		return made
-	end
-
-	for gx = minGX, maxGX - 1 do
-		if buildSerial ~= cache.buildSerial or not lavkaHelperEnabled[0] or menuVisible[0] then
-			return false
-		end
-		if (gx - minGX) > 0 and ((gx - minGX) % LAVKA_HELPER_BUILD_COLUMNS_PER_FRAME) == 0 then
-			wait(0)
-			if buildSerial ~= cache.buildSerial or not lavkaHelperEnabled[0] or menuVisible[0] then
-				return false
-			end
-		end
-
-		for gy = minGY, maxGY - 1 do
-			local ax, ay, af = sampleField(gx, gy)
-			local bx, by, bf = sampleField(gx + 1, gy)
-			local cx, cy, cf = sampleField(gx + 1, gy + 1)
-			local dx, dy, df = sampleField(gx, gy + 1)
-
-			local cellMade = 0
-			cellMade = cellMade + emitClippedTriangle(ax, ay, af, bx, by, bf, cx, cy, cf)
-			cellMade = cellMade + emitClippedTriangle(ax, ay, af, cx, cy, cf, dx, dy, df)
-
-			if cellMade > 0 then
-				allowed = allowed + 1
-			else
-				local centerX = (ax + cx) * 0.5
-				local centerY = (ay + cy) * 0.5
-				local pdx, pdy = centerX - playerX, centerY - playerY
-				if pdx * pdx + pdy * pdy <= radius * radius then
-					if insideForbidden(centerX, centerY, getBucket(buckets, centerX, centerY)) then forbidden = forbidden + 1 end
-				end
-			end
-		end
-	end
-
-	if buildSerial ~= cache.buildSerial or not lavkaHelperEnabled[0] or menuVisible[0] then
-		return false
-	end
-
-	cache.vertices, cache.triangles = vertices, triangles
-	cache.batches = buildBatches(vertices, triangles)
-	cache.allowedCells, cache.forbiddenCells = allowed, forbidden
-	cache.groundResolved, cache.groundFallback, cache.groundFailed = exactGround, fallbackGround, failedGround
-	cache.relevantZoneCount = relevant
-	cache.builtRevision = zonesRevisionAtStart
-	cache.lastPlayerX, cache.lastPlayerY, cache.lastPlayerZ = playerX, playerY, playerZ
-	cache.lastRenderRadius, cache.lastCellSize = radius, cellSize
-	cache.nextGridBuild = now + LAVKA_HELPER_GRID_INTERVAL
-	cache.lastBuildMs = (os.clock() - buildStarted) * 1000.0
-	return true
-end
-
-local function stateBlockApplyAndRelease(block)
-	if block == nil or block == ffi.NULL then return end
-	local vtbl = ffi.cast("void***", block)[0]
-	if vtbl ~= nil and vtbl ~= ffi.NULL then
-		pcall(ffi.cast("ArzLavkaStateBlockApplyFn", vtbl[STATEBLOCK_VTBL_APPLY]), block)
-		pcall(ffi.cast("ArzLavkaComReleaseFn", vtbl[STATEBLOCK_VTBL_RELEASE]), block)
-	end
-end
-
-local function renderD3D()
-	if not cache.enabled or not lavkaHelperEnabled[0] or #cache.batches == 0 then
-		cache.renderedTriangles = 0
-		cache.drawFailedBatches = 0
-		return
-	end
-	if not initD3D() then
-		cache.renderedTriangles = 0
-		if not cache.d3dUnavailableReported then
-			cache.d3dUnavailableReported = true
-			print("[ArzMarket][LavkaHelper] Direct3D renderer disabled: " .. tostring(d3d.error))
-		end
-		return
-	end
-	if identityMatrix == nil then identityMatrix = makeIdentityMatrix() end
-
-	local stateBlockOut = ffi.new("void*[1]")
-	local stateBlock = nil
-	local rendered, failed = 0, 0
-	local ok, err = xpcall(function()
-		local hrState = d3d.createStateBlock(d3d.device, D3DSBT_ALL, stateBlockOut)
-		if hrState >= 0 and stateBlockOut[0] ~= nil and stateBlockOut[0] ~= ffi.NULL then stateBlock = stateBlockOut[0] end
-
-		d3d.setVertexShader(d3d.device, nil)
-		d3d.setPixelShader(d3d.device, nil)
-		d3d.setFVF(d3d.device, LAVKA_HELPER_FVF)
-		d3d.setTransform(d3d.device, D3DTS_WORLD, identityMatrix)
-		d3d.setTexture(d3d.device, 0, nil)
-		d3d.setRenderState(d3d.device, D3DRS_ZENABLE, 1)
-		d3d.setRenderState(d3d.device, D3DRS_ZWRITEENABLE, 0)
-		d3d.setRenderState(d3d.device, D3DRS_ALPHATESTENABLE, 0)
-		d3d.setRenderState(d3d.device, D3DRS_ALPHABLENDENABLE, 1)
-		d3d.setRenderState(d3d.device, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA)
-		d3d.setRenderState(d3d.device, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA)
-		d3d.setRenderState(d3d.device, D3DRS_CULLMODE, D3DCULL_NONE)
-		d3d.setRenderState(d3d.device, D3DRS_FOGENABLE, 0)
-		d3d.setRenderState(d3d.device, D3DRS_CLIPPING, 1)
-		d3d.setRenderState(d3d.device, D3DRS_LIGHTING, 0)
-		d3d.setRenderState(d3d.device, D3DRS_COLORWRITEENABLE, 0x0F)
-		d3d.setRenderState(d3d.device, D3DRS_SCISSORTESTENABLE, 0)
-		d3d.setRenderState(d3d.device, D3DRS_SEPARATEALPHABLENDENABLE, 0)
-		d3d.setTextureStageState(d3d.device, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1)
-		d3d.setTextureStageState(d3d.device, 0, D3DTSS_COLORARG1, D3DTA_DIFFUSE)
-		d3d.setTextureStageState(d3d.device, 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1)
-		d3d.setTextureStageState(d3d.device, 0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE)
-		d3d.setTextureStageState(d3d.device, 1, D3DTSS_COLOROP, D3DTOP_DISABLE)
-
-		for i = 1, #cache.batches do
-			local batch = cache.batches[i]
-			local hr = d3d.drawIndexedPrimitiveUP(
-				d3d.device,
-				D3DPT_TRIANGLELIST,
-				0,
-				batch.vertexCount,
-				math.floor(batch.indexCount / 3),
-				batch.indices,
-				D3DFMT_INDEX16,
-				batch.vertices,
-				ffi.sizeof("ArzLavkaD3DVertex")
-			)
-			if hr >= 0 then rendered = rendered + math.floor(batch.indexCount / 3) else failed = failed + 1 end
-		end
-	end, debug.traceback)
-
-	stateBlockApplyAndRelease(stateBlock)
-	cache.renderedTriangles = rendered
-	cache.drawFailedBatches = failed
-	if not ok and not cache.renderErrorReported then
-		cache.renderErrorReported = true
-		print("[ArzMarket][LavkaHelper] Direct3D render error: " .. tostring(err))
-	end
-end
-
-local function logDiagnostics(now)
-	if now >= cache.nextDiagnosticLog then
-		cache.nextDiagnosticLog = now + LAVKA_HELPER_DIAGNOSTIC_INTERVAL
-		print(string.format(
-			"[LavkaHelper] renderer=D3D9-SMOOTH-PERF d3d=%s zones=%d relevant=%d radius=%.2f cells=%d forbidden=%d vertices=%d triangles=%d batches=%d rendered=%d drawFailed=%d groundExact=%d groundFallback=%d groundFailed=%d groundCache=%d rayMode=%s buildMs=%.2f",
-			d3d.available and "ok" or (d3d.initTried and "off" or "pending"),
-			#cache.zones,
-			cache.relevantZoneCount,
-			tonumber(cache.lastRenderRadius) or 0,
-			cache.allowedCells,
-			cache.forbiddenCells,
-			math.floor(#cache.vertices / 3),
-			math.floor(#cache.triangles / 3),
-			#cache.batches,
-			cache.renderedTriangles,
-			cache.drawFailedBatches,
-			cache.groundResolved,
-			cache.groundFallback,
-			cache.groundFailed,
-			cache.groundCacheCount,
-			tostring(cache.groundRayMode or "pending"),
-			tonumber(cache.lastBuildMs) or 0
-		))
-	end
-end
-
-local function isLavkaHelperPlayerReady()
-	if not isSampAvailable() or not doesCharExist(PLAYER_PED) then
-		return false
-	end
-	if type(sampGetGamestate) == "function" then
-		local okState, gameState = pcall(sampGetGamestate)
-		if okState and tonumber(gameState) and tonumber(gameState) ~= 3 then
-			return false
-		end
-	end
-	if type(sampIsLocalPlayerSpawned) == "function" then
-		local okSpawned, spawned = pcall(sampIsLocalPlayerSpawned)
-		if okSpawned then
-			return spawned == true
-		end
-	end
-	return true
-end
-
-local function updateImpl()
-	if not lavkaHelperEnabled[0] then
-		if cache.enabled or #cache.vertices > 0 or #cache.triangles > 0 or #cache.batches > 0 then
-			clearCache()
-			cache.enabled = false
-		end
-		LAVKA_HELPER_RECONNECT.pending = false
-		return
-	end
-
-	if LAVKA_HELPER_RECONNECT.awaitingAccept then
-		return
-	end
-
-	-- The world-space helper is hidden behind the full ArzMarket menu anyway.
-	-- Pausing scan/mesh rebuild here removes expensive LOS/grid work while the
-	-- user is resizing or interacting with the menu. Cache is preserved.
-	local arzPreviewMenuState = ARZ_INTERFACE_LUA_PREVIEW
-	if menuVisible[0] or (arzPreviewMenuState and arzPreviewMenuState.active) then
-		return
-	end
-
-	if not isSampAvailable() or not doesCharExist(PLAYER_PED) then
-		if cache.enabled then
-			clearCache()
-			cache.enabled = false
-		end
-		return
-	end
-
-	if LAVKA_HELPER_RECONNECT.pending and not isLavkaHelperPlayerReady() then
-		return
-	end
-
-	local now = getGameTimer() * 0.001
-
-	if LAVKA_HELPER_RECONNECT.pending then
-		clearCache()
-		d3d.resetBindings()
-		cache.enabled = true
-		cache.fastRescanUntil = now + 8.0
-		cache.nextScan = 0
-		cache.nextGridBuild = 0
-		cache.builtRevision = -1
-		initD3D()
-		LAVKA_HELPER_RECONNECT.pending = false
-	end
-
-	local currentInterior = 0
-	local interiorOk, interiorValue = pcall(getCharActiveInterior, PLAYER_PED)
-	if interiorOk and tonumber(interiorValue) then
-		currentInterior = tonumber(interiorValue)
-	end
-
-	if cache.lastInterior == nil then
-		cache.lastInterior = currentInterior
-	elseif currentInterior ~= cache.lastInterior then
-		local previousInterior = cache.lastInterior
-		cache.lastInterior = currentInterior
-		cache.buildSerial = (cache.buildSerial or 0) + 1
-		cache.gridBuildThread = nil
-		cache.vertices, cache.triangles, cache.batches = {}, {}, {}
-		cache.lastPlayerX, cache.lastPlayerY, cache.lastPlayerZ = nil, nil, nil
-		cache.builtRevision = -1
-		cache.nextScan = 0
-		cache.nextGridBuild = 0
-
-		if previousInterior ~= 0 and currentInterior == 0 then
-			-- Exterior 3D labels can arrive a little later than the player itself.
-			-- Retry pool scans quickly and rebind D3D after the interior transition.
-			cache.fastRescanUntil = now + 8.0
-			d3d.resetBindings()
-		else
-			cache.fastRescanUntil = 0
-		end
-	end
-
-	if not cache.enabled then
-		clearCache()
-		cache.enabled = true
-		initD3D()
-	end
-	local playerX, playerY, playerZ = getCharCoordinates(PLAYER_PED)
-	if now >= cache.nextScan then scanZones(now) end
-	local radius = math.max(5, math.min(50, tonumber(ini.cfg.renderLavkaRadius) or 20))
-	local cellSize = getCellSize(radius)
-	local moveThreshold = math.max(LAVKA_HELPER_MIN_MOVE_THRESHOLD, cellSize * 1.75)
-	local moved = cache.lastPlayerX == nil
-	if not moved then
-		local dx, dy, dz = playerX - cache.lastPlayerX, playerY - cache.lastPlayerY, playerZ - cache.lastPlayerZ
-		moved = dx * dx + dy * dy >= moveThreshold * moveThreshold or math.abs(dz) >= 0.85
-	end
-	local stale = cache.builtRevision ~= cache.zonesRevision or cache.lastRenderRadius ~= radius or cache.lastCellSize ~= cellSize or moved
-	if stale and now >= cache.nextGridBuild and cache.gridBuildThread == nil then
-		cache.buildSerial = (cache.buildSerial or 0) + 1
-		local buildSerial = cache.buildSerial
-		local buildX, buildY, buildZ, buildRadius, buildNow = playerX, playerY, playerZ, radius, now
-		cache.nextGridBuild = now + LAVKA_HELPER_GRID_INTERVAL
-		cache.gridBuildThread = lua_thread.create(function()
-			local ok, err = xpcall(function()
-				rebuildGrid(buildX, buildY, buildZ, buildRadius, buildNow, buildSerial)
-			end, debug.traceback)
-			if buildSerial == cache.buildSerial then
-				cache.gridBuildThread = nil
-			end
-			if not ok and not cache.buildErrorReported then
-				cache.buildErrorReported = true
-				print("[ArzMarket][LavkaHelper] async grid build error: " .. tostring(err))
-			end
-		end)
-	end
-	logDiagnostics(now)
-end
-
-local function invalidateImpl(fullReset)
-	if fullReset then
-		streamedZoneLabels = {}
-		clearCache()
-		cache.enabled = false
-		groundRayCall = nil
-		d3d.resetBindings()
-		return
-	end
-
-	cache.lastRenderRadius = nil
-	cache.lastCellSize = nil
-	cache.nextGridBuild = 0
-end
-
-lavkaHelperApplyVisualSettings = function()
-	applyColorToBatches()
-end
-
-lavkaHelperHandleNetworkPacket = function(packetId)
-	packetId = tonumber(packetId) or -1
-	if packetId == 32 or packetId == 33 then
-		LAVKA_HELPER_RECONNECT.lastPacket = packetId
-		LAVKA_HELPER_RECONNECT.awaitingAccept = lavkaHelperEnabled[0] == true
-		LAVKA_HELPER_RECONNECT.pending = false
-		invalidateImpl(true)
-	elseif packetId == 34 then
-		LAVKA_HELPER_RECONNECT.lastPacket = packetId
-		LAVKA_HELPER_RECONNECT.awaitingAccept = false
-		LAVKA_HELPER_RECONNECT.pending = lavkaHelperEnabled[0] == true
-		invalidateImpl(true)
-	end
-end
-
--- Direct drawing belongs in the D3D Present hook. MoonLoader explicitly exposes
--- this event for DirectX drawing, while the main loop is kept for scanning and
--- mesh rebuilding only.
-addEventHandler("onD3DPresent", function()
-	if cache.enabled and lavkaHelperEnabled[0] and not menuVisible[0] then
-		renderD3D()
-	elseif menuVisible[0] then
-		cache.renderedTriangles = 0
-		cache.drawFailedBatches = 0
-	end
-end)
-
-return updateImpl, invalidateImpl, onStreamedZoneCreate, onStreamedZoneRemove
-end)()
-
-function setLavkaHelperEnabled(enabled, reason, persist)
-	enabled = enabled == true
-	local changed = lavkaHelperEnabled[0] ~= enabled
-	lavkaHelperEnabled[0] = enabled
-	ini.cfg.lavka_helper = enabled
-	LAVKA_HELPER_RECONNECT.pending = false
-	LAVKA_HELPER_RECONNECT.awaitingAccept = false
-
-	if invalidateLavkaHelperGrid then
-		invalidateLavkaHelperGrid(true)
-	end
-
-	if not enabled then
-		LAVKA_HELPER_UI.settingsOpen = false
-	end
-
-	if persist ~= false then
-		save_all()
-	end
-
-	return changed
-end
-
-function lavkaHelperResetOwnShopAutoDisable(reason)
-	local state = LAVKA_HELPER_OWN_SHOP
-	state.active = false
-	state.armed = false
-	state.x = nil
-	state.y = nil
-	state.z = nil
-	state.placedAt = 0
-	state.leaveSince = 0
-	state.anchorRefined = false
-	state.serial = (tonumber(state.serial) or 0) + 1
-	state.lastReason = tostring(reason or "reset")
-end
-
-function lavkaHelperArmOwnShopAutoDisable()
-	local state = LAVKA_HELPER_OWN_SHOP
-	local ok, x, y, z = pcall(getCharCoordinates, PLAYER_PED)
-	if not ok or tonumber(x) == nil or tonumber(y) == nil or tonumber(z) == nil then
-		lavkaHelperResetOwnShopAutoDisable("place_no_coords")
-		return false
-	end
-	state.active = true
-	state.armed = lavkaHelperAutoDisable[0] == true and lavkaHelperEnabled[0] == true
-	state.x = tonumber(x)
-	state.y = tonumber(y)
-	state.z = tonumber(z)
-	state.placedAt = os.clock()
-	state.leaveSince = 0
-	state.anchorRefined = false
-	state.serial = (tonumber(state.serial) or 0) + 1
-	state.lastReason = "placed"
-	return true
-end
-
-function lavkaHelperUpdateOwnShopAutoDisable()
-	local state = LAVKA_HELPER_OWN_SHOP
-	if not state.active or not state.armed or not lavkaHelperEnabled[0] then
-		return
-	end
-	if activeLavkaId == -1 then
-		lavkaHelperResetOwnShopAutoDisable("shop_not_active")
-		return
-	end
-	if os.clock() - (tonumber(state.placedAt) or 0) < 2.0 then
-		return
-	end
-	local ok, x, y, z = pcall(getCharCoordinates, PLAYER_PED)
-	if not ok then return end
-	x, y, z = tonumber(x), tonumber(y), tonumber(z)
-	if not x or not y or not z or not state.x or not state.y or not state.z then return end
-	if not state.anchorRefined and type(lavkaHelperFindNearestStreamedShopZone) == "function" then
-		local shopX, shopY, shopZ = lavkaHelperFindNearestStreamedShopZone(state.x, state.y, state.z, 18.0)
-		if shopX and shopY and shopZ then
-			state.x, state.y, state.z = shopX, shopY, shopZ
-			state.anchorRefined = true
-		end
-	end
-	local dx, dy, dz = x - state.x, y - state.y, z - state.z
-	local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
-	if distance >= LAVKA_HELPER_OWN_SHOP_LEAVE_DISTANCE then
-		if state.leaveSince == 0 then
-			state.leaveSince = os.clock()
-			return
-		end
-		if os.clock() - state.leaveSince >= LAVKA_HELPER_OWN_SHOP_LEAVE_CONFIRM then
-			state.armed = false
-			setLavkaHelperEnabled(false, "auto_leave_own_shop", true)
-			sendNotify(u8:decode("Помощник установки лавки выключен: вы отошли от своей лавки."))
-		end
-	else
-		state.leaveSince = 0
-	end
-end
-
+if type(cycleTradeOnBought) ~= "function" then function cycleTradeOnBought(...) return nil end end
+if type(cycleTradeOnSold) ~= "function" then function cycleTradeOnSold(...) return nil end end
+if type(cycleTradeOnSellListed) ~= "function" then function cycleTradeOnSellListed(...) return nil end end
+if type(cycleTradeOnBuyStarted) ~= "function" then function cycleTradeOnBuyStarted(...) return nil end end
+if type(cycleTradeOnBuyRemoved) ~= "function" then function cycleTradeOnBuyRemoved(...) return nil end end
+if type(foreignShopGetRawItem) ~= "function" then function foreignShopGetRawItem(...) return nil end end
+if type(foreignShopHandleBuyDialog) ~= "function" then function foreignShopHandleBuyDialog(...) return false end end
+if type(foreignShopCaptureRawGroup) ~= "function" then function foreignShopCaptureRawGroup(...) return nil end end
+if type(tradeFilterMarkNewItem) ~= "function" then function tradeFilterMarkNewItem(...) return nil end end
+if type(lavkaHelperArmOwnShopAutoDisable) ~= "function" then function lavkaHelperArmOwnShopAutoDisable(...) return nil end end
+if type(lavkaHelperResetOwnShopAutoDisable) ~= "function" then function lavkaHelperResetOwnShopAutoDisable(...) return nil end end
 
 local debugInfoEnabled = imguiNew.bool(ini.cfg.dbug_info)
 local replaceWindowEnabled = imguiNew.bool(ini.cfg.replace_window)
@@ -11171,964 +9275,27 @@ setLrendEnabled = function(enabled, showNotification)
 	end
 end
 
--- Entity visibility helpers. Player removal is visual-only: the SA-MP player
--- pool, WORLDPLAYERADD/WORLDPLAYERREMOVE and sync packets are never blocked.
--- Vehicles keep the legacy local stream removal implementation.
-function modificationState.hideCurrentPlayersVisual()
-	if type(getAllChars) ~= "function" or type(setCharVisible) ~= "function" or type(sampGetPlayerIdByCharHandle) ~= "function" then
-		return 0
-	end
-
-	local okList, chars = pcall(getAllChars)
-	if not okList or type(chars) ~= "table" then
-		return 0
-	end
-
-	local hidden = 0
-	for _, ped in pairs(chars) do
-		if ped ~= PLAYER_PED and doesCharExist(ped) then
-			local okId, found, playerId = pcall(sampGetPlayerIdByCharHandle, ped)
-			playerId = tonumber(playerId)
-			if okId and found and playerId ~= nil then
-				local okVisible = pcall(setCharVisible, ped, false)
-				if okVisible then
-					modificationState.playerVisualHidden[playerId] = true
-					hidden = hidden + 1
-				end
-			end
-		end
-	end
-
-	return hidden
-end
-
-function modificationState.restoreHiddenPlayersVisual()
-	if type(setCharVisible) ~= "function" or type(sampGetCharHandleBySampPlayerId) ~= "function" then
-		modificationState.playerVisualHidden = {}
-		return 0
-	end
-
-	local restored = 0
-	for playerId in pairs(modificationState.playerVisualHidden) do
-		local okHandle, found, ped = pcall(sampGetCharHandleBySampPlayerId, playerId)
-		if okHandle and found and ped and doesCharExist(ped) then
-			if pcall(setCharVisible, ped, true) then
-				restored = restored + 1
-			end
-		end
-		modificationState.playerVisualHidden[playerId] = nil
-	end
-
-	return restored
-end
-
-function modificationState.updatePlayerVisibility(force)
-	if not modificationState.isRemovePlayersActive() then
-		if next(modificationState.playerVisualHidden) ~= nil then
-			modificationState.restoreHiddenPlayersVisual()
-		end
-		return
-	end
-
-	local now = getGameTimer()
-	if force ~= true and now < (tonumber(modificationState.playerVisibilityNextUpdate) or 0) then
-		return
-	end
-
-	-- Re-apply periodically so newly streamed players are hidden without
-	-- suppressing their WORLDPLAYERADD or synchronization packets.
-	modificationState.playerVisibilityNextUpdate = now + 100
-	modificationState.hideCurrentPlayersVisual()
-end
-
--- Legacy cache helpers below are retained for vehicle removal compatibility.
--- Player-side RPC emulation is intentionally no longer called.
-function modificationState.cachePlayerStreamIn(playerId, team, model, position, rotation, color, fightingStyle)
-	if type(playerId) ~= "number" or position == nil then
-		return
-	end
-
-	local okX, px = pcall(function() return tonumber(position.x) end)
-	local okY, py = pcall(function() return tonumber(position.y) end)
-	local okZ, pz = pcall(function() return tonumber(position.z) end)
-
-	if not okX or not okY or not okZ or px == nil or py == nil or pz == nil then
-		return
-	end
-
-	modificationState.playerStreamCache[playerId] = {
-		team = tonumber(team) or 0,
-		model = tonumber(model) or 0,
-		x = px,
-		y = py,
-		z = pz,
-		rotation = tonumber(rotation) or 0,
-		color = tonumber(color) or -1,
-		fightingStyle = tonumber(fightingStyle) or 0
-	}
-end
-
-function modificationState.cacheVehicleStreamIn(vehicleId, data)
-	if type(vehicleId) ~= "number" or type(data) ~= "table" or data.position == nil then
-		return
-	end
-
-	local okX, px = pcall(function() return tonumber(data.position.x) end)
-	local okY, py = pcall(function() return tonumber(data.position.y) end)
-	local okZ, pz = pcall(function() return tonumber(data.position.z) end)
-
-	if not okX or not okY or not okZ or px == nil or py == nil or pz == nil then
-		return
-	end
-
-	local mods = {}
-	for i = 1, 14 do
-		mods[i] = tonumber(data.modSlots and data.modSlots[i]) or 0
-	end
-
-	modificationState.vehicleStreamCache[vehicleId] = {
-		type = tonumber(data.type) or 400,
-		x = px,
-		y = py,
-		z = pz,
-		rotation = tonumber(data.rotation) or 0,
-		bodyColor1 = tonumber(data.bodyColor1) or 0,
-		bodyColor2 = tonumber(data.bodyColor2) or 0,
-		health = tonumber(data.health) or 1000,
-		interiorId = tonumber(data.interiorId) or 0,
-		doorDamageStatus = tonumber(data.doorDamageStatus) or 0,
-		panelDamageStatus = tonumber(data.panelDamageStatus) or 0,
-		lightDamageStatus = tonumber(data.lightDamageStatus) or 0,
-		tireDamageStatus = tonumber(data.tireDamageStatus) or 0,
-		addSiren = tonumber(data.addSiren) or 0,
-		modSlots = mods,
-		paintJob = tonumber(data.paintJob) or 0,
-		interiorColor1 = tonumber(data.interiorColor1) or 0,
-		interiorColor2 = tonumber(data.interiorColor2) or 0
-	}
-end
-
-function modificationState.snapshotExistingPlayers()
-	if type(getAllChars) ~= "function" or type(sampGetPlayerIdByCharHandle) ~= "function" then
-		return 0
-	end
-
-	local okList, chars = pcall(getAllChars)
-	if not okList or type(chars) ~= "table" then
-		return 0
-	end
-
-	local captured = 0
-	for _, ped in pairs(chars) do
-		if ped ~= PLAYER_PED and doesCharExist(ped) then
-			local okId, found, playerId = pcall(sampGetPlayerIdByCharHandle, ped)
-			playerId = tonumber(playerId)
-			if okId and found and playerId and modificationState.playerStreamCache[playerId] == nil then
-				local okPos, x, y, z = pcall(getCharCoordinates, ped)
-				if okPos and tonumber(x) and tonumber(y) and tonumber(z) then
-					local okModel, model = pcall(getCharModel, ped)
-					local okHeading, heading = pcall(getCharHeading, ped)
-					local okColor, color = pcall(sampGetPlayerColor, playerId)
-
-					modificationState.playerStreamCache[playerId] = {
-						team = 0,
-						model = okModel and tonumber(model) or 0,
-						x = tonumber(x),
-						y = tonumber(y),
-						z = tonumber(z),
-						rotation = okHeading and tonumber(heading) or 0,
-						color = okColor and tonumber(color) or -1,
-						fightingStyle = 0,
-						bootstrap = true
-					}
-					captured = captured + 1
-				end
-			end
-		end
-	end
-
-	return captured
-end
-
-function modificationState.getCurrentPlayerVehicleId()
-    if type(isCharInAnyCar) ~= "function"
-        or type(getCarCharIsUsing) ~= "function"
-        or type(sampGetVehicleIdByCarHandle) ~= "function" then
-        return nil
-    end
-
-    local okInCar, inCar = pcall(isCharInAnyCar, PLAYER_PED)
-    if not okInCar or not inCar then
-        return nil
-    end
-
-    local okCar, car = pcall(getCarCharIsUsing, PLAYER_PED)
-    if not okCar or not car then
-        return nil
-    end
-
-    local okId, found, vehicleId = pcall(sampGetVehicleIdByCarHandle, car)
-    vehicleId = tonumber(vehicleId)
-
-    if not okId or not found or vehicleId == nil then
-        return nil
-    end
-
-    return vehicleId
-end
-
-function modificationState.protectCurrentPlayerVehicle()
-    local vehicleId = modificationState.getCurrentPlayerVehicleId()
-
-    if vehicleId ~= nil then
-        modificationState.vehicleStreamCache[vehicleId] = nil
-    end
-
-    return vehicleId
-end
-
-function modificationState.snapshotExistingVehicles()
-	if type(getAllVehicles) ~= "function" or type(sampGetVehicleIdByCarHandle) ~= "function" then
-		return 0
-	end
-
-	modificationState.protectCurrentPlayerVehicle()
-
-	local ownVehicle = nil
-	if type(isCharInAnyCar) == "function" and isCharInAnyCar(PLAYER_PED) and type(getCarCharIsUsing) == "function" then
-		local ownOk, own = pcall(getCarCharIsUsing, PLAYER_PED)
-		if ownOk then ownVehicle = own end
-	end
-
-	local okList, vehicles = pcall(getAllVehicles)
-	if not okList or type(vehicles) ~= "table" then
-		return 0
-	end
-
-	local currentInterior = 0
-	local interiorOk, interiorValue = pcall(getCharActiveInterior, PLAYER_PED)
-	if interiorOk and tonumber(interiorValue) then currentInterior = tonumber(interiorValue) end
-
-	local captured = 0
-	for _, vehicle in pairs(vehicles) do
-		if vehicle ~= ownVehicle and doesVehicleExist(vehicle) then
-			local okId, found, vehicleId = pcall(sampGetVehicleIdByCarHandle, vehicle)
-			vehicleId = tonumber(vehicleId)
-			if okId and found and vehicleId and modificationState.vehicleStreamCache[vehicleId] == nil then
-				local okPos, x, y, z = pcall(getCarCoordinates, vehicle)
-				if okPos and tonumber(x) and tonumber(y) and tonumber(z) then
-					local okModel, model = pcall(getCarModel, vehicle)
-					local okHeading, heading = pcall(getCarHeading, vehicle)
-					local okColors, color1, color2 = pcall(getCarColours, vehicle)
-					local okHealth, health = pcall(getCarHealth, vehicle)
-					local mods = {}
-
-					for slot = 0, 13 do
-						local okMod, modModel = pcall(getCurrentCarMod, vehicle, slot)
-						modModel = okMod and tonumber(modModel) or 0
-						mods[slot + 1] = modModel and modModel >= 1000 and modModel <= 1255 and (modModel - 1000) or 0
-					end
-
-					local okPaint, paintJob = pcall(getCurrentVehiclePaintjob, vehicle)
-					paintJob = okPaint and tonumber(paintJob) or 0
-					if paintJob < 0 then paintJob = 0 end
-
-					modificationState.vehicleStreamCache[vehicleId] = {
-						type = okModel and tonumber(model) or 400,
-						x = tonumber(x),
-						y = tonumber(y),
-						z = tonumber(z),
-						rotation = okHeading and tonumber(heading) or 0,
-						bodyColor1 = okColors and tonumber(color1) or 0,
-						bodyColor2 = okColors and tonumber(color2) or 0,
-						health = okHealth and tonumber(health) or 1000,
-						interiorId = currentInterior,
-						doorDamageStatus = 0,
-						panelDamageStatus = 0,
-						lightDamageStatus = 0,
-						tireDamageStatus = 0,
-						addSiren = 0,
-						modSlots = mods,
-						paintJob = paintJob,
-						interiorColor1 = 0,
-						interiorColor2 = 0,
-						bootstrap = true
-					}
-					captured = captured + 1
-				end
-			end
-		end
-	end
-
-	return captured
-end
-
-function modificationState.emulatePlayerStreamOut(playerId)
-	local bs = raknetNewBitStream()
-	if not bs then
-		return false
-	end
-
-	raknetBitStreamWriteInt16(bs, playerId)
-	modificationState.emulatingPlayerRemove = true
-	local ok, err = pcall(raknetEmulRpcReceiveBitStream, 163, bs)
-	modificationState.emulatingPlayerRemove = false
-	pcall(raknetDeleteBitStream, bs)
-
-	if not ok then
-		print("[ArzMarket][EntityRemoval] player remove RPC failed: " .. tostring(err))
-	end
-
-	return ok
-end
-
-function modificationState.emulateVehicleStreamOut(vehicleId)
-	local bs = raknetNewBitStream()
-	if not bs then
-		return false
-	end
-
-	raknetBitStreamWriteInt16(bs, vehicleId)
-	modificationState.emulatingVehicleRemove = true
-	local ok, err = pcall(raknetEmulRpcReceiveBitStream, 165, bs)
-	modificationState.emulatingVehicleRemove = false
-	pcall(raknetDeleteBitStream, bs)
-
-	if not ok then
-		print("[ArzMarket][EntityRemoval] vehicle remove RPC failed: " .. tostring(err))
-	end
-
-	return ok
-end
-
-function modificationState.emulatePlayerStreamIn(playerId, data)
-	if type(data) ~= "table" then
-		return false
-	end
-
-	local bs = raknetNewBitStream()
-	if not bs then
-		return false
-	end
-
-	raknetBitStreamWriteInt16(bs, playerId)
-	raknetBitStreamWriteInt8(bs, data.team)
-	raknetBitStreamWriteInt32(bs, data.model)
-	raknetBitStreamWriteFloat(bs, data.x)
-	raknetBitStreamWriteFloat(bs, data.y)
-	raknetBitStreamWriteFloat(bs, data.z)
-	raknetBitStreamWriteFloat(bs, data.rotation)
-	raknetBitStreamWriteInt32(bs, data.color)
-	raknetBitStreamWriteInt8(bs, data.fightingStyle)
-
-	modificationState.emulatingPlayerAdd = true
-	local ok, err = pcall(raknetEmulRpcReceiveBitStream, 32, bs)
-	modificationState.emulatingPlayerAdd = false
-	pcall(raknetDeleteBitStream, bs)
-
-	if not ok then
-		print("[ArzMarket][EntityRemoval] player add RPC failed: " .. tostring(err))
-	end
-
-	return ok
-end
-
-function modificationState.emulateVehicleStreamIn(vehicleId, data)
-	if type(data) ~= "table" then
-		return false
-	end
-
-	local bs = raknetNewBitStream()
-	if not bs then
-		return false
-	end
-
-	raknetBitStreamWriteInt16(bs, vehicleId)
-	raknetBitStreamWriteInt32(bs, data.type)
-	raknetBitStreamWriteFloat(bs, data.x)
-	raknetBitStreamWriteFloat(bs, data.y)
-	raknetBitStreamWriteFloat(bs, data.z)
-	raknetBitStreamWriteFloat(bs, data.rotation)
-	raknetBitStreamWriteInt8(bs, data.bodyColor1)
-	raknetBitStreamWriteInt8(bs, data.bodyColor2)
-	raknetBitStreamWriteFloat(bs, data.health)
-	raknetBitStreamWriteInt8(bs, data.interiorId)
-	raknetBitStreamWriteInt32(bs, data.doorDamageStatus)
-	raknetBitStreamWriteInt32(bs, data.panelDamageStatus)
-	raknetBitStreamWriteInt8(bs, data.lightDamageStatus)
-	raknetBitStreamWriteInt8(bs, data.tireDamageStatus)
-	raknetBitStreamWriteInt8(bs, data.addSiren)
-
-	for i = 1, 14 do
-		raknetBitStreamWriteInt8(bs, tonumber(data.modSlots and data.modSlots[i]) or 0)
-	end
-
-	raknetBitStreamWriteInt8(bs, data.paintJob)
-	raknetBitStreamWriteInt32(bs, data.interiorColor1)
-	raknetBitStreamWriteInt32(bs, data.interiorColor2)
-
-	modificationState.emulatingVehicleAdd = true
-	local ok, err = pcall(raknetEmulRpcReceiveBitStream, 164, bs)
-	modificationState.emulatingVehicleAdd = false
-	pcall(raknetDeleteBitStream, bs)
-
-	if not ok then
-		print("[ArzMarket][EntityRemoval] vehicle add RPC failed: " .. tostring(err))
-	end
-
-	return ok
-end
-
-function modificationState.removeCachedPlayersNow()
-	local removed = 0
-	for playerId in pairs(modificationState.playerStreamCache) do
-		if modificationState.emulatePlayerStreamOut(playerId) then
-			removed = removed + 1
-		end
-	end
-	print("[ArzMarket][EntityRemoval] players removed locally: " .. tostring(removed))
-end
-
-function modificationState.removeCachedVehiclesNow()
-	local currentVehicleId = modificationState.protectCurrentPlayerVehicle()
-	local removed = 0
-
-	for vehicleId in pairs(modificationState.vehicleStreamCache) do
-		if vehicleId ~= currentVehicleId and modificationState.emulateVehicleStreamOut(vehicleId) then
-			removed = removed + 1
-		end
-	end
-
-	print("[ArzMarket][EntityRemoval] vehicles removed locally: " .. tostring(removed))
-end
-
-function modificationState.restoreCachedPlayersNow()
-	local restored = 0
-	for playerId, data in pairs(modificationState.playerStreamCache) do
-		if modificationState.emulatePlayerStreamIn(playerId, data) then
-			restored = restored + 1
-		end
-	end
-	print("[ArzMarket][EntityRemoval] players restored locally: " .. tostring(restored))
-end
-
-function modificationState.restoreCachedVehiclesNow()
-	local currentVehicleId = modificationState.protectCurrentPlayerVehicle()
-	local restored = 0
-
-	for vehicleId, data in pairs(modificationState.vehicleStreamCache) do
-		if vehicleId ~= currentVehicleId and modificationState.emulateVehicleStreamIn(vehicleId, data) then
-			restored = restored + 1
-		end
-	end
-
-	print("[ArzMarket][EntityRemoval] vehicles restored locally: " .. tostring(restored))
-end
-
-function modificationState.saveEntityReloadCache()
-	if not isSampAvailable() then
-		return false
-	end
-
-	modificationState.protectCurrentPlayerVehicle()
-
-	-- Player removal is visual-only, so no player RPC reconstruction data is persisted.
-	local players = {}
-	local vehicles = {}
-	for vehicleId, data in pairs(modificationState.vehicleStreamCache) do
-		vehicles[tostring(vehicleId)] = data
-	end
-
-	local serverIp = select(1, sampGetCurrentServerAddress())
-	return writeJsonFile({
-		timestamp = os.time(),
-		serverIp = tostring(serverIp or ""),
-		players = players,
-		vehicles = vehicles
-	}, modificationState.entityReloadCachePath)
-end
-
-function modificationState.clearEntityReloadCache()
-	if doesFileExist(modificationState.entityReloadCachePath) then
-		pcall(os.remove, modificationState.entityReloadCachePath)
-	end
-end
-
-function modificationState.loadEntityReloadCache()
-	if not doesFileExist(modificationState.entityReloadCachePath) or not isSampAvailable() then
-		return false
-	end
-
-	local saved = readJsonFile(modificationState.entityReloadCachePath, {})
-	modificationState.clearEntityReloadCache()
-
-	if type(saved) ~= "table" or type(saved.timestamp) ~= "number" or os.time() - saved.timestamp > 12 then
-		return false
-	end
-
-	local serverIp = select(1, sampGetCurrentServerAddress())
-	if tostring(saved.serverIp or "") ~= tostring(serverIp or "") then
-		return false
-	end
-
-	-- Ignore player cache written by old entity-removal builds. Players now stay
-	-- in the real SA-MP player pool and are only made invisible locally.
-	modificationState.playerStreamCache = {}
-
-	if type(saved.vehicles) == "table" then
-		for vehicleId, data in pairs(saved.vehicles) do
-			local id = tonumber(vehicleId)
-			if id and type(data) == "table" then
-				modificationState.vehicleStreamCache[id] = data
-			end
-		end
-	end
-
-	modificationState.protectCurrentPlayerVehicle()
-
-	return next(modificationState.playerStreamCache) ~= nil or next(modificationState.vehicleStreamCache) ~= nil
-end
-
-function modificationState.prepareEntityRemovalForTerminate(quitGame)
-	if quitGame then
-		modificationState.clearEntityReloadCache()
-		return
-	end
-
-	modificationState.protectCurrentPlayerVehicle()
-
-	-- AutoFPS uses the same classic one-shot remover semantics as players:
-	-- it never reconstructs entities on recovery/reload. Keep the old cache/restore
-	-- behaviour only for the explicit manual remove-vehicles mode.
-	local manualVehiclesActive = modificationState.removeVehicles[0] == true
-
-	if manualVehiclesActive then
-		pcall(modificationState.saveEntityReloadCache)
-	else
-		pcall(modificationState.clearEntityReloadCache)
-	end
-
-	-- Players and AutoFPS-owned vehicles return only after a natural SA-MP restream.
-	if manualVehiclesActive then
-		modificationState.restoreCachedVehiclesNow()
-	end
-end
-
-function modificationState.isRemovePlayersActive()
-	return modificationState.removePlayers[0] or modificationState.autoFpsActive
-end
-
-function modificationState.isRemoveVehiclesActive()
-	return modificationState.removeVehicles[0] or modificationState.autoFpsActive
-end
-
-function modificationState.setRemovePlayers(enabled, showNotification)
-	local newState = enabled == true
-	if modificationState.removePlayers[0] == newState then
-		return
-	end
-
-	local effectiveBefore = modificationState.isRemovePlayersActive()
-	modificationState.removePlayers[0] = newState
-	ini.cfg.mod_remove_players = newState
-	save_all()
-
-	local effectiveAfter = modificationState.isRemovePlayersActive()
-	if effectiveBefore ~= effectiveAfter and effectiveAfter then
-		-- Classic Player Remover behaviour: remove currently streamed players once.
-		-- Future WORLDPLAYERADD events are blocked by onPlayerStreamIn below.
-		-- Disabling the mode does NOT reconstruct players; they return naturally
-		-- after an interior change, respawn, leaving/re-entering stream range or reconnect.
-		modificationState.playerStreamCache = {}
-		modificationState.snapshotExistingPlayers()
-		modificationState.removeCachedPlayersNow()
-	end
-
-	if showNotification then
-		sendNotify(newState and u8:decode("Полное удаление других игроков включено.") or u8:decode("Полное удаление других игроков выключено."))
-	end
-end
-
-function modificationState.setRemoveVehicles(enabled, showNotification)
-	local newState = enabled == true
-	if modificationState.removeVehicles[0] == newState then
-		return
-	end
-
-	local effectiveBefore = modificationState.isRemoveVehiclesActive()
-	modificationState.removeVehicles[0] = newState
-	ini.cfg.mod_remove_vehicles = newState
-	save_all()
-
-	local effectiveAfter = modificationState.isRemoveVehiclesActive()
-	if effectiveBefore ~= effectiveAfter then
-		if effectiveAfter then
-			modificationState.snapshotExistingVehicles()
-			modificationState.removeCachedVehiclesNow()
-		else
-			modificationState.restoreCachedVehiclesNow()
-		end
-	end
-
-	if showNotification then
-		sendNotify(newState and u8:decode("Полное удаление транспорта включено.") or u8:decode("Полное удаление транспорта выключено."))
-	end
-end
-
-function modificationState.getAutoFpsPlayerCount()
-	if isSampAvailable() and type(sampGetPlayerCount) == "function" then
-		local ok, count = pcall(sampGetPlayerCount, false)
-		count = ok and tonumber(count) or nil
-		if count and count >= 0 then
-			return count
-		end
-	end
-
-	return nil
-end
-
-function modificationState.logAutoFps(eventName, reason)
-	print(string.format(
-		"[AutoFPS]\nevent=%s\nplayers=%s\nplayersThreshold=%d\nfps=%.1f\nfpsThreshold=%d\nreason=%s\nactive=%s",
-		tostring(eventName or "state"),
-		modificationState.autoFpsPlayerCountValid and tostring(modificationState.autoFpsLastPlayerCount) or "unavailable",
-		math.max(1, tonumber(modificationState.autoFpsPlayersThreshold[0]) or 80),
-		tonumber(modificationState.autoFpsCurrent) or 0,
-		math.max(15, tonumber(modificationState.autoFpsThreshold[0]) or 45),
-		tostring(reason or modificationState.autoFpsReason or "none"),
-		tostring(modificationState.autoFpsActive == true)
-	))
-end
-
-function modificationState.setAutoFpsActive(enabled, reason)
-	local newState = enabled == true
-	if modificationState.autoFpsActive == newState then
-		return
-	end
-
-	modificationState.autoFpsActive = newState
-	modificationState.autoFpsReason = newState and (reason or modificationState.autoFpsReason or "unknown") or (reason or "none")
-	modificationState.autoFpsTriggerSince = nil
-	modificationState.autoFpsRecoverSince = nil
-
-	if newState then
-		-- Classic one-shot AutoFPS remover. Existing entities are removed once;
-		-- future WORLDPLAYERADD/WORLDVEHICLEADD are consumed by stream-in handlers.
-		-- High-frequency sync packets are NOT blocked by AutoFPS.
-		if not modificationState.removePlayers[0] then
-			modificationState.playerStreamCache = {}
-			modificationState.snapshotExistingPlayers()
-			modificationState.removeCachedPlayersNow()
-		end
-		if not modificationState.removeVehicles[0] then
-			modificationState.vehicleStreamCache = {}
-			modificationState.snapshotExistingVehicles()
-			modificationState.removeCachedVehiclesNow()
-		end
-		sendNotify(u8:decode("Авто FPS активирован (") .. tostring(modificationState.autoFpsReason) .. ").")
-	else
-		-- No synthetic stream-in on AutoFPS recovery. New stream-in RPCs are simply
-		-- allowed again; removed entities return after a natural restream.
-		if not modificationState.removePlayers[0] then
-			modificationState.playerStreamCache = {}
-		end
-		if not modificationState.removeVehicles[0] then
-			modificationState.vehicleStreamCache = {}
-		end
-		sendNotify(u8:decode("Авто FPS отключен: нагрузка нормализовалась."))
-	end
-
-	modificationState.logAutoFps(newState and "activation" or "recovery", reason)
-end
-
-function modificationState.setAutoFpsEnabled(enabled, showNotification)
-	local newState = enabled == true
-	if modificationState.autoFpsEnabled[0] == newState then
-		return
-	end
-
-	modificationState.autoFpsEnabled[0] = newState
-	ini.cfg.mod_auto_fps = newState
-	modificationState.autoFpsTriggerSince = nil
-	modificationState.autoFpsRecoverSince = nil
-	modificationState.autoFpsNextCheck = 0
-	save_all()
-
-	if not newState and modificationState.autoFpsActive then
-		modificationState.setAutoFpsActive(false, "disabled")
-	end
-	modificationState.autoFpsReason = newState and "monitoring" or "disabled"
-
-	if showNotification then
-		sendNotify(newState and u8:decode("Авто FPS включен.") or u8:decode("Авто FPS выключен."))
-	end
-
-	modificationState.logAutoFps(newState and "enable" or "disable", newState and "monitoring" or "disabled")
-end
-
-function modificationState.setAutoCycleEnabled(enabled, showNotification)
-	local newState = enabled == true
-	if modificationState.autoCycleEnabled[0] == newState then
-		return
-	end
-
-	modificationState.autoCycleEnabled[0] = newState
-	ini.cfg.mod_auto_cycle = newState
-	save_all()
-
-	if showNotification then
-		sendNotify(newState and u8:decode("Автоцикл торговли включен.") or u8:decode("Автоцикл торговли выключен."))
-	end
-end
-
-function modificationState.setAutoEatEnabled(enabled, showNotification)
-	local newState = enabled == true
-	if modificationState.autoEatEnabled[0] == newState then
-		return
-	end
-
-	modificationState.autoEatEnabled[0] = newState
-	ini.cfg.mod_autoeat = newState
-	save_all()
-
-	if showNotification then
-		sendNotify(newState and u8:decode("Автоеда включена.") or u8:decode("Автоеда выключена."))
-	end
-end
-
-function modificationState.sendAutoEatSyncKey(key, isDown)
-	local syncOk = pcall(require, "samp.synchronization")
-	local raknetOk, raknetModule = pcall(require, "samp.raknet")
-
-	if not syncOk or not raknetOk or not raknetModule then
-		return false
-	end
-
-	local dataType = "struct PlayerSyncData"
-	local data = ffi.new(dataType, {})
-	local rawDataPtr = tonumber(ffi.cast("uintptr_t", ffi.new(dataType .. "*", data)))
-	local playerFound, playerId = sampGetPlayerIdByCharHandle(PLAYER_PED)
-
-	if not playerFound then
-		return false
-	end
-
-	sampStorePlayerOnfootData(playerId, rawDataPtr)
-
-	if isDown then
-		data.keysData = tonumber(key) or 0
-	end
-
-	local bitStream = raknetNewBitStream()
-
-	raknetBitStreamWriteInt8(bitStream, raknetModule.PACKET.PLAYER_SYNC)
-	raknetBitStreamWriteBuffer(bitStream, rawDataPtr, ffi.sizeof(data))
-	raknetSendBitStreamEx(bitStream, 1, 7, 1)
-	raknetDeleteBitStream(bitStream)
-
-	return true
-end
-
-function modificationState.autoEatRespondExpected(dialogId, button, listIndex, inputText)
-	if type(sampIsDialogActive) ~= "function" or not sampIsDialogActive() then
-		return false
-	end
-	if type(sampGetCurrentDialogId) ~= "function" then
-		return false
-	end
-	local ok, currentDialogId = pcall(sampGetCurrentDialogId)
-	if not ok or tonumber(currentDialogId) ~= tonumber(dialogId) then
-		return false
-	end
-	sampSendDialogResponse(dialogId, button, listIndex, inputText)
-	return true
-end
-
-function modificationState.updateAutoEat()
-	if not modificationState.autoEatEnabled[0] or modificationState.autoEatBusy then
-		return
-	end
-
-	if modificationState.autoEatSatiety == nil then
-		return
-	end
-
-	local threshold = math.max(1, math.min(99, tonumber(modificationState.autoEatPercent[0]) or 1))
-
-	if tonumber(modificationState.autoEatSatiety) > threshold then
-		return
-	end
-
-	local now = getGameTimer()
-
-	if now < (tonumber(modificationState.autoEatNextAction) or 0) then
-		return
-	end
-
-	if sampIsDialogActive() then
-		return
-	end
-
-	modificationState.autoEatBusy = true
-	modificationState.autoEatNextAction = now + 3500
-
-	lua_thread.create(function()
-		local method = math.max(0, math.min(5, tonumber(modificationState.autoEatMethod[0]) or 0))
-		local function finish()
-			modificationState.autoEatBusy = false
-			modificationState.autoEatNextAction = getGameTimer() + 3500
-		end
-
-		if method == 0 then
-			wait(500)
-			sampSendChat("/cheeps")
-			wait(3500)
-		elseif method == 1 then
-			wait(500)
-			sampSendChat("/jfish")
-			wait(3500)
-		elseif method == 2 then
-			wait(500)
-			sampSendChat("/jmeat")
-			wait(3500)
-		elseif method == 3 then
-			wait(500)
-			sampSendChat("/meatbag")
-			wait(3500)
-		elseif method == 4 then
-			wait(100)
-			sampSendChat("/home")
-			wait(900)
-			if not modificationState.autoEatRespondExpected(7238, 1, 0, false) then finish() return end
-			wait(900)
-			if not modificationState.autoEatRespondExpected(174, 1, 1, false) then finish() return end
-			wait(900)
-			if not modificationState.autoEatRespondExpected(2431, 1, 2, false) then finish() return end
-			wait(900)
-			if not modificationState.autoEatRespondExpected(185, 1, 6, false) then finish() return end
-			sampCloseCurrentDialogWithButton(0)
-		elseif method == 5 then
-			wait(100)
-			modificationState.sendAutoEatSyncKey(1024, false)
-			wait(100)
-			modificationState.sendAutoEatSyncKey(1024, true)
-			wait(900)
-			if not modificationState.autoEatRespondExpected(1825, 1, 6, false) then finish() return end
-		end
-
-		finish()
-	end)
-end
-
-function modificationState.updateAutoFps()
-	if not modificationState.autoFpsEnabled[0] then
-		return
-	end
-
-	local paused = type(isPauseMenuActive) == "function" and isPauseMenuActive()
-	local unfocused = type(isGameWindowForeground) == "function" and not isGameWindowForeground()
-	if paused or unfocused then
-		modificationState.autoFpsTriggerSince = nil
-		modificationState.autoFpsRecoverSince = nil
-		return
-	end
-
-	local now = getGameTimer()
-	if now < modificationState.autoFpsNextCheck then
-		return
-	end
-	modificationState.autoFpsNextCheck = now + 250
-
-	local fps = tonumber(modificationState.autoFpsCurrent) or 0
-	local playerCount = modificationState.getAutoFpsPlayerCount()
-	modificationState.autoFpsPlayerCountValid = playerCount ~= nil
-	if playerCount ~= nil then
-		modificationState.autoFpsLastPlayerCount = playerCount
-	end
-
-	if fps <= 0 or playerCount == nil then
-		modificationState.autoFpsTriggerSince = nil
-		modificationState.autoFpsRecoverSince = nil
-		modificationState.autoFpsReason = playerCount == nil and "players-unavailable" or "fps-unavailable"
-		return
-	end
-
-	local playersThreshold = math.max(1, tonumber(modificationState.autoFpsPlayersThreshold[0]) or 80)
-	local fpsThreshold = math.max(15, tonumber(modificationState.autoFpsThreshold[0]) or 45)
-	-- Auto FPS activates when EITHER threshold is crossed:
-	-- FPS below the configured value OR server player count above the configured value.
-	local playersHigh = playerCount > playersThreshold
-	local fpsLow = fps < fpsThreshold
-	local shouldBoost = fpsLow or playersHigh
-	local reason = playersHigh and fpsLow and "players+fps" or playersHigh and "players" or fpsLow and "fps" or "none"
-	if shouldBoost or not modificationState.autoFpsActive then
-		modificationState.autoFpsReason = reason
-	end
-
-	if shouldBoost then
-		modificationState.autoFpsRecoverSince = nil
-		modificationState.autoFpsTriggerSince = nil
-		if not modificationState.autoFpsActive then
-			modificationState.setAutoFpsActive(true, reason)
-		end
-	else
-		modificationState.autoFpsTriggerSince = nil
-		if modificationState.autoFpsActive then
-			local recovered = playerCount <= math.max(0, playersThreshold - 5) and fps >= fpsThreshold + 5
-			if recovered then
-				if modificationState.autoFpsRecoverSince == nil then
-					modificationState.autoFpsRecoverSince = now
-				elseif now - modificationState.autoFpsRecoverSince >= 4000 then
-					modificationState.setAutoFpsActive(false, "recovered")
-				end
-			else
-				modificationState.autoFpsRecoverSince = nil
-			end
-		end
-	end
-end
-
-addEventHandler("onD3DPresent", function()
-	local now = getGameTimer()
-	local paused = type(isPauseMenuActive) == "function" and isPauseMenuActive()
-	local unfocused = type(isGameWindowForeground) == "function" and not isGameWindowForeground()
-	if paused or unfocused then
-		modificationState.autoFpsFrameCounter = 0
-		modificationState.autoFpsWindowStartedAt = now
-		modificationState.autoFpsCurrent = 0
-		return
-	end
-	if modificationState.autoFpsWindowStartedAt == 0 then
-		modificationState.autoFpsWindowStartedAt = now
-	end
-
-	modificationState.autoFpsFrameCounter = modificationState.autoFpsFrameCounter + 1
-	local elapsed = now - modificationState.autoFpsWindowStartedAt
-
-	if elapsed > 3000 then
-		modificationState.autoFpsFrameCounter = 0
-		modificationState.autoFpsWindowStartedAt = now
-		modificationState.autoFpsCurrent = 0
-	elseif elapsed >= 1000 then
-		modificationState.autoFpsCurrent = modificationState.autoFpsFrameCounter * 1000 / math.max(1, elapsed)
-		modificationState.autoFpsFrameCounter = 0
-		modificationState.autoFpsWindowStartedAt = now
-	end
-end)
-
 -- Classic Player Remover: already streamed players are removed once with
 -- WORLDPLAYERREMOVE. While enabled, only future WORLDPLAYERADD/onPlayerStreamIn
 -- is consumed. PlayerSync/AimSync/BulletSync are left completely untouched.
 function sampev.onPlayerStreamIn(playerId, team, model, position, rotation, color, fightingStyle)
-	if modificationState.isRemovePlayersActive() and not modificationState.emulatingPlayerAdd then
+	-- mod_runtime is loaded after the required-component bootstrap.  Stream RPCs
+	-- can arrive earlier, so pre-init must behave as the feature being inactive.
+	if type(modificationState.isRemovePlayersActive) == "function"
+		and modificationState.isRemovePlayersActive()
+		and not modificationState.emulatingPlayerAdd then
 		return false
 	end
 end
 
 function sampev.onVehicleStreamIn(vehicleId, data)
-	modificationState.cacheVehicleStreamIn(vehicleId, data)
+	if type(modificationState.cacheVehicleStreamIn) == "function" then
+		modificationState.cacheVehicleStreamIn(vehicleId, data)
+	end
 
-	if modificationState.isRemoveVehiclesActive() and not modificationState.emulatingVehicleAdd then
+	if type(modificationState.isRemoveVehiclesActive) == "function"
+		and modificationState.isRemoveVehiclesActive()
+		and not modificationState.emulatingVehicleAdd then
 		return false
 	end
 end
@@ -12275,32 +9442,6 @@ local inactiveToggleColor = imguiNew.float[3]({
 	tonumber(menuThemeConfig.deactive_toggle_button and menuThemeConfig.deactive_toggle_button[2]) or 0.188,
 	tonumber(menuThemeConfig.deactive_toggle_button and menuThemeConfig.deactive_toggle_button[3]) or 0.272
 })
-
-
-function arzPaletteSyncRuntime()
-	for i = 0, 3 do
-		windowColor[i] = menuThemeConfig.window[i + 1] or windowColor[i]
-		separatorColor[i] = menuThemeConfig.separator[i + 1] or separatorColor[i]
-	end
-	for i = 0, 2 do
-		activeToggleColor[i] = menuThemeConfig.active_toggle_button[i + 1] or activeToggleColor[i]
-		inactiveToggleColor[i] = menuThemeConfig.deactive_toggle_button[i + 1] or inactiveToggleColor[i]
-	end
-end
-
-function arzPaletteSelect(themeKey)
-	-- Selecting a predefined theme leaves both generated and custom palette modes.
-	-- Saved palette values remain available and can be enabled again later.
-	menuThemeConfig.custom_palette_enabled = false
-	arzGlobalPaletteEnsureStorage().enabled = false
-	local key = arzPaletteApplyConfig(themeKey)
-	arzPaletteSyncRuntime()
-	writeJsonFile(menuThemeConfig, menuThemePath)
-	if imgui.FrameTheme then
-		imgui.FrameTheme()
-	end
-	return key
-end
 
 
 function arzHtmlSettingsNormalizeConfigName(rawName, extension)
@@ -12740,835 +9881,7 @@ local clearWorkerState = {
 	false
 }
 
--- Low price guard. Uses the same priceData history as the built-in average-price window.
-LOW_PRICE_GUARD_RATIO = 0.50
-HIGH_PRICE_GUARD_RATIO = 2.00
-LOW_PRICE_GUARD_DIALOG_ID = 31984
-LOW_PRICE_GUARD_HISTORY_DAYS = 200
-lowPriceGuardLastRefreshAt = 0
-LOW_PRICE_GUARD_FORCE_ONCE_SIDE = nil
-LOW_PRICE_GUARD_FORCE_ONCE_EXPIRES = 0
-LOW_PRICE_GUARD_PENDING_FORCE = { side = nil, command = nil }
-
-function lowPriceGuardNormalizeName(name)
-	return tostring(name or ""):gsub("{......}", ""):gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-function lowPriceGuardRefreshPriceData()
-	local serverName = sampGetCurrentServerName()
-	if type(serverName) ~= "string" or not serverName:find("Arizona") then
-		return false
-	end
-
-	local nickname = ""
-	local playerIdOk, playerId = sampGetPlayerIdByCharHandle(PLAYER_PED)
-	if playerIdOk then
-		local okNick, value = pcall(sampGetPlayerNickname, playerId)
-		if okNick and value then
-			nickname = tostring(value)
-		end
-	end
-
-	local viceCityServerId = nickname:match("%[(%-?%d+)%]")
-	local detectedServerSlug = viceCityServerId ~= nil and serverSlugById[viceCityServerId]
-		or (serverName:match("|%s*(.+)% |"))
-		or serverName:match("|%s*(.+)")
-
-	if detectedServerSlug == nil or detectedServerSlug == "" then
-		return false
-	end
-
-	local lowercaseServerSlug = string.lower(detectedServerSlug):gsub(" ", "-")
-
-	-- Server-specific SA$ tables are invalid only when the player changes server.
-	if lowPriceGuardLoadedServerSlug ~= lowercaseServerSlug then
-		priceData.sell_ = {}
-		priceData.buy_ = {}
-		lowPriceGuardLoadedServerSlug = lowercaseServerSlug
-	end
-
-	local filesByType = {
-		sell_ = "moonloader/ArzMarket/UsersInfo/info_users_sell_" .. lowercaseServerSlug .. ".json",
-		buy_ = "moonloader/ArzMarket/UsersInfo/info_users_buy_" .. lowercaseServerSlug .. ".json",
-		sell_vc = "moonloader/ArzMarket/UsersInfo/info_users_sell_vc.json",
-		buy_vc = "moonloader/ArzMarket/UsersInfo/info_users_buy_vc.json"
-	}
-
-	-- Keep already decoded data in memory only for explicitly enabled sources.
-	-- Disabled tables remain nil and therefore do not occupy the LuaJIT heap.
-	for priceType, path in pairs(filesByType) do
-		if avgPriceSourceIsEnabled(priceType) then
-			local current = priceData[priceType]
-			if type(current) ~= "table" or next(current) == nil then
-				local okLoad, loaded = pcall(readJsonFile, path, {})
-				if okLoad and type(loaded) == "table" and next(loaded) ~= nil then
-					priceData[priceType] = loaded
-				else
-					priceData[priceType] = nil
-				end
-			end
-		else
-			priceData[priceType] = nil
-		end
-	end
-
-	lowPriceGuardLastRefreshAt = os.clock()
-	return true
-end
-
-function lowPriceGuardFindPriceEntry(source, itemName)
-	if type(source) ~= "table" then
-		return nil
-	end
-
-	local exactName = lowPriceGuardNormalizeName(itemName)
-	local baseName = lowPriceGuardNormalizeName(exactName:gsub("%(%+%d+%)", ""))
-	if source[exactName] ~= nil then
-		return source[exactName], exactName
-	end
-	if baseName ~= exactName and source[baseName] ~= nil then
-		return source[baseName], baseName
-	end
-
-	local wanted = baseName:gsub("%s+", "")
-	for key, value in pairs(source) do
-		local normalizedKey = lowPriceGuardNormalizeName(key):gsub("%(%+%d+%)", ""):gsub("%s+", "")
-		if normalizedKey == wanted then
-			return value, key
-		end
-	end
-
-	return nil
-end
-
-function lowPriceGuardGetLatestAverage(itemName, side)
-	if not lowPriceGuardRefreshPriceData() then
-		return nil
-	end
-
-	local sourceKey
-	-- viceCityMode == true means the active editor/runtime currency is SA$.
-	-- Keep the guard source in the same currency as lowPriceGuardGetConfiguredPrice().
-	if side == "buy" then
-		sourceKey = viceCityMode and "buy_" or "buy_vc"
-	else
-		sourceKey = viceCityMode and "sell_" or "sell_vc"
-	end
-
-	local itemHistory = lowPriceGuardFindPriceEntry(priceData[sourceKey], itemName)
-	if type(itemHistory) ~= "table" or type(itemHistory.list) ~= "table" then
-		return nil
-	end
-
-	-- Same order as the built-in window: newest date first.
-	for dayOffset = 0, LOW_PRICE_GUARD_HISTORY_DAYS - 1 do
-		local date = os.date("%Y-%m-%d", os.time() - 86400 * dayOffset)
-		for _, row in pairs(itemHistory.list) do
-			if type(row) == "table" and row[1] == date then
-				local count = tonumber(row[2])
-				local total = tonumber(row[3])
-				if count and count > 0 and total and total > 0 then
-					return math.floor(total / count), date, count
-				end
-			end
-		end
-	end
-
-	return nil
-end
-
-function lowPriceGuardGetConfiguredPrice(itemData)
-	if type(itemData) ~= "table" then
-		return 0
-	end
-	return tonumber(viceCityMode and itemData.price or itemData.price_vc) or 0
-end
-
--- Storage total value. The storage module owns inventory aggregation; this adapter
--- only resolves trade prices from the active sell config and the script's sell averages.
-STORAGE_VALUE_CACHE = STORAGE_VALUE_CACHE or {
-	total = 0,
-	config_items = 0,
-	average_items = 0,
-	missing_items = 0,
-	currency = "$",
-	next_refresh = 0
-}
-STORAGE_VALUE_AVERAGE_CACHE = STORAGE_VALUE_AVERAGE_CACHE or {
-	source_key = nil,
-	path = nil,
-	modified = nil,
-	data = nil
-}
-STORAGE_VALUE_CONFIG_CACHE = STORAGE_VALUE_CONFIG_CACHE or {
-	name = nil,
-	path = nil,
-	modified = nil,
-	data = nil
-}
-
-function storageValueNormalizeName(name)
-	if type(lowPriceGuardNormalizeName) == "function" then
-		return lowPriceGuardNormalizeName(name)
-	end
-	return tostring(name or ""):gsub("{......}", ""):gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-function storageValueGetSellListSnapshot()
-	-- Storage valuation must use only the sell config that is actually applied.
-	-- Do not trust sellList here because trade flows may temporarily replace or
-	-- mutate that in-memory table. loadedSellConfig is the authoritative active config.
-	local configName = tostring(loadedSellConfig or "")
-	if configName == "" then
-		STORAGE_VALUE_CONFIG_CACHE.name = nil
-		STORAGE_VALUE_CONFIG_CACHE.path = nil
-		STORAGE_VALUE_CONFIG_CACHE.modified = nil
-		STORAGE_VALUE_CONFIG_CACHE.data = nil
-		return {}
-	end
-
-	local fileName = configName:match("%.json$") and configName or (configName .. ".json")
-	local path = "moonloader/ArzMarket/sell-cfg/" .. fileName
-	if not doesFileExist(path) then
-		STORAGE_VALUE_CONFIG_CACHE.name = configName
-		STORAGE_VALUE_CONFIG_CACHE.path = path
-		STORAGE_VALUE_CONFIG_CACHE.modified = nil
-		STORAGE_VALUE_CONFIG_CACHE.data = nil
-		return {}
-	end
-
-	local modified = nil
-	if lfs and type(lfs.attributes) == "function" then
-		local okModified, value = pcall(lfs.attributes, path, "modification")
-		if okModified then
-			modified = tonumber(value)
-		end
-	end
-
-	local cache = STORAGE_VALUE_CONFIG_CACHE
-	if cache.name == configName
-		and cache.path == path
-		and cache.modified == modified
-		and type(cache.data) == "table"
-	then
-		return cache.data
-	end
-
-	local okLoad, loaded = pcall(readJsonFile, path, {})
-	if not okLoad or type(loaded) ~= "table" then
-		loaded = {}
-	end
-
-	cache.name = configName
-	cache.path = path
-	cache.modified = modified
-	cache.data = loaded
-	return loaded
-end
-
-function storageValueBuildConfiguredPrices()
-	local exact = {}
-	local plainBase = {}
-	local list = storageValueGetSellListSnapshot()
-
-	for _, item in ipairs(list) do
-		if type(item) == "table" then
-			local normalizedName = storageValueNormalizeName(item.name)
-			local configuredPrice = type(lowPriceGuardGetConfiguredPrice) == "function"
-				and lowPriceGuardGetConfiguredPrice(item)
-				or tonumber(viceCityMode and item.price or item.price_vc)
-
-			configuredPrice = tonumber(configuredPrice)
-			if normalizedName ~= "" and configuredPrice and configuredPrice > 0 then
-				exact[normalizedName] = configuredPrice
-				if not normalizedName:find("%(%+%d+%)") then
-					plainBase[normalizedName] = configuredPrice
-				end
-			end
-		end
-	end
-
-	return exact, plainBase
-end
-
-function storageValueResolveConfiguredPrice(itemName, exact, plainBase)
-	local normalizedName = storageValueNormalizeName(itemName)
-	if normalizedName == "" then return nil end
-
-	local price = exact[normalizedName]
-	if price then return price end
-
-	-- An enchanted storage item may use the price of an explicitly configured
-	-- plain base item. Do not do the reverse for a plain item.
-	if normalizedName:find("%(%+%d+%)") then
-		local baseName = storageValueNormalizeName(normalizedName:gsub("%(%+%d+%)", ""))
-		return plainBase[baseName]
-	end
-
-	return nil
-end
-
-function storageValueGetAverageSource(sourceKey)
-	local active = priceData and priceData[sourceKey] or nil
-	if type(active) == "table" and next(active) ~= nil then
-		STORAGE_VALUE_AVERAGE_CACHE.source_key = sourceKey
-		STORAGE_VALUE_AVERAGE_CACHE.path = nil
-		STORAGE_VALUE_AVERAGE_CACHE.modified = nil
-		STORAGE_VALUE_AVERAGE_CACHE.data = nil
-		return active
-	end
-
-	if type(avgPriceGetSourcePath) ~= "function" then return nil end
-	local path = avgPriceGetSourcePath(sourceKey)
-	if type(path) ~= "string" or path == "" or not doesFileExist(path) then return nil end
-
-	local modified = nil
-	if lfs and type(lfs.attributes) == "function" then
-		local okModified, value = pcall(lfs.attributes, path, "modification")
-		if okModified then modified = tonumber(value) end
-	end
-
-	local cache = STORAGE_VALUE_AVERAGE_CACHE
-	if cache.source_key == sourceKey
-		and cache.path == path
-		and cache.modified == modified
-		and type(cache.data) == "table"
-	then
-		return cache.data
-	end
-
-	local okLoad, loaded = pcall(readJsonFile, path, {})
-	if not okLoad or type(loaded) ~= "table" or next(loaded) == nil then
-		return nil
-	end
-
-	cache.source_key = sourceKey
-	cache.path = path
-	cache.modified = modified
-	cache.data = loaded
-	return loaded
-end
-
-function storageValueGetLatestAverage(itemName, source)
-	if type(source) ~= "table" then return nil end
-
-	local itemHistory = nil
-	if type(lowPriceGuardFindPriceEntry) == "function" then
-		itemHistory = lowPriceGuardFindPriceEntry(source, itemName)
-	else
-		itemHistory = source[storageValueNormalizeName(itemName)]
-	end
-
-	if type(itemHistory) ~= "table" or type(itemHistory.list) ~= "table" then
-		return nil
-	end
-
-	local latestDate = nil
-	local latestPrice = nil
-	for _, row in pairs(itemHistory.list) do
-		if type(row) == "table" then
-			local date = tostring(row[1] or "")
-			local count = tonumber(row[2])
-			local total = tonumber(row[3])
-			if count and count > 0 and total and total > 0 then
-				local unitPrice = math.floor(total / count)
-				if unitPrice > 0 and (latestDate == nil or date > latestDate) then
-					latestDate = date
-					latestPrice = unitPrice
-				end
-			end
-		end
-	end
-
-	return latestPrice
-end
-
-function storageValueRecalculate()
-	local cache = STORAGE_VALUE_CACHE
-	local now = os.clock()
-	if now < (tonumber(cache.next_refresh) or 0) then
-		return cache
-	end
-	cache.next_refresh = now + 1.0
-
-	local catalog = {}
-	if storageFinder and type(storageFinder.getCatalog) == "function" then
-		local okCatalog, result = pcall(storageFinder.getCatalog, "")
-		if okCatalog and type(result) == "table" then catalog = result end
-	end
-
-	local exactPrices, plainBasePrices = storageValueBuildConfiguredPrices()
-	local sourceKey = viceCityMode and "sell_" or "sell_vc"
-
-	if type(lowPriceGuardRefreshPriceData) == "function" then
-		pcall(lowPriceGuardRefreshPriceData)
-	end
-	local averageSource = storageValueGetAverageSource(sourceKey)
-
-	local total = 0
-	local configItems = 0
-	local averageItems = 0
-	local missingItems = 0
-
-	for _, item in ipairs(catalog) do
-		if type(item) == "table" then
-			local count = math.max(0, math.floor(tonumber(item.count) or 0))
-			if count > 0 then
-				local price = storageValueResolveConfiguredPrice(item.name, exactPrices, plainBasePrices)
-				if price then
-					configItems = configItems + 1
-				else
-					price = storageValueGetLatestAverage(item.name, averageSource)
-					if price then averageItems = averageItems + 1 end
-				end
-
-				if price and tonumber(price) and tonumber(price) > 0 then
-					total = total + count * tonumber(price)
-				else
-					missingItems = missingItems + 1
-				end
-			end
-		end
-	end
-
-	cache.total = math.max(0, math.floor(total))
-	cache.config_items = configItems
-	cache.average_items = averageItems
-	cache.missing_items = missingItems
-	cache.currency = viceCityMode and "$" or "VC$ "
-	return cache
-end
-
-function storageValueGetSummary()
-	return storageValueRecalculate()
-end
-
-function lowPriceGuardShowDialog(warnings, side, forceCommand)
-	if type(warnings) ~= "table" or #warnings == 0 then
-		return
-	end
-
-	local canForce = type(forceCommand) == "string" and forceCommand ~= ""
-	LOW_PRICE_GUARD_PENDING_FORCE.side = canForce and side or nil
-	LOW_PRICE_GUARD_PENDING_FORCE.command = canForce and forceCommand or nil
-
-	local actionName = side == "buy" and u8:decode("скупки") or u8:decode("продажи")
-	local lines = {
-		u8:decode("Обнаружена подозрительная цена перед запуском ") .. actionName .. ".",
-		canForce and u8:decode("Исправьте цену или нажмите принудительный запуск.") or u8:decode("Выставление остановлено. Исправьте цену и запустите снова."),
-		"",
-	}
-
-	local maxRows = math.min(#warnings, 10)
-	for i = 1, maxRows do
-		local warning = warnings[i]
-		local kindLabel = warning.kind == "too_high" and u8:decode("Слишком высокая") or u8:decode("Слишком низкая")
-		lines[#lines + 1] = tostring(i) .. ". " .. tostring(warning.name)
-		lines[#lines + 1] = kindLabel .. ": " .. moneySeparator(warning.price)
-		lines[#lines + 1] = u8:decode("Средняя: ") .. moneySeparator(warning.average) .. " | " .. tostring(warning.percent) .. "% | " .. tostring(warning.date)
-		lines[#lines + 1] = ""
-	end
-
-	if #warnings > maxRows then
-		lines[#lines + 1] = u8:decode("Ещё проблемных позиций: ") .. tostring(#warnings - maxRows)
-	end
-
-	local ok, err = pcall(
-		sampShowDialog,
-		LOW_PRICE_GUARD_DIALOG_ID,
-		u8:decode("Предупреждение о цене"),
-		table.concat(lines, "\n"),
-		canForce and u8:decode("Запустить принудительно") or u8:decode("Закрыть"),
-		canForce and u8:decode("Закрыть") or "",
-		0
-	)
-	if not ok then
-		print("[ArzMarket][PriceGuard] sampShowDialog failed: " .. tostring(err))
-		AFKMessage(u8:decode("ВНИМАНИЕ! Найдена цена, сильно отличающаяся от средней. Выставление остановлено."))
-	end
-end
-
-function lowPriceGuardPreflight(list, side, forceCommand)
-	if LOW_PRICE_GUARD_FORCE_ONCE_SIDE == side and getGameTimer() <= (tonumber(LOW_PRICE_GUARD_FORCE_ONCE_EXPIRES) or 0) then
-		LOW_PRICE_GUARD_FORCE_ONCE_SIDE = nil
-		LOW_PRICE_GUARD_FORCE_ONCE_EXPIRES = 0
-		return true
-	elseif LOW_PRICE_GUARD_FORCE_ONCE_SIDE ~= nil then
-		LOW_PRICE_GUARD_FORCE_ONCE_SIDE = nil
-		LOW_PRICE_GUARD_FORCE_ONCE_EXPIRES = 0
-	end
-
-	if type(list) ~= "table" or #list == 0 then
-		return true
-	end
-
-	local warnings = {}
-	local lowRatio = tonumber(LOW_PRICE_GUARD_RATIO) or 0.50
-	local highRatio = tonumber(HIGH_PRICE_GUARD_RATIO) or 2.00
-
-	for _, itemData in ipairs(list) do
-		if type(itemData) == "table" and itemData.enabled ~= false then
-			local configuredPrice = lowPriceGuardGetConfiguredPrice(itemData)
-			if configuredPrice > 0 then
-				local averagePrice, averageDate = lowPriceGuardGetLatestAverage(itemData.name, side)
-				if averagePrice and averagePrice > 0 then
-					local kind = nil
-					-- On buy orders a low price is intentional and must never block placement.
-					-- Keep the low-price guard only for sell orders, where it protects against accidental cheap sales.
-					if side ~= "buy" and configuredPrice < averagePrice * lowRatio then
-						kind = "too_low"
-					elseif configuredPrice > averagePrice * highRatio then
-						kind = "too_high"
-					end
-
-					if kind then
-						warnings[#warnings + 1] = {
-							kind = kind,
-							name = tostring(itemData.name or "?"),
-							price = configuredPrice,
-							average = averagePrice,
-							date = averageDate or "?",
-							percent = math.floor(configuredPrice * 100 / averagePrice + 0.5)
-						}
-					end
-				end
-			end
-		end
-	end
-
-	if #warnings > 0 then
-		lowPriceGuardShowDialog(warnings, side, forceCommand)
-		return false, warnings
-	end
-
-	return true
-end
-
-
 -- Block 3: foreign shop copy, quantity preservation and average-price tools.
-function resetForeignShopRuntime(reason)
-	local state = marketState and marketState.copyLavkaFunc
-	if type(state) == "table" then
-		state.slotId = 0
-		state.activeSlot = -1
-		state.status = false
-		state.finishing = false
-		state.finishAt = 0
-		state.maxSlotId = -1
-		state.askServer = true
-		state.sell_buy = -1
-		state.mode = "copy"
-		state.timer = os.clock()
-		state.rawBySide = { sell = {}, buy = {} }
-		state.summary = { added = 0, updated = 0, existed = 0, skipped = 0 }
-	end
-	marketState.available_items_customCopyConfig_sell = {}
-	marketState.available_items_customCopyConfig_buy = {}
-	saveLog("[ArzMarket][ForeignShop] runtime reset: " .. tostring(reason or "unknown"))
-end
-
-function foreignShopNormalizeName(name)
-	return tostring(name or ""):gsub("{......}", ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
-end
-
-function foreignShopPickField(raw, keys, depth)
-	if type(raw) ~= "table" then
-		return nil
-	end
-	depth = tonumber(depth) or 0
-	for _, key in ipairs(keys) do
-		if raw[key] ~= nil and type(raw[key]) ~= "table" then
-			return raw[key]
-		end
-	end
-	if depth >= 2 then
-		return nil
-	end
-	for _, containerKey in ipairs({ "data", "item", "info", "details", "meta", "metadata" }) do
-		local child = raw[containerKey]
-		if type(child) == "table" then
-			local value = foreignShopPickField(child, keys, depth + 1)
-			if value ~= nil then
-				return value
-			end
-		end
-	end
-	return nil
-end
-
-function foreignShopExtractCount(raw)
-	local value = foreignShopPickField(raw, {
-		"count", "quantity", "amount", "number", "stackCount", "stack_count",
-		"itemCount", "item_count", "availableCount", "available_count", "maxCount", "max_count"
-	})
-	local count = tonumber(value)
-	if count and count == count and count > 0 and count < math.huge then
-		return math.floor(count)
-	end
-	return nil
-end
-
-function foreignShopExtractPrice(raw)
-	local value = foreignShopPickField(raw, {
-		"price", "cost", "itemPrice", "item_price", "buyPrice", "buy_price", "sellPrice", "sell_price"
-	})
-	local price = tonumber(value)
-	if price and price == price and price > 0 and price < math.huge then
-		return math.floor(price)
-	end
-	return nil
-end
-
-function foreignShopNormalizeRawItem(raw, fallbackSlot)
-	if type(raw) ~= "table" then
-		return nil
-	end
-	local name = foreignShopPickField(raw, { "name", "itemName", "item_name", "title" })
-	if name == nil and type(raw.item) == "string" then
-		name = raw.item
-	end
-	name = foreignShopNormalizeName(name)
-	local slot = tonumber(foreignShopPickField(raw, { "slot", "slotId", "slot_id", "index" }))
-	if slot == nil then
-		slot = tonumber(fallbackSlot)
-		if slot and slot >= 1 then
-			slot = slot - 1
-		end
-	end
-	return {
-		name = name,
-		slot = slot and math.floor(slot) or nil,
-		count = foreignShopExtractCount(raw),
-		price = foreignShopExtractPrice(raw),
-		item_id = foreignShopPickField(raw, { "item_id", "itemId", "id", "uid" }),
-		model_id = foreignShopPickField(raw, { "model_id", "modelId", "model" }),
-		available = tonumber(foreignShopPickField(raw, { "available", "enabled", "active" }))
-	}
-end
-
-function foreignShopCaptureRawGroup(side, items)
-	if side ~= "sell" and side ~= "buy" then
-		return
-	end
-	if getTradeContextState then
-		local context = getTradeContextState()
-		if context.owner == "other" and markForeignShopContext then
-			markForeignShopContext(side, context.shopIdentity, "cef_items")
-		end
-	end
-	if type(items) ~= "table" then
-		return
-	end
-	marketState.copyLavkaFunc.rawBySide = marketState.copyLavkaFunc.rawBySide or { sell = {}, buy = {} }
-	marketState.copyLavkaFunc.rawBySide[side] = marketState.copyLavkaFunc.rawBySide[side] or {}
-	for key, raw in pairs(items) do
-		if type(raw) == "table" then
-			local item = foreignShopNormalizeRawItem(raw, key)
-			if item and item.slot ~= nil then
-				marketState.copyLavkaFunc.rawBySide[side][item.slot] = item
-			end
-		end
-	end
-end
-
-function foreignShopRebuildRawCache(side)
-	marketState.copyLavkaFunc.rawBySide = marketState.copyLavkaFunc.rawBySide or { sell = {}, buy = {} }
-	marketState.copyLavkaFunc.rawBySide[side] = {}
-	local source = side == "sell" and marketState.available_items_customCopyConfig_sell or marketState.available_items_customCopyConfig_buy
-	if type(source) == "table" then
-		for _, group in pairs(source) do
-			foreignShopCaptureRawGroup(side, group)
-		end
-	end
-	return marketState.copyLavkaFunc.rawBySide[side]
-end
-
-function foreignShopGetRawItem(side, slot)
-	local cache = marketState.copyLavkaFunc.rawBySide and marketState.copyLavkaFunc.rawBySide[side]
-	if type(cache) ~= "table" or next(cache) == nil then
-		cache = foreignShopRebuildRawCache(side)
-	end
-	return type(cache) == "table" and cache[tonumber(slot)] or nil
-end
-
-function foreignShopExtractDialogCount(text)
-	if type(text) ~= "string" or text == "" then
-		return nil
-	end
-	local clean = text:gsub("{......}", ""):gsub("%.", "")
-	local labels = {
-		u8:decode("Количество"),
-		u8:decode("Кол%-во"),
-		u8:decode("Доступно"),
-		u8:decode("В наличии"),
-		u8:decode("Осталось"),
-		u8:decode("На скупке"),
-		u8:decode("Скупается"),
-		u8:decode("Максимум")
-	}
-	for _, label in ipairs(labels) do
-		local value = clean:match(label .. "%s*:?%s*(%d+)")
-		local count = tonumber(value)
-		if count and count > 0 then
-			return math.floor(count)
-		end
-	end
-	local byUnits = clean:match(u8:decode("(%d+)%s*шт%.?")) or clean:match(u8:decode("(%d+)%s*штук"))
-	local count = tonumber(byUnits)
-	if count and count > 0 then
-		return math.floor(count)
-	end
-	return nil
-end
-
-function foreignShopFindBuyConfigItem(name, itemId, modelId)
-	local normalized = foreignShopNormalizeName(name)
-	for index, item in ipairs(buyList) do
-		if type(item) == "table" then
-			if itemId ~= nil and item.foreign_item_id ~= nil and tostring(item.foreign_item_id) == tostring(itemId) then
-				return item, index
-			end
-			if modelId ~= nil and item.foreign_model_id ~= nil and tostring(item.foreign_model_id) == tostring(modelId)
-				and foreignShopNormalizeName(item.name) == normalized then
-				return item, index
-			end
-			if foreignShopNormalizeName(item.name) == normalized then
-				return item, index
-			end
-		end
-	end
-	return nil
-end
-
-function foreignShopSetBuyPrice(item, price)
-	price = tonumber(price)
-	if type(item) ~= "table" or not price or price <= 0 then
-		return false
-	end
-	if viceCityMode then
-		item.price = math.floor(price)
-	else
-		item.price_vc = math.floor(price)
-	end
-	return true
-end
-
-function foreignShopApplyBuyItem(sourceItem, mode)
-	if type(sourceItem) ~= "table" then
-		return false, "invalid"
-	end
-	local name = foreignShopNormalizeName(sourceItem.name)
-	local price = tonumber(sourceItem.price)
-	local count = tonumber(sourceItem.count)
-	if name == "" or not price or price <= 0 then
-		return false, "invalid"
-	end
-	if count and count > 0 then
-		count = math.floor(count)
-	else
-		count = nil
-	end
-
-	local existing = foreignShopFindBuyConfigItem(name, sourceItem.item_id, sourceItem.model_id)
-	if existing then
-		if mode == "add_missing" then
-			return true, "existed"
-		end
-		foreignShopSetBuyPrice(existing, price)
-		if count then
-			existing.count = count
-			existing.continue = count
-			existing.maximum = false
-			existing.count_maximum = 0
-		end
-		if sourceItem.item_id ~= nil then existing.foreign_item_id = sourceItem.item_id end
-		if sourceItem.model_id ~= nil then existing.foreign_model_id = sourceItem.model_id end
-		return true, "updated"
-	end
-
-	if not count then
-		return false, "count_unknown"
-	end
-
-	local item = {
-		continue = count,
-		enabled = true,
-		maximum = false,
-		count_maximum = 0,
-		name = name,
-		count = count,
-		price = ini.cfg.myServerId == "201" and 9 or price,
-		price_vc = ini.cfg.myServerId ~= "201" and 9 or price,
-		foreign_item_id = sourceItem.item_id,
-		foreign_model_id = sourceItem.model_id
-	}
-	addToData(item, buyList, sortMode and 1 or nil)
-	tradeFilterMarkNewItem("buy", item)
-	return true, "added"
-end
-
-function foreignShopResetSummary()
-	marketState.copyLavkaFunc.summary = { added = 0, updated = 0, existed = 0, skipped = 0 }
-end
-
-function foreignShopRegisterSummary(result)
-	local summary = marketState.copyLavkaFunc.summary or {}
-	if result == "added" then
-		summary.added = (summary.added or 0) + 1
-	elseif result == "updated" then
-		summary.updated = (summary.updated or 0) + 1
-	elseif result == "existed" then
-		summary.existed = (summary.existed or 0) + 1
-	else
-		summary.skipped = (summary.skipped or 0) + 1
-	end
-	marketState.copyLavkaFunc.summary = summary
-end
-
-function foreignShopCreatePreChangeBackup(side)
-	local list, loaded, configType
-	if side == "buy" then
-		list, loaded, configType = buyList, loadedBuyConfig, "buy-cfg"
-	elseif side == "sell" then
-		list, loaded, configType = sellList, loadedSellConfig, "sell-cfg"
-	else
-		return false
-	end
-	if loaded == "" or type(list) ~= "table" then
-		return false
-	end
-	local fileName = loaded:match("(.+)%.json") and loaded or loaded .. ".json"
-	local backupDir = getWorkingDirectory() .. "\\ArzMarket\\" .. configType .. "\\backups\\" .. os.date("%d.%m.%Y")
-	if not doesDirectoryExist(backupDir) then
-		createDirectory(backupDir)
-	end
-	local encoded = encodeJsonSafe(list, encodeJson)
-	if type(encoded) ~= "string" then
-		return false
-	end
-	local safeName = fileName:gsub('[\\/:*?"<>|]', "_")
-	local millis = math.floor((os.clock() % 1) * 1000)
-	local backupPath = backupDir .. "\\pre_change_" .. os.date("%H%M%S") .. "_" .. string.format("%03d", millis) .. "_" .. safeName
-	return writeEncodedFile(backupPath, encoded) == true
-end
-
-function foreignShopPersistActiveConfig(side)
-	if side == "buy" then
-		if loadedBuyConfig == "" then
-			return false
-		end
-		local fileName = loadedBuyConfig:match("(.+)%.json") and loadedBuyConfig or loadedBuyConfig .. ".json"
-		return createConfig("buy-cfg/" .. fileName, buyList, "buy-cfg", fileName) ~= false
-	elseif side == "sell" then
-		if loadedSellConfig == "" then
-			return false
-		end
-		local fileName = loadedSellConfig:match("(.+)%.json") and loadedSellConfig or loadedSellConfig .. ".json"
-		return createConfig("sell-cfg/" .. fileName, sellList, "sell-cfg", fileName) ~= false
-	end
-	return false
-end
-
 function buyConfigMergeCloneItem(item)
 	if type(item) ~= "table" then return nil end
 	local encoded = encodeJsonSafe(item, encodeJson)
@@ -13767,1393 +10080,6 @@ function createMergedBuyConfigFromSelection(rawName)
 	return true, mergedList
 end
 
-function foreignShopFinishScan()
-	local state = marketState.copyLavkaFunc
-	local side = state.sell_buy == "1" and "buy" or "sell"
-	state.status = false
-	state.finishing = false
-	state.activeSlot = -1
-	foreignShopPersistActiveConfig(side)
-	if type(tradeFilterInvalidate) == "function" then
-		pcall(tradeFilterInvalidate, side)
-	end
-	local summary = state.summary or {}
-	if side == "buy" then
-		local text = u8:decode("Копирование завершено. ")
-			.. u8:decode("Добавлено: ") .. tostring(summary.added or 0)
-			.. u8:decode(", обновлено: ") .. tostring(summary.updated or 0)
-			.. u8:decode(", уже было: ") .. tostring(summary.existed or 0)
-			.. u8:decode(", пропущено: ") .. tostring(summary.skipped or 0)
-		AFKMessage(text)
-		sendNotify(text)
-	else
-		AFKMessage(u8:decode("Копирование конфига завершено."))
-		sendNotify(u8:decode("Копирование конфига завершено."))
-	end
-end
-
-function foreignShopStartScan(mode, skipServerQuestion)
-	local state = marketState.copyLavkaFunc
-	mode = mode == "add_missing" and "add_missing" or "copy"
-	if state.sell_buy == -1 then
-		AFKMessage(u8:decode("Нужно переоткрыть меню лавки, чтобы сканировать."))
-		return false
-	end
-	if mode == "add_missing" and state.sell_buy ~= "1" then
-		sendNotify(u8:decode("Кнопка добавления товаров работает для чужой скупки."))
-		return false
-	end
-	if mode == "add_missing" and loadedBuyConfig == "" then
-		sendNotify(u8:decode("Сначала загрузите конфиг скупки."))
-		return false
-	end
-	state.mode = mode
-	if state.askServer and not skipServerQuestion then
-		if not menuOpen then
-			openCrr()
-		end
-		marketState.askServer = true
-		return true
-	end
-
-	state.maxSlotId = -1
-	local maxSlot = -1
-	local groups = marketState[state.sell_buy == "0" and "available_items_customCopyConfig_sell" or "available_items_customCopyConfig_buy"]
-	for _, group in pairs(type(groups) == "table" and groups or {}) do
-		for _, inventoryItem in pairs(type(group) == "table" and group or {}) do
-			local slot = tonumber(inventoryItem.slot)
-			if slot and slot > maxSlot and (inventoryItem.available == 1 or inventoryItem.available == true or tostring(inventoryItem.available) == "1") then
-				maxSlot = slot
-			end
-		end
-	end
-	if maxSlot < 0 then
-		sendNotify(u8:decode("Товары в чужой лавке не найдены."))
-		return false
-	end
-	state.maxSlotId = maxSlot
-	foreignShopCreatePreChangeBackup(state.sell_buy == "1" and "buy" or "sell")
-	state.slotId = 0
-	state.activeSlot = -1
-	state.finishing = false
-	state.finishAt = 0
-	state.timer = os.clock() - 1
-	state.status = true
-	foreignShopResetSummary()
-	foreignShopRebuildRawCache(state.sell_buy == "1" and "buy" or "sell")
-	return true
-end
-
-function foreignShopCopyUpdate()
-	local state = marketState.copyLavkaFunc
-	if not state.status then
-		return
-	end
-	if state.finishing then
-		if os.clock() >= (tonumber(state.finishAt) or 0) then
-			foreignShopFinishScan()
-		end
-		return
-	end
-	if state.timer + 0.6 >= os.clock() then
-		return
-	end
-	state.timer = os.clock()
-	if state.slotId <= state.maxSlotId + 1 then
-		state.activeSlot = state.slotId
-		send_cef("rightClickOnBlock|{\"slot\": " .. tostring(state.slotId) .. ", \"type\": " .. (state.sell_buy == "0" and "13" or "28") .. "}")
-		state.slotId = state.slotId + 1
-		sendNotify(u8:decode("Скопировано: ") .. tostring(math.min(state.slotId, state.maxSlotId + 2)) .. u8:decode(" из ") .. tostring(state.maxSlotId + 2))
-	else
-		state.finishing = true
-		state.finishAt = os.clock() + 1.2
-	end
-end
-
-function foreignShopHandleBuyDialog(name, price, enchantment, text)
-	local state = marketState.copyLavkaFunc
-	local enchantSuffix = (enchantment == "0" or enchantment == "" or enchantment == nil) and "" or "(+" .. tostring(enchantment) .. ")"
-	local raw = foreignShopGetRawItem("buy", state.activeSlot)
-	local item = {
-		name = foreignShopNormalizeName(tostring(name or "") .. enchantSuffix),
-		price = tonumber(price) or (raw and raw.price),
-		count = foreignShopExtractDialogCount(text) or (raw and raw.count),
-		item_id = raw and raw.item_id or nil,
-		model_id = raw and raw.model_id or nil
-	}
-	if raw and raw.item_id ~= nil and storageFinder and type(storageFinder.rememberItemName) == "function" then
-		pcall(storageFinder.rememberItemName, raw.item_id, u8(item.name))
-	end
-	local ok, result = foreignShopApplyBuyItem(item, state.mode)
-	foreignShopRegisterSummary(result)
-	if not ok and result == "count_unknown" then
-		deAFKMessage("[ForeignShop] skip new buy item without exact count: " .. tostring(item.name))
-	end
-	return ok
-end
-
-function averagePriceGetLatestFromSource(source, itemName)
-	local itemHistory = lowPriceGuardFindPriceEntry(source, itemName)
-	if type(itemHistory) ~= "table" or type(itemHistory.list) ~= "table" then
-		return nil
-	end
-	for dayOffset = 0, LOW_PRICE_GUARD_HISTORY_DAYS - 1 do
-		local date = os.date("%Y-%m-%d", os.time() - 86400 * dayOffset)
-		for _, row in pairs(itemHistory.list) do
-			if type(row) == "table" and row[1] == date then
-				local count = tonumber(row[2])
-				local total = tonumber(row[3])
-				if count and count > 0 and total and total > 0 then
-					return math.floor(total / count), date
-				end
-			end
-		end
-	end
-	return nil
-end
-
-function getAveragePriceForBuyItem(item, fallbackSource)
-	local average, date = lowPriceGuardGetLatestAverage(item and item.name, "buy")
-	if average and average > 0 then
-		return average, date
-	end
-	if type(fallbackSource) == "table" then
-		return averagePriceGetLatestFromSource(fallbackSource, item and item.name)
-	end
-	return nil
-end
-
-function applyAveragePricesToBuyList()
-	if loadedBuyConfig == "" then
-		sendNotify(u8:decode("Сначала загрузите конфиг скупки."))
-		return false
-	end
-	if type(buyList) ~= "table" or #buyList == 0 then
-		sendNotify(u8:decode("Список скупки пуст."))
-		return false
-	end
-
-	local beforeEncoded = encodeJsonSafe(buyList, encodeJson)
-	local beforeList = type(beforeEncoded) == "string" and decodeJsonSafe(beforeEncoded) or nil
-	if type(beforeList) ~= "table" then
-		sendNotify("Не удалось подготовить безопасную копию конфига перед изменением цен.")
-		return false
-	end
-	if not foreignShopCreatePreChangeBackup("buy") then
-		sendNotify("Не удалось создать резервную копию. Изменение средних цен отменено.")
-		return false
-	end
-	local sourceKey = viceCityMode and "buy_" or "buy_vc"
-	local fallbackSource = priceData[sourceKey]
-	if type(fallbackSource) ~= "table" or next(fallbackSource) == nil then
-		local path = type(avgPriceGetSourcePath) == "function" and avgPriceGetSourcePath(sourceKey) or nil
-		if path and doesFileExist(path) then
-			local okLoad, loaded = pcall(readJsonFile, path, {})
-			if okLoad and type(loaded) == "table" and next(loaded) ~= nil then
-				fallbackSource = loaded
-			end
-		end
-	end
-
-	local updated, missing, errors = 0, 0, 0
-	for _, item in ipairs(buyList) do
-		if type(item) == "table" and item.enabled ~= false then
-			local okCall, average = pcall(function()
-				return select(1, getAveragePriceForBuyItem(item, fallbackSource))
-			end)
-			if not okCall then
-				errors = errors + 1
-			elseif average and tonumber(average) and tonumber(average) > 0 then
-				foreignShopSetBuyPrice(item, tonumber(average))
-				updated = updated + 1
-			else
-				missing = missing + 1
-			end
-		end
-	end
-
-	local saved = foreignShopPersistActiveConfig("buy")
-	if not saved then
-		buyList = beforeList
-		if type(tradeFilterInvalidate) == "function" then
-			pcall(tradeFilterInvalidate, "buy")
-		end
-		sendNotify("Не удалось сохранить конфиг со средними ценами. Изменения отменены в памяти.")
-		return false
-	end
-	if type(tradeFilterInvalidate) == "function" then
-		pcall(tradeFilterInvalidate, "buy")
-	end
-	local message = u8:decode("Средние цены: обновлено ") .. tostring(updated)
-		.. u8:decode(", нет цены ") .. tostring(missing)
-		.. u8:decode(", ошибок ") .. tostring(errors) .. "."
-	AFKMessage(message)
-	sendNotify(message)
-	return saved
-end
-
--- Trade list filters and priority sorting.
-TRADE_FILTER_FILE = "moonloader/ArzMarket/trade_filters.json"
-TRADE_FILTER_VERSION = 1
-TRADE_FILTER_PANEL_WIDTH = 340
-TRADE_FILTER_STATE_VERSION = 0
-tradeFilterState = nil
-tradeFilterCache = {
-	sell = { signature = nil, query = nil, version = -1, rows = {} },
-	buy = { signature = nil, query = nil, version = -1, rows = {} }
-}
-
-TRADE_FILTER_CATEGORY_ORDER_DEFAULT = {
-	"cases",
-	"accessories",
-	"skins",
-	"weapons",
-	"certificates",
-	"tuning",
-	"upgrades",
-	"resources",
-	"objects",
-	"shards",
-	"other"
-}
-
-TRADE_FILTER_CATEGORY_LABELS = {
-	cases = u8:decode("Ларцы"),
-	accessories = u8:decode("Аксессуары"),
-	skins = u8:decode("Скины"),
-	weapons = u8:decode("Оружие"),
-	certificates = u8:decode("Сертификаты"),
-	tuning = u8:decode("Тюнинг"),
-	upgrades = u8:decode("Улучшения"),
-	resources = u8:decode("Ресурсы/крафт"),
-	objects = u8:decode("Объекты"),
-	shards = u8:decode("Осколки"),
-	other = u8:decode("Прочее")
-}
-
-TRADE_FILTER_SORT_LABELS = {
-	enabled = u8:decode("Включенные выше"),
-	inventory = u8:decode("Есть в инвентаре выше"),
-	category = u8:decode("По типу предмета"),
-	price_asc = u8:decode("Цена: сначала дешевые"),
-	price_desc = u8:decode("Цена: сначала дорогие")
-}
-
-function tradeFilterDefaultSide(side)
-	return {
-		filters = {
-			only_enabled = false,
-			only_inventory = false,
-			hide_unavailable = false,
-			hide_untransferable = false
-		},
-		sorts = {
-			{ id = "enabled", enabled = false },
-			{ id = "inventory", enabled = false },
-			{ id = "category", enabled = false },
-			{ id = "price_asc", enabled = false },
-			{ id = "price_desc", enabled = false }
-		},
-		-- Item types are always enabled. Their order is used only as priority.
-		categories = {
-			cases = true,
-			accessories = true,
-			skins = true,
-			weapons = true,
-			certificates = true,
-			tuning = true,
-			upgrades = true,
-			resources = true,
-			objects = true,
-			shards = true,
-			other = true
-		},
-		category_order = {
-			"cases", "accessories", "skins", "weapons", "certificates",
-			"tuning", "upgrades", "resources", "objects", "shards", "other"
-		}
-	}
-end
-
-function tradeFilterMergeSide(value, side)
-	local result = tradeFilterDefaultSide(side)
-	if type(value) ~= "table" then
-		return result
-	end
-
-	if type(value.filters) == "table" then
-		for key, defaultValue in pairs(result.filters) do
-			if type(value.filters[key]) == "boolean" then
-				result.filters[key] = value.filters[key]
-			else
-				result.filters[key] = defaultValue
-			end
-		end
-	end
-
-	-- Category visibility is no longer configurable.
-	-- Every type is permanently enabled; only category_order is persisted.
-	for _, key in ipairs(TRADE_FILTER_CATEGORY_ORDER_DEFAULT) do
-		result.categories[key] = true
-	end
-
-	if type(value.sorts) == "table" then
-		local known = {}
-		local normalized = {}
-		for _, row in ipairs(value.sorts) do
-			if type(row) == "table" and TRADE_FILTER_SORT_LABELS[row.id] and not known[row.id] then
-				normalized[#normalized + 1] = { id = row.id, enabled = row.enabled == true }
-				known[row.id] = true
-			end
-		end
-		for _, row in ipairs(result.sorts) do
-			if not known[row.id] then
-				normalized[#normalized + 1] = row
-			end
-		end
-		result.sorts = normalized
-	end
-
-	if type(value.category_order) == "table" then
-		local known = {}
-		local normalized = {}
-		for _, id in ipairs(value.category_order) do
-			if TRADE_FILTER_CATEGORY_LABELS[id] and not known[id] then
-				normalized[#normalized + 1] = id
-				known[id] = true
-			end
-		end
-		for _, id in ipairs(TRADE_FILTER_CATEGORY_ORDER_DEFAULT) do
-			if not known[id] then
-				normalized[#normalized + 1] = id
-			end
-		end
-		result.category_order = normalized
-	end
-
-	return result
-end
-
-function tradeFilterEnsureLoaded()
-	if type(tradeFilterState) == "table" then
-		return
-	end
-
-	local loaded = {}
-	local ok, value = pcall(readJsonFile, TRADE_FILTER_FILE, {})
-	if ok and type(value) == "table" then
-		loaded = value
-	end
-
-	tradeFilterState = {
-		version = TRADE_FILTER_VERSION,
-		sell = tradeFilterMergeSide(loaded.sell, "sell"),
-		buy = tradeFilterMergeSide(loaded.buy, "buy")
-	}
-
-	-- The simplified panel is identical for BUY and SELL.
-	-- Legacy hidden filters must never affect the list, all item types are
-	-- permanently enabled, and only the two price sorts may be enabled.
-	for _, side in ipairs({ "sell", "buy" }) do
-		local sideState = tradeFilterState[side]
-		if type(sideState) == "table" then
-			if type(sideState.filters) == "table" then
-				sideState.filters.only_enabled = false
-				sideState.filters.only_inventory = false
-				sideState.filters.hide_unavailable = false
-				sideState.filters.hide_untransferable = false
-			end
-
-			if type(sideState.sorts) == "table" then
-				for _, row in ipairs(sideState.sorts) do
-					if row.id ~= "price_asc" and row.id ~= "price_desc" then
-						row.enabled = false
-					end
-				end
-			end
-
-			sideState.categories = sideState.categories or {}
-			for _, category in ipairs(TRADE_FILTER_CATEGORY_ORDER_DEFAULT) do
-				sideState.categories[category] = true
-			end
-		end
-	end
-end
-
-function tradeFilterSave()
-	tradeFilterEnsureLoaded()
-	tradeFilterState.version = TRADE_FILTER_VERSION
-	local ok = writeJsonFile(tradeFilterState, TRADE_FILTER_FILE)
-	if not ok then
-		print("[ArzMarket][TradeFilter] failed to save " .. TRADE_FILTER_FILE)
-	end
-	TRADE_FILTER_STATE_VERSION = TRADE_FILTER_STATE_VERSION + 1
-end
-
-function tradeFilterInvalidate(side)
-	if side and tradeFilterCache[side] then
-		tradeFilterCache[side].signature = nil
-	else
-		tradeFilterCache.sell.signature = nil
-		tradeFilterCache.buy.signature = nil
-	end
-	TRADE_FILTER_STATE_VERSION = TRADE_FILTER_STATE_VERSION + 1
-end
-
-function tradeFilterNormalizeName(name)
-	local value = tostring(name or ""):gsub("{......}", ""):gsub("^%s+", ""):gsub("%s+$", "")
-	if type(string.nlower) == "function" then
-		local ok, lowered = pcall(string.nlower, value)
-		if ok and type(lowered) == "string" then
-			return lowered
-		end
-	end
-	return string.lower(value)
-end
-
-
--- Learned exact item categories from manual BUY filter assignments.
--- Manual dropdown assignment still has higher priority, so future corrections remain possible.
-TRADE_FILTER_LEARNED_NAME_CATEGORY = {
-	[u8:decode("doggo")] = "accessories",
-	[u8:decode("бензопила на спину")] = "accessories",
-	[u8:decode("запечатанный: бронежилет devil company")] = "accessories",
-	[u8:decode("запечатанный: кошелек devil company")] = "accessories",
-	[u8:decode("запечатанный: наплечник devil company")] = "accessories",
-	[u8:decode("золотая гангстерская цепь")] = "accessories",
-	[u8:decode("лавка чубрика")] = "accessories",
-	[u8:decode("мешок с мясом")] = "accessories",
-	[u8:decode("переносной ларек (1)")] = "accessories",
-	[u8:decode("секретный аксессуар")] = "accessories",
-	[u8:decode("складная магическая лавка")] = "accessories",
-	[u8:decode("современная карта кладов (уровень: 0)")] = "accessories",
-	[u8:decode("цепь swag")] = "accessories",
-	[u8:decode("цепь свага")] = "accessories",
-	[u8:decode("case capture")] = "cases",
-	[u8:decode("concept car luxury")] = "cases",
-	[u8:decode("rare box blue")] = "cases",
-	[u8:decode("rare box red")] = "cases",
-	[u8:decode("rare box yellow")] = "cases",
-	[u8:decode("super car box")] = "cases",
-	[u8:decode("одежда из секонд-хенда")] = "cases",
-	[u8:decode("грядка всякой всячины")] = "objects",
-	[u8:decode("грядка льна")] = "objects",
-	[u8:decode("грядка с укропом")] = "objects",
-	[u8:decode("грядка хлопка")] = "objects",
-	[u8:decode("алюминий")] = "resources",
-	[u8:decode("древесина высшего качества")] = "resources",
-	[u8:decode("жареное мясо оленины")] = "resources",
-	[u8:decode("зловещая монета")] = "resources",
-	[u8:decode("металл")] = "resources",
-	[u8:decode("монета миража")] = "resources",
-	[u8:decode("опыт депозита")] = "resources",
-	[u8:decode("охлаждающая жидкость для видеокарты")] = "resources",
-	[u8:decode("печать нефтяника")] = "resources",
-	[u8:decode("подарок")] = "resources",
-	[u8:decode("редкие материалы")] = "resources",
-	[u8:decode("рыбная монета")] = "resources",
-	[u8:decode("сироп майнера")] = "resources",
-	[u8:decode("сироп фермера")] = "resources",
-	[u8:decode("сироп характеристик актера")] = "resources",
-	[u8:decode("смазка для разгона видеокарты")] = "resources",
-	[u8:decode("сырое мясо оленины")] = "resources",
-	[u8:decode("талон на смену никнейма")] = "resources",
-	[u8:decode("точильный амулет")] = "resources",
-	[u8:decode("тушка оленя")] = "resources",
-	[u8:decode("уголь")] = "resources",
-	[u8:decode("черная жемчужина")] = "resources",
-	[u8:decode("[pubg] мужчина 1")] = "skins",
-	[u8:decode("the notorious b.i.g")] = "skins",
-	[u8:decode("асап роки")] = "skins",
-	[u8:decode("бамблби")] = "skins",
-	[u8:decode("думгай")] = "skins",
-	[u8:decode("мидас")] = "skins",
-	[u8:decode("оптимус прайм")] = "skins",
-	[u8:decode("фрирен")] = "skins",
-	[u8:decode("фродо")] = "skins",
-	[u8:decode("gg регистратор")] = "tuning",
-	[u8:decode("twin turbo")] = "tuning",
-	[u8:decode("twin turbo (2 уровня)")] = "tuning",
-	[u8:decode("багажник")] = "tuning",
-	[u8:decode("багажник double-gang")] = "tuning",
-	[u8:decode("багажник таноса")] = "tuning",
-	[u8:decode("дифференциал (sport+)")] = "tuning",
-	[u8:decode("золотой vin номер")] = "tuning",
-	[u8:decode("коленвал (sport+)")] = "tuning",
-	[u8:decode("кпп (sport)")] = "tuning",
-	[u8:decode("кпп (sport+)")] = "tuning",
-	[u8:decode("нагнетатель (sport)")] = "tuning",
-	[u8:decode("нагнетатель (sport+)")] = "tuning",
-	[u8:decode("новый vin номер")] = "tuning",
-	[u8:decode("подвеска (sport)")] = "tuning",
-	[u8:decode("подвеска (sport+)")] = "tuning",
-	[u8:decode("полицейская мигалка (активная)")] = "tuning",
-	[u8:decode("протокол взвешивания")] = "tuning",
-	[u8:decode("разрешение на получение номера")] = "tuning",
-	[u8:decode("распредвал (sport)")] = "tuning",
-	[u8:decode("распредвал (sport+)")] = "tuning",
-	[u8:decode("сцепление (sport+)")] = "tuning",
-	[u8:decode("тормоза (sport+)")] = "tuning",
-	[u8:decode("турбокомпрессор (sport)")] = "tuning",
-	[u8:decode("турбокомпрессор (sport+)")] = "tuning",
-	[u8:decode("увеличенный бак (160 литров)")] = "tuning",
-	[u8:decode("+1 уровень premium vip")] = "upgrades",
-	[u8:decode("бонус тракториста +300 процентов")] = "upgrades",
-	[u8:decode("вечная рабочая виза")] = "upgrades",
-	[u8:decode("обнуление глобальных достижений")] = "upgrades",
-	[u8:decode("премиум vip (30 дней)")] = "upgrades",
-	[u8:decode("продажа фишек без комиссии")] = "upgrades",
-	[u8:decode("талон на 12 x4 payday (передаваемый)")] = "upgrades",
-	[u8:decode("талон снятия предупреждений")] = "upgrades",
-}
-
-function tradeFilterItemCategory(item)
-	if type(item) ~= "table" then
-		return "other"
-	end
-
-	-- Manual assignment from the buy-list dropdown has highest priority.
-	local manualCategory = item.trade_filter_category
-	if type(manualCategory) == "string" and TRADE_FILTER_CATEGORY_LABELS[manualCategory] then
-		return manualCategory
-	end
-
-	-- Exact learned mapping is checked before broad keyword rules.
-	-- This prevents known items such as boxes, tuning parts and special resources
-	-- from falling into "Прочее" or a wrong broad category.
-	local learnedName = tradeFilterNormalizeName(item.name)
-	local learnedCategory = TRADE_FILTER_LEARNED_NAME_CATEGORY
-		and TRADE_FILTER_LEARNED_NAME_CATEGORY[learnedName]
-	if type(learnedCategory) == "string" and TRADE_FILTER_CATEGORY_LABELS[learnedCategory] then
-		return learnedCategory
-	end
-
-	local explicit = item.category or item.server_category or item.item_category
-	if type(explicit) == "string" and TRADE_FILTER_CATEGORY_LABELS[explicit] and explicit ~= "other" then
-		return explicit
-	end
-
-	local itemId = item.item_id or item.foreign_item_id or item.itemId or item.id
-	local modelId = item.model_id or item.foreign_model_id or item.modelId or item.model
-	local serverType = item.server_type or item.serverType or item.item_type or item.itemType
-	if type(storageFinder) == "table" and type(storageFinder.classifyItem) == "function"
-		and (itemId ~= nil or modelId ~= nil or serverType ~= nil) then
-		local ok, category = pcall(storageFinder.classifyItem, {
-			item_id = itemId,
-			model_id = modelId,
-			server_type = serverType,
-			name = ""
-		})
-		if ok and category and category ~= "other" and TRADE_FILTER_CATEGORY_LABELS[category] then
-			return category
-		end
-	end
-
-	local name = tradeFilterNormalizeName(item.name)
-	if name == "virgin moon" or name == "shadow moon" then
-		return "skins"
-	end
-
-	if name:find(u8:decode("осколок"), 1, true) == 1 or name:find(u8:decode("осколки"), 1, true) == 1 then
-		return "shards"
-	end
-
-	if name:find(u8:decode("набор реставрации"), 1, true)
-		or name:find(u8:decode("инструкция для разбора"), 1, true) then
-		return "upgrades"
-	end
-
-	if name:find(u8:decode("скин:"), 1, true)
-		or name:find(u8:decode("легендарная одежда:"), 1, true) == 1
-		or name:find(u8:decode("одежда:"), 1, true) == 1 then
-		return "skins"
-	end
-
-	if name:find(u8:decode("объект:"), 1, true) == 1 then
-		return "objects"
-	end
-
-	if name:find(u8:decode("аксессуар:"), 1, true) == 1
-		or name:find(u8:decode("легендарный аксессуар:"), 1, true) == 1
-		or name:find(u8:decode("коллекционный аксессуар:"), 1, true) == 1 then
-		return "accessories"
-	end
-
-	if name:find(u8:decode("сертификат"), 1, true) then
-		return "certificates"
-	end
-
-	if name:find(u8:decode("ларец"), 1, true) or name:find(u8:decode("сундук"), 1, true) or name:find(u8:decode("кейс"), 1, true)
-		or name:find(u8:decode("тайник"), 1, true) or name:find(u8:decode("рулетка"), 1, true) or name:find(u8:decode("ящик"), 1, true) then
-		return "cases"
-	end
-
-	if name:find(u8:decode("крылья"), 1, true) or name:find(u8:decode("нимб"), 1, true)
-		or name:find(u8:decode("рюкзак"), 1, true) or name:find(u8:decode("маска"), 1, true)
-		or name:find(u8:decode("шляпа"), 1, true) or name:find(u8:decode("чемодан"), 1, true)
-		or name:find(u8:decode("моноколесо"), 1, true) or name:find(u8:decode("воздушный шар"), 1, true)
-		or name:find(u8:decode("энергетические часы"), 1, true) or name:find(u8:decode("энергетический щит"), 1, true)
-		or name:find(u8:decode("пятизубец"), 1, true) or name:find(u8:decode("посох"), 1, true)
-		or name:find(u8:decode("молот тора"), 1, true) or name:find(u8:decode("рука бесконечности"), 1, true)
-		or name:find(u8:decode("голова робокоп"), 1, true) or name:find(u8:decode("голова фредди"), 1, true)
-		or name:find(u8:decode("кукла вуду"), 1, true) or name:find(u8:decode("дрон-защитник"), 1, true)
-		or name:find(u8:decode("сумка с деньгами"), 1, true) then
-		return "accessories"
-	end
-
-	if name:find(u8:decode("тюнинг"), 1, true) or name:find(u8:decode("винил"), 1, true) or name:find(u8:decode("спойлер"), 1, true)
-		or name:find(u8:decode("бампер"), 1, true) or name:find(u8:decode("капот"), 1, true) or name:find(u8:decode("выхлоп"), 1, true) then
-		return "tuning"
-	end
-	if name:find(u8:decode("улучшен"), 1, true) or name:find(u8:decode("заточка"), 1, true) then
-		return "upgrades"
-	end
-	if name:find(u8:decode("оруж"), 1, true) or name:find(u8:decode("пистолет"), 1, true) or name:find(u8:decode("винтов"), 1, true)
-		or name:find(u8:decode("автомат"), 1, true) then
-		return "weapons"
-	end
-	if name:find(u8:decode("компонент"), 1, true) or name:find(u8:decode("ресурс"), 1, true) or name:find(u8:decode("крафт"), 1, true)
-		or name:find(u8:decode("материя"), 1, true) or name:find(u8:decode("сплав"), 1, true) or name:find(u8:decode("ткань"), 1, true)
-		or name:find(u8:decode("камень"), 1, true) or name:find(u8:decode("руда"), 1, true) then
-		return "resources"
-	end
-
-	return "other"
-end
-
-function tradeFilterIsTransferable(item, side)
-	if type(item) ~= "table" then
-		return nil
-	end
-
-	for _, key in ipairs({ "transferable", "can_trade", "canTrade", "can_transfer", "canTransfer" }) do
-		if type(item[key]) == "boolean" then
-			return item[key]
-		end
-	end
-
-	if side == "sell" and type(json_vlad) == "table" and next(json_vlad) ~= nil and type(containsItem) == "function" then
-		local cleanName = tostring(item.name or ""):gsub("%(%+%d+%)", "")
-		local ok, found = pcall(containsItem, json_vlad, cleanName, 1)
-		if ok then
-			return found and true or false
-		end
-	end
-
-	local name = tradeFilterNormalizeName(item.name)
-	if name:find(u8:decode("непередаваем"), 1, true) or name:find(u8:decode("не передаваем"), 1, true) then
-		return false
-	end
-
-	return nil
-end
-
-function tradeFilterHasInventory(item)
-	if type(item) ~= "table" then
-		return nil
-	end
-	local value = tonumber(item.all_count)
-	if value ~= nil then
-		return value > 0
-	end
-	if type(item.in_inventory) == "boolean" then
-		return item.in_inventory
-	end
-	return nil
-end
-
-function tradeFilterIsUnavailable(item, side)
-	if type(item) ~= "table" then
-		return false
-	end
-	if type(item.available) == "boolean" then
-		return not item.available
-	end
-	if side == "sell" then
-		local inInventory = tradeFilterHasInventory(item)
-		if inInventory ~= nil then
-			return not inInventory
-		end
-	end
-	return false
-end
-
-function tradeFilterGetPrice(item)
-	if type(item) ~= "table" then
-		return 0
-	end
-	return tonumber(viceCityMode and item.price or item.price_vc) or 0
-end
-
-function tradeFilterCategoryRank(sideState, category)
-	for index, value in ipairs(sideState.category_order or {}) do
-		if value == category then
-			return index
-		end
-	end
-	return 999
-end
-
-function tradeFilterListSignature(list)
-	if type(list) ~= "table" then
-		return "nil"
-	end
-	local acc1 = #list * 131
-	local acc2 = 17
-	for index, item in ipairs(list) do
-		if type(item) == "table" then
-			local name = tostring(item.name or "")
-			local manualCategory = tostring(item.trade_filter_category or "")
-			local price = tonumber(viceCityMode and item.price or item.price_vc) or 0
-			local count = tonumber(item.count) or 0
-			local allCount = tonumber(item.all_count) or -1
-			acc1 = (acc1 + #name * 31 + #manualCategory * 53 + index * 17 + math.floor(price % 1000003)) % 2147483000
-			acc2 = (acc2 + math.floor(count * 13 + allCount * 7) + (item.enabled == false and 97 or 19)) % 2147483000
-		else
-			acc1 = (acc1 + index * 43) % 2147483000
-		end
-	end
-	return tostring(#list) .. ":" .. tostring(acc1) .. ":" .. tostring(acc2)
-end
-
-function tradeFilterHasSelectedCategory(sideState)
-	for category, enabled in pairs(sideState.categories or {}) do
-		if enabled == true and TRADE_FILTER_CATEGORY_LABELS[category] then
-			return true
-		end
-	end
-	return false
-end
-
-function tradeFilterMatches(item, side, sideState, query)
-	if type(item) ~= "table" then
-		return false
-	end
-
-	local filters = sideState.filters or {}
-	if filters.only_enabled and item.enabled == false then
-		return false
-	end
-
-	if filters.only_inventory then
-		local hasInventory = tradeFilterHasInventory(item)
-		if hasInventory == false then
-			return false
-		end
-	end
-
-	if filters.hide_unavailable and tradeFilterIsUnavailable(item, side) then
-		return false
-	end
-
-	if filters.hide_untransferable and tradeFilterIsTransferable(item, side) == false then
-		return false
-	end
-
-	local category = tradeFilterItemCategory(item)
-	if tradeFilterHasSelectedCategory(sideState) and sideState.categories[category] ~= true then
-		return false
-	end
-
-	if query and query ~= "" then
-		local name = tradeFilterNormalizeName(item.name)
-		local wanted = tradeFilterNormalizeName(query)
-		if not name:find(wanted, 1, true) then
-			return false
-		end
-	end
-
-	return true
-end
-
-function tradeFilterCaseSubtypeRank(item)
-	local name = tradeFilterNormalizeName(type(item) == "table" and item.name or "")
-	-- Inside the "cases" category keep actual Larcy together first,
-	-- then boxes, then every other case-like item.
-	if name:find(u8:decode("ларец"), 1, true) then
-		return 1
-	end
-	if name:find(u8:decode("ящик"), 1, true) then
-		return 2
-	end
-	return 3
-end
-
-function tradeFilterCompare(a, b, side, sideState)
-	-- Selected item-type priorities are absolute groups.
-	-- Example: Accessories = 1, Skins = 2 means every accessory is shown before every skin.
-	local categoryA = tradeFilterItemCategory(a)
-	local categoryB = tradeFilterItemCategory(b)
-	local hasCategoryPriority = tradeFilterHasSelectedCategory(sideState)
-	if hasCategoryPriority and categoryA ~= categoryB then
-		local rankA = tradeFilterCategoryRank(sideState, categoryA)
-		local rankB = tradeFilterCategoryRank(sideState, categoryB)
-		if rankA ~= rankB then
-			return rankA < rankB
-		end
-	end
-
-	-- The Cases category has its own fixed suborder:
-	-- Larcy first, boxes second, then roulette/stash/case/chest/etc.
-	-- This is intentionally checked before enabled/inventory/price sorts,
-	-- so case-like items never split actual Larcy into several blocks.
-	if categoryA == "cases" and categoryB == "cases" then
-		local subtypeA = tradeFilterCaseSubtypeRank(a)
-		local subtypeB = tradeFilterCaseSubtypeRank(b)
-		if subtypeA ~= subtypeB then
-			return subtypeA < subtypeB
-		end
-	end
-
-	-- General sorting rules work only inside the same selected category group.
-	for _, criterion in ipairs(sideState.sorts or {}) do
-		if criterion.enabled then
-			if criterion.id == "enabled" then
-				local av = a.enabled ~= false and 1 or 0
-				local bv = b.enabled ~= false and 1 or 0
-				if av ~= bv then return av > bv end
-			elseif criterion.id == "inventory" then
-				local av = tradeFilterHasInventory(a)
-				local bv = tradeFilterHasInventory(b)
-				av = av == true and 1 or (av == false and 0 or -1)
-				bv = bv == true and 1 or (bv == false and 0 or -1)
-				if av ~= bv then return av > bv end
-			elseif criterion.id == "category" and not hasCategoryPriority then
-				local av = tradeFilterCategoryRank(sideState, tradeFilterItemCategory(a))
-				local bv = tradeFilterCategoryRank(sideState, tradeFilterItemCategory(b))
-				if av ~= bv then return av < bv end
-			elseif criterion.id == "price_asc" then
-				local av = tradeFilterGetPrice(a)
-				local bv = tradeFilterGetPrice(b)
-				if av ~= bv then return av < bv end
-			elseif criterion.id == "price_desc" then
-				local av = tradeFilterGetPrice(a)
-				local bv = tradeFilterGetPrice(b)
-				if av ~= bv then return av > bv end
-			end
-		end
-	end
-
-	return (tonumber(a.position_tab) or 0) < (tonumber(b.position_tab) or 0)
-end
-
-function tradeFilterBuildView(list, side, query)
-	tradeFilterEnsureLoaded()
-	if type(list) ~= "table" then
-		return {}
-	end
-
-	local sideState = tradeFilterState[side] or tradeFilterDefaultSide(side)
-	local cache = tradeFilterCache[side]
-	local newOnly = tradeFilterIsNewOnly(side)
-	local normalizedQuery = newOnly and "" or tradeFilterNormalizeName(query or "")
-	local cacheQuery = newOnly and "__new_items_only__" or normalizedQuery
-
-	if marketSidePriceEditorActive(side) and cache.query == cacheQuery and cache.version == TRADE_FILTER_STATE_VERSION and type(cache.rows) == "table" and #cache.rows > 0 then
-		return cache.rows
-	end
-
-	local signature = tradeFilterListSignature(list)
-	if cache.signature == signature and cache.query == cacheQuery and cache.version == TRADE_FILTER_STATE_VERSION then
-		return cache.rows
-	end
-
-	local rows = {}
-	for index, item in ipairs(list) do
-		if type(item) == "table" then
-			item.position_tab = index
-			if newOnly then
-				if tradeFilterIsNewItem(side, item) then
-					rows[#rows + 1] = item
-				end
-			elseif tradeFilterMatches(item, side, sideState, normalizedQuery) then
-				rows[#rows + 1] = item
-			end
-		end
-	end
-
-	if not newOnly then
-		local hasSort = tradeFilterHasSelectedCategory(sideState)
-		for _, criterion in ipairs(sideState.sorts or {}) do
-			if criterion.enabled then
-				hasSort = true
-				break
-			end
-		end
-		if hasSort and #rows > 1 then
-			table.sort(rows, function(a, b)
-				return tradeFilterCompare(a, b, side, sideState)
-			end)
-		end
-	end
-
-	cache.signature = signature
-	cache.query = cacheQuery
-	cache.version = TRADE_FILTER_STATE_VERSION
-	cache.rows = rows
-	return rows
-end
-
-function tradeFilterApplyExecutionOrder(list, side)
-	tradeFilterEnsureLoaded()
-	if type(list) ~= "table" or #list <= 1 then
-		return false
-	end
-
-	local sideState = tradeFilterState[side] or tradeFilterDefaultSide(side)
-	for index, item in ipairs(list) do
-		if type(item) == "table" then
-			item.position_tab = index
-		end
-	end
-
-	local hasSort = tradeFilterHasSelectedCategory(sideState)
-	for _, criterion in ipairs(sideState.sorts or {}) do
-		if criterion.enabled then
-			hasSort = true
-			break
-		end
-	end
-	if not hasSort then
-		return false
-	end
-
-	table.sort(list, function(a, b)
-		if type(a) ~= "table" then
-			return false
-		end
-		if type(b) ~= "table" then
-			return true
-		end
-		return tradeFilterCompare(a, b, side, sideState)
-	end)
-
-	for index, item in ipairs(list) do
-		if type(item) == "table" then
-			item.position_tab = index
-		end
-	end
-
-	tradeFilterInvalidate(side)
-	return true
-end
-
-function tradeFilterToggleValue(side, section, key, value)
-	tradeFilterEnsureLoaded()
-	local sideState = tradeFilterState[side]
-	if section == "filters" then
-		-- Legacy boolean filters are intentionally disabled for both panels.
-		sideState.filters[key] = false
-	elseif section == "categories" then
-		-- All item types are permanently enabled.
-		sideState.categories[key] = true
-	end
-	tradeFilterSave()
-	tradeFilterInvalidate(side)
-end
-
-function tradeFilterSetSortEnabled(side, index, enabled)
-	tradeFilterEnsureLoaded()
-	local sideState = tradeFilterState[side]
-	local row = sideState.sorts[index]
-	if not row then return end
-	row.enabled = enabled == true
-	if row.enabled and (row.id == "price_asc" or row.id == "price_desc") then
-		local opposite = row.id == "price_asc" and "price_desc" or "price_asc"
-		for _, other in ipairs(sideState.sorts) do
-			if other.id == opposite then
-				other.enabled = false
-			end
-		end
-	end
-	tradeFilterSave()
-	tradeFilterInvalidate(side)
-end
-
-function tradeFilterMoveSort(side, index, delta)
-	tradeFilterEnsureLoaded()
-	local list = tradeFilterState[side].sorts
-	local target = index + delta
-	if target < 1 or target > #list then return end
-	list[index], list[target] = list[target], list[index]
-	tradeFilterSave()
-	tradeFilterInvalidate(side)
-end
-
-function tradeFilterMoveCategory(side, index, delta)
-	tradeFilterEnsureLoaded()
-	local list = tradeFilterState[side].category_order
-	local target = index + delta
-	if target < 1 or target > #list then return end
-	list[index], list[target] = list[target], list[index]
-	tradeFilterSave()
-	tradeFilterInvalidate(side)
-end
-
-
-TRADE_FILTER_CATEGORY_DRAG_STATE = TRADE_FILTER_CATEGORY_DRAG_STATE or {
-	sell = { active = false, category = nil, moved = false },
-	buy = { active = false, category = nil, moved = false }
-}
-
-TRADE_FILTER_CATEGORY_JUMP_REQUEST = TRADE_FILTER_CATEGORY_JUMP_REQUEST or {
-	sell = nil,
-	buy = nil
-}
-
-TRADE_FILTER_NEW_ONLY = TRADE_FILTER_NEW_ONLY or {
-	sell = false,
-	buy = false
-}
-
-TRADE_FILTER_NEW_ITEMS = TRADE_FILTER_NEW_ITEMS or {
-	sell = setmetatable({}, { __mode = "k" }),
-	buy = setmetatable({}, { __mode = "k" })
-}
-
-TRADE_FILTER_NEW_ITEM_SERIAL = tonumber(TRADE_FILTER_NEW_ITEM_SERIAL) or 0
-
-function tradeFilterGetNewItemSet(side)
-	if side ~= "sell" and side ~= "buy" then
-		return nil
-	end
-	if type(TRADE_FILTER_NEW_ITEMS[side]) ~= "table" then
-		TRADE_FILTER_NEW_ITEMS[side] = setmetatable({}, { __mode = "k" })
-	end
-	return TRADE_FILTER_NEW_ITEMS[side]
-end
-
-function tradeFilterMarkNewItem(side, item)
-	if type(item) ~= "table" then
-		return false
-	end
-	local newItems = tradeFilterGetNewItemSet(side)
-	if not newItems then
-		return false
-	end
-	TRADE_FILTER_NEW_ITEM_SERIAL = TRADE_FILTER_NEW_ITEM_SERIAL + 1
-	newItems[item] = TRADE_FILTER_NEW_ITEM_SERIAL
-	tradeFilterInvalidate(side)
-	return true
-end
-
-function tradeFilterIsNewItem(side, item)
-	local newItems = tradeFilterGetNewItemSet(side)
-	return type(item) == "table" and newItems ~= nil and newItems[item] ~= nil
-end
-
-function tradeFilterCountNewItems(side, list)
-	if type(list) ~= "table" then
-		return 0
-	end
-	local count = 0
-	for _, item in ipairs(list) do
-		if tradeFilterIsNewItem(side, item) then
-			count = count + 1
-		end
-	end
-	return count
-end
-
-function tradeFilterIsNewOnly(side)
-	return (side == "sell" or side == "buy") and TRADE_FILTER_NEW_ONLY[side] == true
-end
-
-function tradeFilterSetNewOnly(side, enabled)
-	if side ~= "sell" and side ~= "buy" then
-		return false
-	end
-	local newState = enabled == true
-	if TRADE_FILTER_NEW_ONLY[side] == newState then
-		return false
-	end
-	TRADE_FILTER_NEW_ONLY[side] = newState
-	if newState then
-		tradeFilterClearCategoryJump(side)
-	end
-	tradeFilterInvalidate(side)
-	return true
-end
-
-function tradeFilterGetCategoryDragState(side)
-	if type(TRADE_FILTER_CATEGORY_DRAG_STATE[side]) ~= "table" then
-		TRADE_FILTER_CATEGORY_DRAG_STATE[side] = { active = false, category = nil, moved = false }
-	end
-	return TRADE_FILTER_CATEGORY_DRAG_STATE[side]
-end
-
-function tradeFilterRequestCategoryJump(side, category)
-	if side ~= "sell" and side ~= "buy" then
-		return false
-	end
-	if type(category) ~= "string" or not TRADE_FILTER_CATEGORY_LABELS[category] then
-		return false
-	end
-	TRADE_FILTER_CATEGORY_JUMP_REQUEST[side] = category
-	return true
-end
-
-function tradeFilterConsumeCategoryJump(side, category)
-	if TRADE_FILTER_CATEGORY_JUMP_REQUEST[side] ~= category then
-		return false
-	end
-	TRADE_FILTER_CATEGORY_JUMP_REQUEST[side] = nil
-	return true
-end
-
-function tradeFilterClearCategoryJump(side)
-	if side == "sell" or side == "buy" then
-		TRADE_FILTER_CATEGORY_JUMP_REQUEST[side] = nil
-	end
-end
-
-function tradeFilterFindCategoryIndex(side, category)
-	tradeFilterEnsureLoaded()
-	local list = tradeFilterState[side] and tradeFilterState[side].category_order or nil
-	if type(list) ~= "table" then return nil end
-	for i, value in ipairs(list) do
-		if value == category then return i end
-	end
-	return nil
-end
-
-function tradeFilterMoveCategoryTo(side, fromIndex, toIndex)
-	tradeFilterEnsureLoaded()
-	local list = tradeFilterState[side] and tradeFilterState[side].category_order or nil
-	if type(list) ~= "table" then return false end
-	fromIndex = tonumber(fromIndex)
-	toIndex = tonumber(toIndex)
-	if not fromIndex or not toIndex then return false end
-	fromIndex = math.floor(fromIndex)
-	toIndex = math.floor(toIndex)
-	if fromIndex < 1 or fromIndex > #list or toIndex < 1 or toIndex > #list or fromIndex == toIndex then
-		return false
-	end
-	local value = table.remove(list, fromIndex)
-	if not value then return false end
-	table.insert(list, toIndex, value)
-	tradeFilterSave()
-	tradeFilterInvalidate(side)
-	return true
-end
-
-TRADE_FILTER_TRAINING_JSON_PATHS = {
-	buy = "moonloader/ArzMarket/buy_filter_training.json",
-	sell = "moonloader/ArzMarket/sell_filter_training.json"
-}
-TRADE_FILTER_TRAINING_LOG_PATHS = {
-	buy = getWorkingDirectory() .. "/ArzMarket/buy_filter_training.log",
-	sell = getWorkingDirectory() .. "/ArzMarket/sell_filter_training.log"
-}
-TRADE_FILTER_TRAINING_MAX_CHANGES = 2000
-
-function tradeFilterTrainingUtf8(value)
-	local text = tostring(value or "")
-	local ok, converted = pcall(function()
-		return u8(text)
-	end)
-	if ok and converted ~= nil then
-		return tostring(converted)
-	end
-	return text
-end
-
-function tradeFilterTrainingCleanText(value)
-	return tradeFilterTrainingUtf8(value):gsub("[\r\n\t]", " ")
-end
-
-function tradeFilterGetAutomaticItemCategory(item)
-	if type(item) ~= "table" then
-		return "other"
-	end
-
-	local previousManual = item.trade_filter_category
-	item.trade_filter_category = nil
-	local ok, automaticCategory = pcall(tradeFilterItemCategory, item)
-	item.trade_filter_category = previousManual
-
-	if ok and type(automaticCategory) == "string" and TRADE_FILTER_CATEGORY_LABELS[automaticCategory] then
-		return automaticCategory
-	end
-	return "other"
-end
-
-function tradeFilterTrainingLoad(side)
-	side = side == "sell" and "sell" or "buy"
-	local data = nil
-	local trainingPath = TRADE_FILTER_TRAINING_JSON_PATHS[side]
-	local ok, loaded = pcall(readJsonFile, trainingPath)
-	if ok and type(loaded) == "table" then
-		data = loaded
-	end
-	if type(data) ~= "table" then
-		data = {}
-	end
-	if type(data.items) ~= "table" then
-		data.items = {}
-	end
-	if type(data.changes) ~= "table" then
-		data.changes = {}
-	end
-	data.version = 1
-	return data
-end
-
-function tradeFilterTrainingItemKey(item)
-	local itemId = item and (item.item_id or item.foreign_item_id or item.itemId) or nil
-	if itemId ~= nil and tostring(itemId) ~= "" then
-		return "id:" .. tostring(itemId)
-	end
-
-	local normalizedName = tradeFilterNormalizeName(item and item.name or "")
-	return "name:" .. tradeFilterTrainingUtf8(normalizedName)
-end
-
-function tradeFilterTrainingRecord(side, item, oldManualCategory, newManualCategory, automaticCategory, configSaveAttempted, configSaved)
-	if type(item) ~= "table" then
-		return false
-	end
-
-	side = side == "sell" and "sell" or "buy"
-	local data = tradeFilterTrainingLoad(side)
-	local timestamp = os.time()
-	local itemName = tradeFilterTrainingCleanText(item.name)
-	local key = tradeFilterTrainingItemKey(item)
-	local finalCategory = newManualCategory or automaticCategory or "other"
-	local activeConfigName = side == "sell" and loadedSellConfig or loadedBuyConfig
-	local configName = tradeFilterTrainingCleanText(activeConfigName or "")
-
-	local record = {
-		time = timestamp,
-		time_text = os.date("%Y-%m-%d %H:%M:%S", timestamp),
-		source = side .. "_dropdown",
-		config = configName,
-		item_name = itemName,
-		item_id = item.item_id or item.foreign_item_id or item.itemId,
-		model_id = item.model_id or item.foreign_model_id or item.modelId or item.model,
-		server_type = item.server_type or item.serverType or item.item_type or item.itemType,
-		explicit_category = item.category or item.server_category or item.item_category,
-		auto_category = automaticCategory or "other",
-		auto_category_label = tradeFilterTrainingUtf8(TRADE_FILTER_CATEGORY_LABELS[automaticCategory or "other"] or automaticCategory or "other"),
-		old_manual_category = oldManualCategory or "auto",
-		new_manual_category = newManualCategory or "auto",
-		final_category = finalCategory,
-		final_category_label = tradeFilterTrainingUtf8(TRADE_FILTER_CATEGORY_LABELS[finalCategory] or finalCategory),
-		config_save_attempted = configSaveAttempted == true,
-		config_saved = configSaveAttempted ~= true or configSaved == true
-	}
-
-	data.updated_at = timestamp
-	data.updated_at_text = record.time_text
-	data.items[key] = record
-	data.changes[#data.changes + 1] = record
-	while #data.changes > TRADE_FILTER_TRAINING_MAX_CHANGES do
-		table.remove(data.changes, 1)
-	end
-
-	local jsonSaved = false
-	local trainingJsonPath = TRADE_FILTER_TRAINING_JSON_PATHS[side]
-	local trainingLogPath = TRADE_FILTER_TRAINING_LOG_PATHS[side]
-	local okJson, jsonResult = pcall(writeJsonFile, data, trainingJsonPath)
-	if okJson and jsonResult == true then
-		jsonSaved = true
-	end
-
-	local logLine = string.format(
-		"[%s] item=\"%s\" id=%s model=%s server_type=%s config=\"%s\" auto=%s old_manual=%s new_manual=%s final=%s config_saved=%s",
-		record.time_text,
-		itemName:gsub('"', "'"),
-		tostring(record.item_id or ""),
-		tostring(record.model_id or ""),
-		tostring(record.server_type or ""),
-		configName:gsub('"', "'"),
-		tostring(record.auto_category),
-		tostring(record.old_manual_category),
-		tostring(record.new_manual_category),
-		tostring(record.final_category),
-		tostring(record.config_saved)
-	)
-
-	local logOk = false
-	local file = io.open(trainingLogPath, "ab")
-	if file then
-		file:write(logLine .. "\r\n")
-		file:flush()
-		file:close()
-		logOk = true
-	end
-
-	local trainingTag = side == "sell" and "SellFilterTraining" or "BuyFilterTraining"
-	pcall(saveLog, "[ArzMarket][" .. trainingTag .. "] " .. tostring(item.name or "")
-		.. " | auto=" .. tostring(record.auto_category)
-		.. " | manual=" .. tostring(record.new_manual_category)
-		.. " | final=" .. tostring(record.final_category))
-
-	return jsonSaved or logOk
-end
-
-function tradeFilterSetItemCategory(side, item, category)
-	if type(item) ~= "table" then
-		return false
-	end
-
-	local oldManualCategory = nil
-	if type(item.trade_filter_category) == "string" and TRADE_FILTER_CATEGORY_LABELS[item.trade_filter_category] then
-		oldManualCategory = item.trade_filter_category
-	end
-	local automaticCategory = tradeFilterGetAutomaticItemCategory(item)
-	local newManualCategory = nil
-
-	if category == nil or category == "" or category == "auto" then
-		newManualCategory = nil
-	elseif TRADE_FILTER_CATEGORY_LABELS[category] then
-		newManualCategory = category
-	else
-		return false
-	end
-
-	if oldManualCategory == newManualCategory then
-		return true
-	end
-
-	item.trade_filter_category = newManualCategory
-	tradeFilterInvalidate(side)
-
-	local configSaveAttempted = false
-	local configSaved = true
-
-	-- Save the active config immediately so the assignment survives restart.
-	if side == "buy" and type(buyList) == "table" and loadedBuyConfig and loadedBuyConfig ~= "" then
-		configSaveAttempted = true
-		configFileNames.buy = loadedBuyConfig:match("(.+)%.json") and loadedBuyConfig or loadedBuyConfig .. ".json"
-		configSaved = createConfig("buy-cfg/" .. configFileNames.buy, buyList, "buy-cfg", configFileNames.buy) == true
-	elseif side == "sell" and type(sellList) == "table" and loadedSellConfig and loadedSellConfig ~= "" then
-		configSaveAttempted = true
-		configFileNames.sell = loadedSellConfig:match("(.+)%.json") and loadedSellConfig or loadedSellConfig .. ".json"
-		configSaved = createConfig("sell-cfg/" .. configFileNames.sell, sellList, "sell-cfg", configFileNames.sell) == true
-	end
-
-	if side == "buy" or side == "sell" then
-		pcall(tradeFilterTrainingRecord, side, item, oldManualCategory, newManualCategory, automaticCategory, configSaveAttempted, configSaved)
-	end
-
-	return true
-end
-
-function tradeFilterCancelCategoryDrag(side)
-	local state = tradeFilterGetCategoryDragState(side)
-	state.active = false
-	state.category = nil
-	state.moved = false
-end
-
-function tradeFilterResetSide(side)
-	tradeFilterEnsureLoaded()
-	tradeFilterState[side] = tradeFilterDefaultSide(side)
-	tradeFilterSave()
-	tradeFilterInvalidate(side)
-end
-
 function tradeFilterRenderBool(side, label, section, key)
 	local sideState = tradeFilterState[side]
 	local source = section == "filters" and sideState.filters or sideState.categories
@@ -15163,1166 +10089,7 @@ function tradeFilterRenderBool(side, label, section, key)
 	end
 end
 
-function tradeFilterRenderPanel(side)
-	tradeFilterEnsureLoaded()
-	if not menuVisible[0] or not menuWP or not sizeX or not sizeY then
-		return
-	end
 
-	if sellFilterWindowVisible then
-		sellFilterWindowVisible[0] = false
-	end
-
-	local uiScale = getMenuUiScale()
-	local sideState = tradeFilterState[side]
-
-	-- Fit the attached panel to its actual content instead of stretching it
-	-- to the full main-menu height.
-	local maxTextWidth = 0
-	imgui.PushFont(fonts[20])
-	for index, category in ipairs(sideState.category_order or {}) do
-		local numberedLabel = tostring(index) .. ". " .. u8(TRADE_FILTER_CATEGORY_LABELS[category] or category)
-		local labelSize = imgui.CalcTextSize(numberedLabel)
-		maxTextWidth = math.max(maxTextWidth, tonumber(labelSize.x) or 0)
-	end
-	local categoryTextHeight = math.max(1, tonumber(imgui.GetTextLineHeight()) or 20)
-	imgui.PopFont()
-
-	local windowPadX = 12
-	local windowPadY = 12
-	local categoryGap = math.max(2, 2 * uiScale)
-	local itemSpacingY = math.max(2, tonumber(imgui.GetStyle().ItemSpacing.y) or 5)
-	local categoryCount = math.max(1, #(sideState.category_order or {}))
-
-	local buttonWidthForMeasure = math.max(54, 56 * uiScale)
-	local buttonHeightForMeasure = math.max(42, 44 * uiScale)
-	local buttonGapForMeasure = math.max(12, 14 * uiScale)
-	local newButtonHeightForMeasure = math.max(30, 32 * uiScale)
-	local newButtonToPriceGap = math.max(6, 6 * uiScale)
-	local controlsToListGap = math.max(6, 6 * uiScale)
-
-	local contentHeight = math.ceil(
-		windowPadY * 2
-		+ newButtonHeightForMeasure
-		+ newButtonToPriceGap
-		+ buttonHeightForMeasure
-		+ controlsToListGap
-		+ categoryCount * categoryTextHeight
-		+ math.max(0, categoryCount - 1) * (itemSpacingY + categoryGap)
-	)
-
-	local contentWidth = math.ceil(
-		math.max(
-			maxTextWidth + windowPadX * 2 + 42,
-			buttonWidthForMeasure * 2 + buttonGapForMeasure + windowPadX * 2,
-			300
-		)
-	)
-
-	-- Width and height are intentionally independent.
-	-- The previous square constraint made the panel far too wide because
-	-- the height required by 11 rows was copied into the width.
-	local panelWidth = math.min(350, math.max(300, contentWidth))
-	local bottomSafetyPadding = math.max(22, 24 * uiScale)
-	local panelHeight = math.ceil(contentHeight + bottomSafetyPadding)
-
-	-- Keep the filter panel locked to the main ArzMarket window.
-	local filterPanelOffsetY = 65
-	imgui.SetNextWindowPos(
-		imgui.ImVec2(menuWP.x + sizeX, menuWP.y + filterPanelOffsetY),
-		imgui.Cond.Always
-	)
-	imgui.SetNextWindowSize(imgui.ImVec2(panelWidth, panelHeight), imgui.Cond.Always)
-
-	local flags = imgui.WindowFlags.NoMove
-		+ imgui.WindowFlags.NoResize
-		+ imgui.WindowFlags.NoCollapse
-		+ imgui.WindowFlags.NoTitleBar
-		+ imgui.WindowFlags.NoSavedSettings
-		+ imgui.WindowFlags.NoScrollbar
-		+ imgui.WindowFlags.NoScrollWithMouse
-
-	imgui.PushStyleColor(
-		imgui.Col.WindowBg,
-		imgui.ImVec4(
-			menuThemeConfig.window[1],
-			menuThemeConfig.window[2],
-			menuThemeConfig.window[3],
-			0.98
-		)
-	)
-	imgui.PushStyleColor(
-		imgui.Col.Border,
-		imgui.ImVec4(
-			menuThemeConfig.Border[1],
-			menuThemeConfig.Border[2],
-			menuThemeConfig.Border[3],
-			menuThemeConfig.Border[4]
-		)
-	)
-	imgui.PushStyleVarFloat(imgui.StyleVar.WindowBorderSize, 1)
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(windowPadX, windowPadY))
-
-	imgui.Begin("TradeFilterAttached##" .. side, nil, flags)
-	arzBaronAnchorRecordWindow(side == "sell" and "sell_filter_panel" or "buy_filter_panel")
-	if imgui.GetScrollY() ~= 0 then
-		imgui.SetScrollY(0)
-	end
-
-	local newOnly = tradeFilterIsNewOnly(side)
-	local currentList = side == "sell" and sellList or buyList
-	local newItemsCount = tradeFilterCountNewItems(side, currentList)
-	local activeColor = menuThemeConfig.active_toggle_button or { 0.516, 0.505, 0.977 }
-
-	if newOnly then
-		imgui.PushStyleColor(
-			imgui.Col.Text,
-			imgui.ImVec4(activeColor[1], activeColor[2], activeColor[3], 1)
-		)
-	end
-
-	imgui.PushFont(fonts[18])
-	local newItemsClicked = imgui.CustomOnlyBorderButton(
-		u8(u8:decode("Новые товары")) .. " (" .. tostring(newItemsCount) .. ")##tf_new_items_" .. side,
-		imgui.ImVec2(math.max(1, imgui.GetContentRegionAvail().x), newButtonHeightForMeasure)
-	)
-	imgui.PopFont()
-
-	if newOnly then
-		imgui.PopStyleColor()
-	end
-
-	if imgui.IsItemHovered() then
-		imgui.SetTooltip(u8(u8:decode("Показать только товары, добавленные в текущий список во время этой сессии.")))
-	end
-
-	if newItemsClicked then
-		tradeFilterSetNewOnly(side, not newOnly)
-		newOnly = tradeFilterIsNewOnly(side)
-	end
-
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + newButtonToPriceGap)
-
-	local priceAscIndex = nil
-	local priceDescIndex = nil
-
-	for index, row in ipairs(sideState.sorts or {}) do
-		if row.id == "price_asc" then
-			priceAscIndex = index
-		elseif row.id == "price_desc" then
-			priceDescIndex = index
-		end
-	end
-
-	local buttonWidth = buttonWidthForMeasure
-	local buttonHeight = buttonHeightForMeasure
-	local buttonGap = buttonGapForMeasure
-	local controlsWidth = buttonWidth * 2 + buttonGap
-	local controlsAvail = tonumber(imgui.GetContentRegionAvail().x) or controlsWidth
-	local controlsStartX = imgui.GetCursorPos().x + math.max(0, (controlsAvail - controlsWidth) * 0.5)
-
-	imgui.SetCursorPosX(controlsStartX)
-
-	local ascEnabled = not newOnly
-		and priceAscIndex
-		and sideState.sorts[priceAscIndex]
-		and sideState.sorts[priceAscIndex].enabled == true
-		or false
-
-	if ascEnabled then
-		imgui.PushStyleColor(
-			imgui.Col.Text,
-			imgui.ImVec4(activeColor[1], activeColor[2], activeColor[3], 1)
-		)
-	end
-
-	imgui.PushFont(fonts[18])
-	local ascClicked = imgui.CustomOnlyBorderButton(
-		fa("ARROW_UP_SHORT_WIDE") .. "##tf_price_asc_" .. side,
-		imgui.ImVec2(buttonWidth, buttonHeight)
-	)
-	imgui.PopFont()
-
-	if ascEnabled then
-		imgui.PopStyleColor()
-	end
-
-	if imgui.IsItemHovered() then
-		imgui.SetTooltip("Сначала дешевле")
-	end
-
-	if ascClicked and priceAscIndex then
-		if tradeFilterIsNewOnly(side) then
-			tradeFilterSetNewOnly(side, false)
-			tradeFilterSetSortEnabled(side, priceAscIndex, true)
-		else
-			tradeFilterSetSortEnabled(side, priceAscIndex, not ascEnabled)
-		end
-	end
-
-	imgui.SameLine(0, buttonGap)
-
-	local descEnabled = not newOnly
-		and priceDescIndex
-		and sideState.sorts[priceDescIndex]
-		and sideState.sorts[priceDescIndex].enabled == true
-		or false
-
-	if descEnabled then
-		imgui.PushStyleColor(
-			imgui.Col.Text,
-			imgui.ImVec4(activeColor[1], activeColor[2], activeColor[3], 1)
-		)
-	end
-
-	imgui.PushFont(fonts[18])
-	local descClicked = imgui.CustomOnlyBorderButton(
-		fa("ARROW_DOWN_WIDE_SHORT") .. "##tf_price_desc_" .. side,
-		imgui.ImVec2(buttonWidth, buttonHeight)
-	)
-	imgui.PopFont()
-
-	if descEnabled then
-		imgui.PopStyleColor()
-	end
-
-	if imgui.IsItemHovered() then
-		imgui.SetTooltip("Сначала дороже")
-	end
-
-	if descClicked and priceDescIndex then
-		if tradeFilterIsNewOnly(side) then
-			tradeFilterSetNewOnly(side, false)
-			tradeFilterSetSortEnabled(side, priceDescIndex, true)
-		else
-			tradeFilterSetSortEnabled(side, priceDescIndex, not descEnabled)
-		end
-	end
-
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + controlsToListGap)
-
-	-- Only centered draggable category text remains below the price controls.
-	-- Render directly in the square panel so there is no inner scrollbar.
-	imgui.PushFont(fonts[20])
-
-	local dragState = tradeFilterGetCategoryDragState(side)
-	local pendingCategoryTarget = nil
-	local mousePos = imgui.GetMousePos()
-
-	for index, category in ipairs(sideState.category_order) do
-		sideState.categories[category] = true
-
-		local label = tostring(index) .. ". " .. u8(TRADE_FILTER_CATEGORY_LABELS[category] or category)
-		local textSize = imgui.CalcTextSize(label)
-		local availWidth = tonumber(imgui.GetContentRegionAvail().x) or textSize.x
-		local baseX = imgui.GetCursorPos().x
-		local centeredX = baseX + math.max(0, (availWidth - textSize.x) * 0.5)
-
-		imgui.SetCursorPosX(centeredX)
-
-		local screenPos = imgui.GetCursorScreenPos()
-		local hovered = mousePos.x >= screenPos.x
-			and mousePos.x <= screenPos.x + textSize.x
-			and mousePos.y >= screenPos.y
-			and mousePos.y <= screenPos.y + textSize.y
-
-		local highlighted = hovered or (dragState.active and dragState.category == category)
-
-		if highlighted then
-			imgui.TextColored(
-				imgui.ImVec4(1.0, 0.18, 0.18, 1.0),
-				"%s",
-				label
-			)
-		else
-			imgui.Text("%s", label)
-		end
-
-		local rowMin = imgui.GetItemRectMin()
-		local rowMax = imgui.GetItemRectMax()
-
-		if not dragState.active and imgui.IsItemHovered() and imgui.IsMouseClicked(0) then
-			if tradeFilterIsNewOnly(side) then
-				tradeFilterSetNewOnly(side, false)
-			end
-			dragState.active = true
-			dragState.category = category
-			dragState.moved = false
-		end
-
-		if dragState.active
-			and imgui.IsMouseDown(0)
-			and mousePos.y >= rowMin.y
-			and mousePos.y <= rowMax.y
-		then
-			local sourceIndex = tradeFilterFindCategoryIndex(side, dragState.category)
-
-			if sourceIndex and sourceIndex ~= index then
-				pendingCategoryTarget = index
-				dragState.moved = true
-			end
-		end
-
-		if index < #sideState.category_order then
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + categoryGap)
-		end
-	end
-
-
-	if pendingCategoryTarget then
-		local sourceIndex = tradeFilterFindCategoryIndex(side, dragState.category)
-
-		if sourceIndex and sourceIndex ~= pendingCategoryTarget then
-			if tradeFilterMoveCategoryTo(side, sourceIndex, pendingCategoryTarget) then
-				dragState.moved = true
-			end
-		end
-	end
-
-	if dragState.active and not imgui.IsMouseDown(0) then
-		local clickedCategory = dragState.category
-		local wasMoved = dragState.moved == true
-		tradeFilterCancelCategoryDrag(side)
-		if not wasMoved and clickedCategory then
-			tradeFilterRequestCategoryJump(side, clickedCategory)
-		end
-	end
-
-	imgui.PopFont()
-	imgui.End()
-
-	imgui.PopStyleVar(2)
-	imgui.PopStyleColor(2)
-end
-
-
--- Persistent manual listing of items bought by the player's own buy booth.
--- The ledger stores only quantities that have not yet been successfully listed
--- through the manual action. Prices are always taken from the CURRENT sell config.
-manualPurchasedState = {
-	path = "moonloader/ArzMarket/manual_purchased.json",
-	version = 1,
-	items = {},
-	running = false,
-	sellListBackup = nil,
-	attemptQueue = {},
-	startedAt = 0,
-	lastSavedAt = 0
-}
-
-function manualPurchasedNormalizeName(name)
-	if type(cycleNormalizeName) == "function" then
-		return cycleNormalizeName(name)
-	end
-	local value = tostring(name or ""):gsub("{......}", ""):gsub("%s+", "")
-	if string.nlower then
-		return string.nlower(value)
-	end
-	return string.lower(value)
-end
-
-function manualPurchasedLoad()
-	local raw = readJsonFile(manualPurchasedState.path, { version = 1, items = {} })
-	local sourceItems = type(raw) == "table" and type(raw.items) == "table" and raw.items or {}
-	local normalized = {}
-	for _, row in pairs(sourceItems) do
-		if type(row) == "table" then
-			local name = tostring(row.name or "")
-			local count = math.max(0, math.floor(tonumber(row.count) or 0))
-			local key = manualPurchasedNormalizeName(name)
-			if key ~= "" and count > 0 then
-				normalized[key] = {
-					name = name,
-					count = count,
-					updated_at = tonumber(row.updated_at) or os.time()
-				}
-			end
-		end
-	end
-	manualPurchasedState.items = normalized
-	return normalized
-end
-
-function manualPurchasedSave()
-	local payload = {
-		version = manualPurchasedState.version,
-		updated_at = os.time(),
-		items = manualPurchasedState.items
-	}
-	local okEncode, encoded = pcall(encodeJson, payload)
-	if not okEncode or type(encoded) ~= "string" or encoded == "" then
-		return false
-	end
-	local tempPath = manualPurchasedState.path .. ".tmp"
-	local file = io.open(tempPath, "wb")
-	if not file then
-		return false
-	end
-	local okWrite = pcall(function()
-		file:write(encoded)
-		file:flush()
-	end)
-	pcall(file.close, file)
-	if not okWrite then
-		pcall(os.remove, tempPath)
-		return false
-	end
-	if doesFileExist(manualPurchasedState.path) then
-		pcall(os.remove, manualPurchasedState.path)
-	end
-	local renamed = os.rename(tempPath, manualPurchasedState.path)
-	if not renamed then
-		pcall(os.remove, tempPath)
-		return false
-	end
-	manualPurchasedState.lastSavedAt = os.time()
-	return true
-end
-
-function manualPurchasedRemember(itemName, count)
-	local key = manualPurchasedNormalizeName(itemName)
-	if key == "" then
-		return false
-	end
-	local qty = math.max(1, math.floor(tonumber(count) or 1))
-	local row = manualPurchasedState.items[key]
-	if type(row) ~= "table" then
-		row = { name = tostring(itemName or ""), count = 0, updated_at = os.time() }
-		manualPurchasedState.items[key] = row
-	end
-	row.name = tostring(itemName or row.name or "")
-	row.count = math.max(0, math.floor(tonumber(row.count) or 0)) + qty
-	row.updated_at = os.time()
-	manualPurchasedSave()
-	return true
-end
-
-function manualPurchasedConsume(itemName, count)
-	local key = manualPurchasedNormalizeName(itemName)
-	local row = manualPurchasedState.items[key]
-	if type(row) ~= "table" then
-		return false
-	end
-	local qty = math.max(1, math.floor(tonumber(count) or 1))
-	row.count = math.max(0, math.floor(tonumber(row.count) or 0) - qty)
-	row.updated_at = os.time()
-	if row.count <= 0 then
-		manualPurchasedState.items[key] = nil
-	end
-	manualPurchasedSave()
-	return true
-end
-
-function manualPurchasedGetTotalCount()
-	local total = 0
-	for _, row in pairs(manualPurchasedState.items or {}) do
-		if type(row) == "table" then
-			total = total + math.max(0, math.floor(tonumber(row.count) or 0))
-		end
-	end
-	return total
-end
-
-function manualPurchasedRestoreSellList()
-	if manualPurchasedState.sellListBackup then
-		sellList = manualPurchasedState.sellListBackup
-		manualPurchasedState.sellListBackup = nil
-	end
-end
-
-function manualPurchasedTrackAttempt(itemName, itemCount)
-	if not manualPurchasedState.running then
-		return
-	end
-	local key = manualPurchasedNormalizeName(itemName)
-	if key == "" then
-		return
-	end
-	manualPurchasedState.attemptQueue[#manualPurchasedState.attemptQueue + 1] = {
-		key = key,
-		name = tostring(itemName or ""),
-		count = math.max(1, math.floor(tonumber(itemCount) or 1))
-	}
-end
-
-function manualPurchasedRejectAttempt()
-	if not manualPurchasedState.running then
-		return
-	end
-	if #manualPurchasedState.attemptQueue > 0 then
-		table.remove(manualPurchasedState.attemptQueue, 1)
-	end
-end
-
-function manualPurchasedConfirmListed(message)
-	if not manualPurchasedState.running or #manualPurchasedState.attemptQueue == 0 then
-		return false
-	end
-	local listedName = tostring(message or ""):match(u8:decode("Товар%s+(.+)%s+успешно"))
-	local wantedKey = listedName and manualPurchasedNormalizeName(listedName) or nil
-	local attemptIndex = nil
-	if wantedKey and wantedKey ~= "" then
-		for index, attempt in ipairs(manualPurchasedState.attemptQueue) do
-			if attempt.key == wantedKey then
-				attemptIndex = index
-				break
-			end
-		end
-	end
-	attemptIndex = attemptIndex or 1
-	local attempt = table.remove(manualPurchasedState.attemptQueue, attemptIndex)
-	if type(attempt) ~= "table" then
-		return false
-	end
-	manualPurchasedConsume(attempt.name, attempt.count)
-	return true
-end
-
-function manualPurchasedBuildSellList()
-	local filtered = {}
-	local matchedKeys = {}
-	for _, item in ipairs(sellList or {}) do
-		if type(item) == "table" then
-			local key = manualPurchasedNormalizeName(item.name)
-			local row = manualPurchasedState.items[key]
-			local pendingCount = type(row) == "table" and math.max(0, math.floor(tonumber(row.count) or 0)) or 0
-			if pendingCount > 0 then
-				local clone = cycleClone(item)
-				clone.enabled = true
-				clone.maximum = false
-				clone.count = pendingCount
-				clone.all_count = tonumber(clone.all_count) or 0
-				filtered[#filtered + 1] = clone
-				matchedKeys[key] = true
-			end
-		end
-	end
-	return filtered, matchedKeys
-end
-
-function manualPurchasedStart()
-	if manualPurchasedState.running then
-		AFKMessage(u8:decode("Ручное выставление уже запущено."))
-		return false
-	end
-	if cycleTradeState and cycleTradeState.active or tradeAutomation.sell or tradeAutomation.buy then
-		AFKMessage(u8:decode("Сейчас выполняется другая торговая операция."))
-		return false
-	end
-	if manualPurchasedGetTotalCount() <= 0 then
-		AFKMessage(u8:decode("Нет скупленных товаров для выставления."))
-		return false
-	end
-	if loadedSellConfig == "" or type(sellList) ~= "table" or #sellList == 0 then
-		AFKMessage(u8:decode("Сначала загрузите конфиг продажи."))
-		return false
-	end
-	if is_invent_open ~= nil or marketState.custom_is_invent_open[1] ~= nil then
-		if is_invent_open ~= nil then
-			pcall(sampSendClickTextdraw, 65535)
-		end
-		AFKMessage(u8:decode("С открытым инвентарем функция не работает. Закройте инвентарь и повторите."))
-		return false
-	end
-
-	local serverAddress = select(1, sampGetCurrentServerAddress())
-	if serverIdByAddress[serverAddress] == 0 and viceCityMode or serverIdByAddress[serverAddress] ~= 0 and not viceCityMode then
-		AFKMessage(u8:decode("ВНИМАНИЕ! У вас установлен не тот режим продажи. Проверьте валюту."))
-		return false
-	end
-
-	local filtered = manualPurchasedBuildSellList()
-	if type(filtered) ~= "table" or #filtered == 0 then
-		AFKMessage(u8:decode("В текущем конфиге продажи нет скупленных товаров."))
-		return false
-	end
-
-	if not lowPriceGuardPreflight(filtered, "sell", "/crpurchased") then
-		return false
-	end
-
-	tradeFilterApplyExecutionOrder(filtered, "sell")
-
-	manualPurchasedState.sellListBackup = sellList
-	manualPurchasedState.running = true
-	manualPurchasedState.attemptQueue = {}
-	manualPurchasedState.startedAt = getGameTimer()
-	sellList = filtered
-
-	marketState.available_items_custom = {}
-	marketState.custom_is_invent_open = {
-		marketState.custom_is_invent_open[1],
-		os.clock(),
-		false,
-		-1,
-		1
-	}
-	sellStatusMessages = {}
-	sellScanMode = true
-	sellScanResults = {}
-	SendToServer("/stats")
-	AFKMessage(u8:decode("Подготовка к ручному выставлению скупленных товаров..."))
-
-	sell_check = true
-	tradeAutomationVisible[0] = true
-	tradeAutomation = {
-		sell = true,
-		buy = false,
-		score = 0,
-		score_from = #filtered
-	}
-	AFKMessage(u8:decode("Ручное выставление запущено. Товаров: ") .. tostring(#filtered))
-	return true
-end
-
-function manualPurchasedCancel()
-	if not manualPurchasedState.running then
-		return false
-	end
-	if tradeAutomation.sell then
-		off_sell_buy()
-	end
-	manualPurchasedRestoreSellList()
-	manualPurchasedState.running = false
-	manualPurchasedState.attemptQueue = {}
-	AFKMessage(u8:decode("Ручное выставление отменено."))
-	return true
-end
-
-function manualPurchasedUpdate()
-	if not manualPurchasedState.running then
-		return
-	end
-	if not tradeAutomation.sell then
-		manualPurchasedRestoreSellList()
-		manualPurchasedState.running = false
-		manualPurchasedState.attemptQueue = {}
-		AFKMessage(u8:decode("Ручное выставление завершено."))
-	end
-end
-
-manualPurchasedLoad()
-
-cycleTradeState = {
-	pending = {},
-	listedOutstanding = {},
-	active = nil,
-	sellListBackup = nil,
-	buyListBackup = nil,
-	nextActionAt = 0,
-	lastMissingNotice = {},
-	operationTimeoutMs = 30000
-}
-
-function cycleClone(value, seen)
-	if type(value) ~= "table" then
-		return value
-	end
-	seen = seen or {}
-	if seen[value] then
-		return seen[value]
-	end
-	local out = {}
-	seen[value] = out
-	for k, v in pairs(value) do
-		out[cycleClone(k, seen)] = cycleClone(v, seen)
-	end
-	return out
-end
-
-function cycleNormalizeName(name)
-	local value = tostring(name or ""):gsub("{......}", ""):gsub("%s+", "")
-	if string.nlower then
-		value = string.nlower(value)
-	else
-		value = string.lower(value)
-	end
-	return value
-end
-
-function cycleFindItem(list, itemName)
-	local wanted = cycleNormalizeName(itemName)
-	if type(list) ~= "table" or wanted == "" then
-		return nil, nil
-	end
-	for index, item in ipairs(list) do
-		if type(item) == "table" and cycleNormalizeName(item.name) == wanted then
-			return item, index
-		end
-	end
-	return nil, nil
-end
-
-function cycleGetConfigSellList()
-	return cycleTradeState.sellListBackup or sellList
-end
-
-function cycleGetConfigBuyList()
-	return cycleTradeState.buyListBackup or buyList
-end
-
-function cycleGetMarketBuyCount(itemName)
-	local wanted = cycleNormalizeName(itemName)
-	for index, marketName in ipairs(marketplacePayload.items_buy or {}) do
-		if cycleNormalizeName(marketName) == wanted then
-			return tonumber(marketplacePayload.count_buy[index]) or 0, index
-		end
-	end
-	return nil, nil
-end
-
-function cycleEntry(itemName)
-	local key = cycleNormalizeName(itemName)
-	if key == "" then
-		return nil, nil
-	end
-	local entry = cycleTradeState.pending[key]
-	if not entry then
-		entry = {
-			key = key,
-			name = tostring(itemName),
-			pendingSell = 0,
-			pendingRebuy = 0,
-			rebuildTarget = nil
-		}
-		cycleTradeState.pending[key] = entry
-	end
-	return entry, key
-end
-
-function cycleNotifyMissing(key, textValue)
-	local now = getGameTimer()
-	if not cycleTradeState.lastMissingNotice[key] or now - cycleTradeState.lastMissingNotice[key] > 10000 then
-		cycleTradeState.lastMissingNotice[key] = now
-		sendNotify(textValue)
-	end
-end
-
-function cycleRestoreTemporaryLists()
-	if cycleTradeState.sellListBackup then
-		sellList = cycleTradeState.sellListBackup
-		cycleTradeState.sellListBackup = nil
-	end
-	if cycleTradeState.buyListBackup then
-		buyList = cycleTradeState.buyListBackup
-		cycleTradeState.buyListBackup = nil
-	end
-end
-
-function cycleAbortActive(keepQueue)
-	local active = cycleTradeState.active
-	if not active then
-		cycleRestoreTemporaryLists()
-		return
-	end
-
-	if active.kind == "sell" then
-		sell_check = false
-		sellScanMode = false
-		sell_busy = false
-		need_to_sell = 0
-		if sell_alitems_d ~= nil then
-			lets_gooo = false
-		end
-	elseif active.kind == "readd_buy" then
-		-- Отдельного воркера здесь нет, общая торговая автоматика сбрасывается ниже.
-	end
-
-	tradeAutomationVisible[0] = false
-	tradeAutomation = { sell = false, buy = false, score = 1, score_from = 1 }
-	cycleRestoreTemporaryLists()
-	cycleTradeState.active = nil
-	cycleTradeState.nextActionAt = getGameTimer() + 800
-
-	if not keepQueue then
-		cycleTradeState.pending = {}
-		cycleTradeState.listedOutstanding = {}
-	end
-end
-
-function cycleCanStartAutomation()
-	if cycleTradeState.active then
-		return false
-	end
-	if tradeAutomation.sell or tradeAutomation.buy then
-		return false
-	end
-	if scanWorkerState[2] or clearWorkerState[2] then
-		return false
-	end
-	if buyScanMode or sellScanMode then
-		return false
-	end
-	if is_invent_open ~= nil or marketState.custom_is_invent_open[1] ~= nil then
-		return false
-	end
-	if getGameTimer() < cycleTradeState.nextActionAt then
-		return false
-	end
-	return true
-end
-
-function cycleStartSell(entry)
-	local sourceList = cycleGetConfigSellList()
-	local template = cycleFindItem(sourceList, entry.name)
-	if not template then
-		cycleNotifyMissing(entry.key .. ":sell", u8:decode("Автоцикл: предмет есть в скупке, но отсутствует в списке продажи: ") .. entry.name)
-		return false
-	end
-
-	local qty = math.max(1, math.floor(tonumber(entry.pendingSell) or 0))
-	if qty <= 0 then
-		return false
-	end
-
-	if not lowPriceGuardPreflight({ template }, "sell", false) then
-		if modificationState.setAutoCycleEnabled then
-			modificationState.setAutoCycleEnabled(false, false)
-		end
-		AFKMessage(u8:decode("Автоцикл отключён: цена продажи слишком низкая относительно средней."))
-		return false
-	end
-
-	local temporary = cycleClone(template)
-	temporary.enabled = true
-	temporary.maximum = false
-	temporary.count = qty
-	temporary.all_count = math.max(qty, tonumber(temporary.all_count) or qty)
-	temporary.slot_count = temporary.slot_count or { tostring(qty) }
-	temporary.slot_id = temporary.slot_id or { "0" }
-
-	cycleTradeState.sellListBackup = sellList
-	sellList = { temporary }
-	cycleTradeState.active = {
-		kind = "sell",
-		key = entry.key,
-		name = entry.name,
-		qty = qty,
-		startedAt = getGameTimer(),
-		accounted = false,
-		failed = false
-	}
-
-	sellStatusMessages = {}
-	sellScanMode = true
-	sellScanResults = {}
-	SendToServer("/stats")
-	sell_check = true
-	tradeAutomationVisible[0] = true
-	tradeAutomation = { sell = true, buy = false, score = 0, score_from = 1 }
-	sendNotify(u8:decode("Автоцикл: скуплено, ставлю на продажу: ") .. entry.name .. " x" .. tostring(qty))
-	return true
-end
-
-function cycleStartReaddBuy(active)
-	local template = active.buyTemplate or cycleFindItem(cycleGetConfigBuyList(), active.name)
-	if not template then
-		cycleNotifyMissing(active.key .. ":buy", u8:decode("Автоцикл: не найден шаблон скупки для: ") .. active.name)
-		cycleAbortActive(true)
-		return false
-	end
-
-	local temporary = cycleClone(template)
-	temporary.enabled = true
-	temporary.maximum = false
-	temporary.count_maximum = 0
-	temporary.count = math.max(1, math.floor(tonumber(active.targetCount) or 1))
-	temporary.continue = temporary.count
-
-	cycleTradeState.buyListBackup = buyList
-	buyList = { temporary }
-	active.kind = "readd_buy"
-	active.startedAt = getGameTimer()
-	active.success = false
-	active.failed = false
-	tradeAutomationVisible[0] = true
-	tradeAutomation = { sell = false, buy = true, score = 1, score_from = 1 }
-	setGameKeyState(21, 255)
-	sampForceOnfootSync()
-	return true
-end
-
-function cycleStartRebuild(entry)
-	local buyTemplate = cycleFindItem(cycleGetConfigBuyList(), entry.name)
-	if not buyTemplate then
-		cycleNotifyMissing(entry.key .. ":buy", u8:decode("Автоцикл: не найден шаблон скупки для: ") .. entry.name)
-		return false
-	end
-
-	if not lowPriceGuardPreflight({ buyTemplate }, "buy", false) then
-		if modificationState.setAutoCycleEnabled then
-			modificationState.setAutoCycleEnabled(false, false)
-		end
-		AFKMessage(u8:decode("Автоцикл отключён: цена скупки слишком низкая относительно средней."))
-		return false
-	end
-
-	local pendingQty = math.max(1, math.floor(tonumber(entry.pendingRebuy) or 0))
-	if pendingQty <= 0 then
-		return false
-	end
-
-	local currentCount = cycleGetMarketBuyCount(entry.name)
-	local targetCount = tonumber(entry.rebuildTarget)
-	if not targetCount then
-		targetCount = math.max(1, (tonumber(currentCount) or 0) + pendingQty)
-		entry.rebuildTarget = targetCount
-	end
-
-	local active = {
-		kind = currentCount and currentCount > 0 and "remove_buy" or "readd_wait",
-		key = entry.key,
-		name = entry.name,
-		pendingQty = pendingQty,
-		targetCount = targetCount,
-		buyTemplate = cycleClone(buyTemplate),
-		startedAt = getGameTimer(),
-		selectionSent = false,
-		failed = false,
-		nextActionAt = getGameTimer() + 250
-	}
-	cycleTradeState.active = active
-
-	if active.kind == "remove_buy" then
-		setGameKeyState(21, 255)
-		sampForceOnfootSync()
-	else
-		sendNotify(u8:decode("Автоцикл: продано, восстанавливаю скупку: ") .. entry.name .. " x" .. tostring(pendingQty))
-	end
-	return true
-end
-
-function cycleTradeOnBought(itemName, itemCount)
-	if not modificationState.autoCycleEnabled[0] and cycleTradeState.active == nil then
-		return
-	end
-	local count = math.max(1, math.floor(tonumber(itemCount) or 1))
-	local marketCount = cycleGetMarketBuyCount(itemName)
-	if marketCount == nil then
-		return
-	end
-	local entry = cycleEntry(itemName)
-	if not entry then
-		return
-	end
-	local sellTemplate = cycleFindItem(cycleGetConfigSellList(), itemName)
-	if not sellTemplate then
-		cycleNotifyMissing(entry.key .. ":sell", u8:decode("Автоцикл: предмет есть в скупке, но отсутствует в списке продажи: ") .. tostring(itemName))
-		return
-	end
-	entry.pendingSell = (tonumber(entry.pendingSell) or 0) + count
-
-	local active = cycleTradeState.active
-	if active and active.key == entry.key and (active.kind == "remove_buy" or active.kind == "readd_wait" or active.kind == "readd_buy") then
-		active.targetCount = math.max(1, (tonumber(active.targetCount) or 1) - count)
-		entry.rebuildTarget = active.targetCount
-	end
-end
-
-function cycleTradeOnSold(itemName, itemCount)
-	if not modificationState.autoCycleEnabled[0] then
-		return
-	end
-	local entry, key = cycleEntry(itemName)
-	if not entry then
-		return
-	end
-	local outstanding = tonumber(cycleTradeState.listedOutstanding[key]) or 0
-	if outstanding <= 0 then
-		return
-	end
-	local soldCount = math.max(1, math.floor(tonumber(itemCount) or 1))
-	local cycleSold = math.min(outstanding, soldCount)
-	cycleTradeState.listedOutstanding[key] = outstanding - cycleSold
-	entry.pendingRebuy = (tonumber(entry.pendingRebuy) or 0) + cycleSold
-
-	local active = cycleTradeState.active
-	if active and active.key == entry.key and (active.kind == "remove_buy" or active.kind == "readd_wait") then
-		active.targetCount = math.max(1, (tonumber(active.targetCount) or 0) + cycleSold)
-		active.pendingQty = (tonumber(active.pendingQty) or 0) + cycleSold
-		entry.rebuildTarget = active.targetCount
-	else
-		entry.rebuildTarget = nil
-	end
-	sendNotify(u8:decode("Автоцикл: продано, восстанавливаю скупку: ") .. entry.name .. " x" .. tostring(cycleSold))
-end
-
-function cycleTradeOnSellListed(message)
-	local active = cycleTradeState.active
-	if not active or active.kind ~= "sell" or active.accounted then
-		return
-	end
-	local itemName = tostring(message or ""):match(u8:decode("Товар%s+(.+)%s+успешно"))
-	if itemName and cycleNormalizeName(itemName) ~= active.key then
-		return
-	end
-	active.accounted = true
-	if type(manualPurchasedConsume) == "function" and not (manualPurchasedState and manualPurchasedState.running) then
-		manualPurchasedConsume(active.name, active.qty)
-	end
-	local entry = cycleTradeState.pending[active.key]
-	if entry then
-		entry.pendingSell = math.max(0, (tonumber(entry.pendingSell) or 0) - active.qty)
-	end
-	cycleTradeState.listedOutstanding[active.key] = (tonumber(cycleTradeState.listedOutstanding[active.key]) or 0) + active.qty
-	sendNotify(u8:decode("Автоцикл: выставлено на продажу: ") .. active.name .. " x" .. tostring(active.qty))
-end
-
-function cycleTradeOnBuyRemoved(itemName)
-	local active = cycleTradeState.active
-	if not active or active.kind ~= "remove_buy" then
-		return
-	end
-	if cycleNormalizeName(itemName) ~= active.key then
-		return
-	end
-	active.kind = "readd_wait"
-	active.startedAt = getGameTimer()
-	active.nextActionAt = getGameTimer() + 350
-	sendNotify(u8:decode("Автоцикл: продано, восстанавливаю скупку: ") .. active.name .. " x" .. tostring(active.pendingQty))
-end
-
-function cycleTradeOnBuyStarted(message)
-	local active = cycleTradeState.active
-	if not active or active.kind ~= "readd_buy" then
-		return
-	end
-	local itemName = tostring(message or ""):match(u8:decode("товара%s+(.-)%s+в%s+количестве"))
-	if itemName and cycleNormalizeName(itemName) ~= active.key then
-		return
-	end
-	active.success = true
-end
-
-function cycleTradeHandleDialog(dialogId, style, title, button1, button2, text)
-	local active = cycleTradeState.active
-	if not active or active.kind ~= "remove_buy" or active.selectionSent then
-		return false
-	end
-
-	if text:find(u8:decode("Прекратить аренду прилавка")) and text:find(u8:decode("Прекратить покупку товара")) then
-		sampSendDialogResponsed(dialogId, 1, 3)
-		return true
-	end
-
-	if title:find(u8:decode("Страница")) then
-		local counter = 0
-		local nextIndex = nil
-		local targetIndex = nil
-		local currentPage, totalPages = title:match("(%d+)/(%d+)")
-		for line in text:gmatch("[^\r\n]+") do
-			local listedName = line:match("{......}(.+)%s%{......}.+{......}")
-			if listedName and cycleNormalizeName(listedName) == active.key then
-				targetIndex = counter - 1
-				break
-			end
-			if line:find(">>>") then
-				nextIndex = counter - 1
-			end
-			counter = counter + 1
-		end
-
-		if targetIndex ~= nil then
-			active.selectionSent = true
-			sampSendDialogResponsed(dialogId, 1, math.max(0, targetIndex))
-			return true
-		end
-		if nextIndex ~= nil and (not currentPage or not totalPages or tonumber(currentPage) < tonumber(totalPages)) then
-			sampSendDialogResponsed(dialogId, 1, math.max(0, nextIndex))
-			return true
-		end
-
-		cycleNotifyMissing(active.key .. ":remove", u8:decode("Автоцикл: нужный слот скупки не найден в лавке: ") .. active.name)
-		local entry = cycleTradeState.pending[active.key]
-		if entry then
-			entry.rebuildTarget = nil
-		end
-		cycleAbortActive(true)
-		return true
-	end
-
-	return false
-end
-
-function cycleFinishReadd(active)
-	local entry = cycleTradeState.pending[active.key]
-	cycleRestoreTemporaryLists()
-	if entry and active.success then
-		entry.pendingRebuy = math.max(0, (tonumber(entry.pendingRebuy) or 0) - active.pendingQty)
-		entry.rebuildTarget = nil
-		local configItem = cycleFindItem(buyList, active.name)
-		if configItem then
-			configItem.continue = active.targetCount
-		end
-		if loadedBuyConfig ~= "" and #buyList > 0 then
-			local fileName = loadedBuyConfig:match("(.+)%.json") and loadedBuyConfig or loadedBuyConfig .. ".json"
-			pcall(createConfig, "buy-cfg/" .. fileName, buyList, "buy-cfg", fileName)
-		end
-		sendNotify(u8:decode("Автоцикл: скупка восстановлена: ") .. active.name .. " -> " .. tostring(active.targetCount))
-	end
-	cycleTradeState.active = nil
-	cycleTradeState.nextActionAt = getGameTimer() + 650
-end
-
-function cycleTradeUpdate()
-	local cycleEnabled = modificationState.autoCycleEnabled[0] == true
-	local active = cycleTradeState.active
-	if active then
-		local now = getGameTimer()
-		if now - (active.startedAt or now) > cycleTradeState.operationTimeoutMs then
-			sendNotify(u8:decode("Автоцикл: таймаут операции, повторю позже."))
-			cycleAbortActive(true)
-			return
-		end
-
-		if active.kind == "sell" then
-			if active.accounted and not tradeAutomation.sell then
-				cycleRestoreTemporaryLists()
-				cycleTradeState.active = nil
-				cycleTradeState.nextActionAt = now + 650
-			elseif not tradeAutomation.sell and not active.accounted then
-				cycleAbortActive(true)
-			end
-		elseif active.kind == "readd_wait" and now >= (active.nextActionAt or 0) then
-			cycleStartReaddBuy(active)
-		elseif active.kind == "readd_buy" then
-			if active.success and not tradeAutomation.buy then
-				cycleFinishReadd(active)
-			elseif not tradeAutomation.buy and not active.success then
-				cycleAbortActive(true)
-			end
-		end
-		return
-	end
-
-	if not cycleEnabled then
-		cycleTradeState.pending = {}
-		cycleTradeState.listedOutstanding = {}
-		return
-	end
-
-	if not cycleCanStartAutomation() then
-		return
-	end
-	if ini.cfg.active_lavka_number == -1 and activeLavkaId == -1 then
-		return
-	end
-
-	for _, entry in pairs(cycleTradeState.pending) do
-		if (tonumber(entry.pendingRebuy) or 0) > 0 then
-			if cycleStartRebuild(entry) then
-				return
-			end
-		end
-	end
-	for _, entry in pairs(cycleTradeState.pending) do
-		if (tonumber(entry.pendingSell) or 0) > 0 then
-			if cycleStartSell(entry) then
-				return
-			end
-		end
-	end
-end
 
 -- Remote shop integration is temporarily disabled.
 -- ArzMarket_remote_shop.lua is NOT required while this block stays commented.
@@ -16777,7 +10544,99 @@ function arzAuthFreezeInitialize()
 	arzApplySavedAuthRuntime()
 end
 
+ARZ_FEATURE_MODULES = ARZ_FEATURE_MODULES or {}
+function arzLoadBundledModule(name, context)
+ local path = getWorkingDirectory() .. "\\modules\\ArzMarketQuant\\" .. name .. ".lua"
+ local chunk, loadError = loadfile(path)
+ if not chunk then
+  print("[ArzMarket][Module] " .. name .. ": " .. tostring(loadError))
+  if type(sampAddChatMessage) == "function" then pcall(sampAddChatMessage, "[ArzMarket] Required module failed: " .. name, 0xFFFF5555) end
+  return nil
+ end
+ local ok, module = pcall(chunk)
+ if not ok or type(module) ~= "table" or module.api_version ~= 1 or type(module.init) ~= "function" then
+  print("[ArzMarket][Module] incompatible: " .. name .. " " .. tostring(module))
+  if type(sampAddChatMessage) == "function" then pcall(sampAddChatMessage, "[ArzMarket] Required module incompatible: " .. name, 0xFFFF5555) end
+  return nil
+ end
+ local initOk, initialized = pcall(module.init, context)
+ if not initOk or initialized == false then
+  print("[ArzMarket][Module] init failed: " .. name .. " " .. tostring(initialized))
+  if type(sampAddChatMessage) == "function" then pcall(sampAddChatMessage, "[ArzMarket] Required module init failed: " .. name, 0xFFFF5555) end
+  return nil
+ end
+ ARZ_FEATURE_MODULES[name] = module
+ return module
+end
+
+ARZ_FEATURE_MODULES.contexts = {}
+ARZ_FEATURE_MODULES.contexts.theme_palette = {
+  imgui = imgui, imguiNew = imguiNew, u8 = u8, ffi = ffi, getMenuUiScale = getMenuUiScale,
+  menuThemePath = menuThemePath, menuThemeConfig = menuThemeConfig,
+  windowColor = windowColor, separatorColor = separatorColor,
+  activeToggleColor = activeToggleColor, inactiveToggleColor = inactiveToggleColor
+ }
+ARZ_FEATURE_MODULES.contexts.mod_runtime = {
+  u8 = u8, ffi = ffi, menuVisible = menuVisible,
+  lavkaHelperEnabled = lavkaHelperEnabled, lavkaHelperAutoDisable = lavkaHelperAutoDisable,
+  modificationState = modificationState,
+  getActiveLavkaId = function() return activeLavkaId end
+ }
+ARZ_FEATURE_MODULES.contexts.trade_automation = {
+  u8 = u8, serverIdByAddress = serverIdByAddress,
+  tradeAutomationVisible = tradeAutomationVisible,
+  modificationState = modificationState, marketState = marketState,
+  scanWorkerState = scanWorkerState, clearWorkerState = clearWorkerState,
+  getSellList = function() return sellList end,
+  setSellList = function(value) sellList = value end,
+  getBuyList = function() return buyList end,
+  setBuyList = function(value) buyList = value end,
+  getTradeAutomation = function() return tradeAutomation end,
+  setTradeAutomation = function(value) tradeAutomation = value end,
+  getSellScanMode = function() return sellScanMode end,
+  setSellScanMode = function(value) sellScanMode = value end,
+  getBuyScanMode = function() return buyScanMode end,
+  setSellScanResults = function(value) sellScanResults = value end,
+  setSellStatusMessages = function(value) sellStatusMessages = value end,
+  getMarketplacePayload = function() return marketplacePayload end,
+  getLoadedSellConfig = function() return loadedSellConfig end,
+  getLoadedBuyConfig = function() return loadedBuyConfig end,
+  getActiveLavkaId = function() return activeLavkaId end,
+  getViceCityMode = function() return viceCityMode end
+ }
+ARZ_FEATURE_MODULES.contexts.telegram_runtime = {
+  u8 = u8, decodeJsonSafe = decodeJsonSafe, ffi = ffi,
+  zzlibLoaded = zzlibLoaded, effilLoaded = effilLoaded, effil = effil,
+  marketState = marketState, telegramUi = telegramUi,
+  telegramNotifyEnabled = telegramNotifyEnabled
+ }
+ARZ_FEATURE_MODULES.contexts.trade_filters = {
+  u8 = u8, storageFinder = storageFinder, configFileNames = configFileNames,
+  getBuyList = function() return buyList end,
+  getSellList = function() return sellList end,
+  getLoadedSellConfig = function() return loadedSellConfig end,
+  getLoadedBuyConfig = function() return loadedBuyConfig end,
+  getViceCityMode = function() return viceCityMode end
+ }
+
+ARZ_FEATURE_MODULES.contexts.market_analysis = {
+ u8 = u8, serverSlugById = serverSlugById, priceData = priceData,
+ decodeJsonSafe = decodeJsonSafe, encodeJsonSafe = encodeJsonSafe,
+ writeEncodedFile = writeEncodedFile, lfs = lfs,
+ storageFinder = storageFinder, marketState = marketState,
+ getBuyList = function() return buyList end,
+ setBuyList = function(value) buyList = value end,
+ getSellList = function() return sellList end,
+ getLoadedSellConfig = function() return loadedSellConfig end,
+ getLoadedBuyConfig = function() return loadedBuyConfig end,
+ getSortMode = function() return sortMode end,
+ getViceCityMode = function() return viceCityMode end
+}
+
 function main()
+ ini.cfg.interface_mode = "html"
+ menuOpen = false
+ if menuVisible then menuVisible[0] = false end
 	local bootstrapGateOk, bootstrapGateError = arzFirstBootstrapEnsurePendingForInitialLoader()
 	if not bootstrapGateOk then
 		print("[ArzMarket][Bootstrap] cannot create first-run isolation: " .. tostring(bootstrapGateError))
@@ -16801,6 +10660,10 @@ function main()
 		end
 		ARZ_FIRST_BOOTSTRAP_ACTIVE = true
 
+		while not isSampLoaded() do wait(100) end
+		while not isSampAvailable() do wait(100) end
+		arzFirstBootstrapChat("[ArzMarket] Первый запуск: offline режим включён. Скачиваю второй loader...", 0xFF70C8FF)
+
 		local managedInstalled, managedError = arzFirstBootstrapInstallManagedLoader(firstBootstrapPending)
 		if not managedInstalled then
 			print("[ArzMarket][Bootstrap] managed loader install failed: " .. tostring(managedError))
@@ -16810,7 +10673,8 @@ function main()
 			return
 		end
 
-		local managedVerified, verifyError = arzFirstBootstrapWaitManagedVerification(firstBootstrapPending, 90)
+		arzFirstBootstrapChat("[ArzMarket] Второй loader скачан. Выполняю повторную проверку ArzMarket...", 0xFF70C8FF)
+		local managedVerified, verifyError = arzFirstBootstrapWaitManagedVerification(firstBootstrapPending, 240)
 		if not managedVerified then
 			print("[ArzMarket][Bootstrap] managed loader verification failed: " .. tostring(verifyError))
 			while not isSampLoaded() do wait(0) end
@@ -16819,16 +10683,16 @@ function main()
 			return
 		end
 		print("[ArzMarket][Bootstrap] managed loader verification passed")
+		arzFirstBootstrapChat("[ArzMarket] Второй loader и основной ArzMarket проверены. Загружаю остальные файлы...", 0xFF70C8FF)
 	end
 
 	if startedFromFreshLoaderDownload then
 		while not isSampLoaded() do wait(0) end
 		while not isSampAvailable() do wait(0) end
 		pcall(os.remove, loaderInstallMarkerPath)
-		local message = firstBootstrapActive
-			and "[ArzMarket] Второй loader проверен. Начинаю загрузку остальных файлов в изолированном режиме..."
-			or "[ArzMarket] ArzMarket успешно скачан. Начинаю скачивание остальных файлов..."
-		pcall(sampAddChatMessage, u8:decode(message), 0xFF70C8FF)
+		if not firstBootstrapActive then
+			pcall(sampAddChatMessage, u8:decode("[ArzMarket] ArzMarket успешно скачан. Начинаю скачивание остальных файлов..."), 0xFF70C8FF)
+		end
 	end
 
 	ARZ_COMPONENTS.bootstrap_ready, ARZ_COMPONENTS.bootstrap_error = arzComponentsBootstrapAll()
@@ -16845,14 +10709,20 @@ function main()
 		return
 	end
 
+ if not arzLoadBundledModule("theme_palette", ARZ_FEATURE_MODULES.contexts.theme_palette) then return end
+ if not arzLoadBundledModule("mod_runtime", ARZ_FEATURE_MODULES.contexts.mod_runtime) then return end
+ if not arzLoadBundledModule("market_analysis", ARZ_FEATURE_MODULES.contexts.market_analysis) then return end
+ if not arzLoadBundledModule("trade_filters", ARZ_FEATURE_MODULES.contexts.trade_filters) then return end
+ if not arzLoadBundledModule("trade_automation", ARZ_FEATURE_MODULES.contexts.trade_automation) then return end
+ if not arzLoadBundledModule("telegram_runtime", ARZ_FEATURE_MODULES.contexts.telegram_runtime) then return end
+
+	if firstBootstrapActive then
+		arzFirstBootstrapChat("[ArzMarket] Остальные файлы загружены и проверены. Проверяю обязательные модули...", 0xFF70C8FF)
+	end
+
 	local successfulUpdateBackup = getWorkingDirectory() .. "\\" .. tostring(thisScript().name) .. ".backup"
 	if doesFileExist(successfulUpdateBackup) then
 		pcall(os.remove, successfulUpdateBackup)
-	end
-
-	pcall(arzBaronLoadAssistant)
-	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.registerCommands) == "function" then
-		ARZ_BARON_ASSISTANT.registerCommands()
 	end
 
 	ARZ_MODULES.bootstrap.module_status = {}
@@ -16873,6 +10743,16 @@ function main()
 		return
 	end
 
+	local baronOk, baronLoaded = pcall(arzBaronLoadAssistant)
+	if not baronOk or baronLoaded ~= true then
+		print("[ArzMarket][Bootstrap] required Baron module failed to initialize: " .. tostring(baronLoaded))
+		pcall(sendNotify, u8:decode("ArzMarket не запущен: модуль Барона недоступен."))
+		return
+	end
+	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.registerCommands) == "function" then
+		ARZ_BARON_ASSISTANT.registerCommands()
+	end
+
 	if firstBootstrapActive then
 		local completed, completionError = arzFirstBootstrapComplete(firstBootstrapPending)
 		if not completed then
@@ -16880,7 +10760,7 @@ function main()
 			pcall(sampAddChatMessage, u8:decode("[ArzMarket] Проверки пройдены, но не удалось завершить первый запуск: ") .. tostring(completionError), 0xFFFF6464)
 			return
 		end
-		pcall(sampAddChatMessage, u8:decode("[ArzMarket] Все проверки пройдены. Offline первого запуска выключен."), 0xFF70C8FF)
+		pcall(sampAddChatMessage, u8:decode("[ArzMarket] Все файлы и loader проверены. Offline первого запуска выключен. ArzMarket готов к работе."), 0xFF70C8FF)
 	end
 	arzAuthFreezeInitialize()
 	arzAccountBridgeStart()
@@ -16911,10 +10791,14 @@ function main()
 
 	-- UI extensions are discovered only after the normal ArzMarket configs are ready.
 	-- They append pages after all built-in pages, so existing numeric page ids stay unchanged.
-	pcall(arzUiExtensionsInitialize)
-	if ARZ_INTERFACE_CHOOSER then
-		ARZ_INTERFACE_CHOOSER.ready = true
-		if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
+	local uiInitOk, uiInitResult = pcall(arzUiExtensionsInitialize)
+	if not uiInitOk then print("[ArzMarket][UIExtensions] initialize exception: " .. tostring(uiInitResult)) end
+	local htmlReady, htmlReadyError = arzUiExtensionsEnsureHtmlReady()
+	if not htmlReady then
+		print("[ArzMarket][UIExtensions] HTML preflight failed: " .. tostring(htmlReadyError))
+		pcall(sampAddChatMessage, u8:decode("[ArzMarket] HTML интерфейс не готов: ") .. tostring(htmlReadyError), 0xFFFF6464)
+	else
+		print("[ArzMarket][UIExtensions] HTML preflight passed")
 	end
 
 	-- Keep average-price tables warm for the HTML UI from a normal MoonLoader thread.
@@ -17003,7 +10887,7 @@ function main()
 			savedMenuPage = 1
 		end
 
-		imgui.SelectMenu(mainMenu, savedMenuPage, 1)
+		selectedMenuPage = savedMenuPage
 	end
 
 	-- Restore Settings -> Appearance after applying interface scale.
@@ -17016,10 +10900,9 @@ function main()
 		local sameProcess = restorePid > 0 and currentPid > 0 and restorePid == currentPid
 		if sameProcess and restoreAge >= 0 and restoreAge <= 60 then
 			selectedMenuPage = 3
-			marketState.selectAfterLoad = -1
 			ini.cfg.lastCrrSelect = 3
 
-			if pendingAppearanceRestore.mode == "html" then
+			if pendingAppearanceRestore.active == true then
 				menuOpen = false
 				menuVisible[0] = false
 				ini.cfg.interface_mode = "html"
@@ -17040,15 +10923,7 @@ function main()
 						end
 					end)
 				end
-			else
-				modificationState.settingsInterfaceOpen = true
-				modificationState.appearanceRestoreScrollY = math.max(0, tonumber(pendingAppearanceRestore.scrollY) or 0)
-				modificationState.appearanceRestoreScrollRatio = tonumber(pendingAppearanceRestore.scrollRatio)
-				modificationState.appearanceRestoreFrames = 4
-				kifir = 1
-				menuOpen = true
-				menuVisible[0] = true
-				zzztime = os.clock()
+
 			end
 		end
 
@@ -17071,8 +10946,15 @@ function main()
 	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.markScriptReady) == "function" then
 		pcall(ARZ_BARON_ASSISTANT.markScriptReady)
 	end
-	-- Saved Baron progress resumes only after an explicit /crr or tutorial action.
-	-- Never auto-open Lua/HTML/preview shortly after joining the server.
+	-- Required onboarding/tutorial progress resumes automatically when both
+	-- startup gates are ready. The onboarding welcome is shown first; its own
+	-- auto-advance then switches directly to the HTML tutorial.
+	if type(arzBaronScheduleAutomaticResume) == "function" then
+		local okSchedule, scheduled = pcall(arzBaronScheduleAutomaticResume)
+		if not okSchedule or scheduled ~= true then
+			print("[ArzMarket][Baron] automatic tutorial resume was not scheduled: " .. tostring(scheduled))
+		end
+	end
 
 	-- Keep the last Marketplace server across script reloads/restarts.
 	marketState.marketplace_serversSelected[0] = math.max(0, math.min(#marketState.marketplace_servers - 1, math.floor(tonumber(ini.cfg.marketplaceSelectedItem) or 1)))
@@ -17105,12 +10987,7 @@ function main()
 		if type(arzBaronOpenSessionGateForManualCommand) == "function" then arzBaronOpenSessionGateForManualCommand() end
 		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.restartTutorial) == "function" then
 			pcall(ARZ_BARON_ASSISTANT.restartTutorial, ini.cfg.interface_mode)
-			if ini.cfg.interface_mode == "html" then
-				pcall(arzUiExtensionsOpenHtml, arzBaronCurrentPageName())
-			else
-				menuOpen = true
-				menuVisible[0] = true
-			end
+			pcall(arzUiExtensionsOpenHtml, arzBaronCurrentPageName())
 		end
 	end)
 	sampRegisterChatCommand("baronreset", function()
@@ -17118,7 +10995,6 @@ function main()
 		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.resetOnboarding) == "function" then
 			pcall(ARZ_BARON_ASSISTANT.resetOnboarding)
 			ini.cfg.interface_choice_done = false
-			if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
 			menuOpen = false
 			menuVisible[0] = false
 			pcall(arzUiExtensionsCloseHtml)
@@ -17131,54 +11007,22 @@ function main()
 
 		sendNotify(u8:decode("Авто установка лавки ") .. (marketState.autoLavka and u8:decode("включено") or u8:decode("выключено")))
 	end)
-	sampRegisterChatCommand("crr", function()
+
+	sampRegisterChatCommand("arzhtml", function()
+		local ok = arzUiExtensionsOpenHtml(selectedMenuPage == 1 and "sell" or selectedMenuPage == 3 and "settings" or selectedMenuPage == 4 and "logs" or selectedMenuPage == 5 and "marketplace" or selectedMenuPage == 8 and "storage" or "buy")
+		if ok then pcall(sampAddChatMessage, u8:decode("[ArzMarket] HTML интерфейс открыт."), 0xFF70C8FF) end
+	end)
+
+	sampRegisterChatCommand("crr", function(commandArguments)
+  local specialPage = tostring(commandArguments or ""):lower():match("^%s*(.-)%s*$")
+  if specialPage ~= "" and arzOpenSpecialPage(specialPage) then return end
 		if type(arzReleaseNotesAllowThisSession) == "function" then arzReleaseNotesAllowThisSession() end
 		if type(arzBaronOpenSessionGateForManualCommand) == "function" then arzBaronOpenSessionGateForManualCommand() end
 		local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
 		if baronGateOpen and type(arzBaronOpenSavedProgress) == "function" and arzBaronOpenSavedProgress() == true then
 			return
 		end
-		if ini.cfg.interface_choice_done ~= true then
-			local chooserNeeded = false
-			if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.needsChooser) == "function" then
-				local okNeed, value = pcall(ARZ_BARON_ASSISTANT.needsChooser)
-				chooserNeeded = okNeed and value == true
-			end
-			if baronGateOpen and chooserNeeded then
-				menuOpen = false
-				menuVisible[0] = false
-				if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = true end
-				return
-			end
-			-- Before Baron reaches the interface chooser, /crr opens the current
-			-- interface normally instead of showing the preview shell.
-		end
-
-		if ini.cfg.interface_mode == "html" then
-			if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() then
-				arzUiExtensionsCloseHtml()
-			else
-				arzUiExtensionsOpenHtml(selectedMenuPage == 1 and "sell" or selectedMenuPage == 3 and "settings" or selectedMenuPage == 4 and "logs" or selectedMenuPage == 5 and "marketplace" or selectedMenuPage == 8 and "storage" or "buy")
-			end
-			return
-		end
-
-		kifir = 1
-		onOpenMenu = true
-		menuOpen = not menuOpen
-		menuVisible[0] = menuOpen
-
-		if replaceWindowEnabled[0] then
-			var_0_71[0] = not var_0_71[0]
-		end
-
-		if menuOpen == true then
-			zzztime = os.clock()
-		elseif menuOpen == false then
-			resetIO()
-		end
-
-		deAFKMessage(debug.getinfo(1, "l"), "open menu [register command] ")
+		openCrr()
 	end)
 	sampRegisterChatCommand("rknfix", function()
 		ini.cfg.bannedByRkn = not ini.cfg.bannedByRkn
@@ -17240,9 +11084,9 @@ function main()
 	end)
 	sampRegisterChatCommand("crrxl", function()
 		if marketState.isPremiumAuthedStatus == true then
-			if menuOpen then
-				openCrr()
-			end
+			if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() then
+    arzUiExtensionsCloseHtml()
+   end
 
 			marketState.emule_ExelPremium[0] = not marketState.emule_ExelPremium[0]
 		else
@@ -17565,9 +11409,10 @@ function main()
 			local marketplaceServerAddress = sampGetCurrentServerAddress()
 			local marketplaceServerId = serverIdByAddress[marketplaceServerAddress]
 
-			if marketplaceServerId ~= nil and arzSavedCfgString("authNickname") ~= "" then
+			local marketplaceUsername = arzNetworkMarketplaceNickname()
+			if marketplaceServerId ~= nil and marketplaceUsername ~= "" then
 				timers[11] = os.time()
-				marketplacePayload.username = arzSavedCfgString("authNickname")
+				marketplacePayload.username = marketplaceUsername
 				-- Marketplace uses its own server id space: Vice City = 0, normal servers = 1..33.
 				-- Do not use cfg.myServerId here because auth uses a different id space where Vice City = 201.
 				marketplacePayload.serverId = marketplaceServerId
@@ -17575,7 +11420,7 @@ function main()
 				local marketplaceRequestBody = " [\n                " .. encodeJson(marketplacePayload) .. "                ] "
 
 				deAFKMessage(debug.getinfo(1, "l"), "SEND DATA=[" .. marketplaceRequestBody .. "]")
-				deAFKMessage(debug.getinfo(1, "l"), "NICK=[saved]")
+				deAFKMessage(debug.getinfo(1, "l"), "NICK=[current or saved]")
 					print("items success")
 				ARZ_MARKETPLACE_PUBLISH_IN_FLIGHT = true
 				ARZ_MARKETPLACE_LAST_REQUEST_ID = asyncHttpRequest("POST", marketState.reservehost .. "/api/insertMarketplace", {
@@ -17623,11 +11468,12 @@ function main()
 			end
 		end
 
-		if MarketPlace_Clear == true then
+		if MarketPlace_Clear == true and os.time() >= (ARZ_MARKETPLACE_CLEAR_RETRY_AT or 0) then
 			local marketplaceServerAddress = sampGetCurrentServerAddress()
 			local marketplaceServerId = serverIdByAddress[marketplaceServerAddress]
 
-			if marketplaceServerId ~= nil and arzSavedCfgString("authNickname") ~= "" then
+			local marketplaceUsername = arzNetworkMarketplaceNickname()
+			if marketplaceServerId ~= nil and marketplaceUsername ~= "" then
 				deAFKMessage(debug.getinfo(1, "l"), "[MarketPlace] CLEAR ALL DATA")
 
 				marketplacePayload = {
@@ -17643,17 +11489,23 @@ function main()
 					serverId = marketplaceServerId
 				}
 				MarketPlace_Clear = nil
-				marketplacePayload.username = arzSavedCfgString("authNickname")
+				marketplacePayload.username = marketplaceUsername
 
 				local marketplaceCleanupRequestBody = " [\n                " .. encodeJson(marketplacePayload) .. "                ] "
 
-				deAFKMessage(debug.getinfo(1, "l"), "NICK=[saved]")
-				asyncHttpRequest("POST", marketState.host .. "/api/insertMarketplace", {
+				deAFKMessage(debug.getinfo(1, "l"), "NICK=[current or saved]")
+				local clearRequestId = asyncHttpRequest("POST", marketState.host .. "/api/insertMarketplace", {
 					headers = {
 						["content-type"] = "application/json"
 					},
 					data = u8(marketplaceCleanupRequestBody)
 				})
+				if clearRequestId == nil then
+					MarketPlace_Clear = true
+					ARZ_MARKETPLACE_CLEAR_RETRY_AT = os.time() + 5
+				end
+			else
+				ARZ_MARKETPLACE_CLEAR_RETRY_AT = os.time() + 5
 			end
 		end
 
@@ -17725,6 +11577,25 @@ function main()
 		updateAndRenderLavkaHelper()
 		lavkaHelperUpdateOwnShopAutoDisable()
 
+		if marketState.autoUpdateCheck[1] then
+   marketState.autoUpdateCheck[1] = false
+   marketState.autoUpdateCheck[2] = true
+  end
+  if os.time() >= (ARZ_DAILY_REFRESH_CHECK_AT or 0) then
+   ARZ_DAILY_REFRESH_CHECK_AT = os.time() + 60
+   if marketState.day_timer_price + 86400 <= os.time() then
+    marketState.day_timer_price = os.time()
+    ini.cfg.day_timer_price = marketState.day_timer_price
+    save_all()
+    get_prices()
+   end
+   if marketState.day_timer_sputnik + 86400 <= os.time() and marketState.isEnabledSputnik[0] then
+    marketState.day_timer_sputnik = os.time()
+    ini.cfg.day_timer_sputnik = marketState.day_timer_sputnik
+    save_all()
+    sputnik_Manager()
+   end
+  end
 		if marketState.autoUpdateCheck[2] then
 			marketState.autoUpdateCheck[2] = false
 
@@ -17765,11 +11636,9 @@ function main()
 
 			deAFKMessage("sendPayDayExp[POST]")
 
-			local savedRealPlayerName = arzSavedCfgString("authRealNameMode1")
-			local savedUid = arzSavedCfgString("authUid")
-			if savedRealPlayerName ~= "" and savedUid ~= "" then
-				deAFKMessage("sendPD > [saved]")
-				asyncHttpRequest("POST", "https://reserve-api.arz.market/api/addExp/" .. savedRealPlayerName .. "[" .. savedUid .. "]", nil, nil, nil, 1)
+			local realPlayerName, uid = arzNetworkNameAndUid()
+			if realPlayerName ~= "" and uid ~= "" then
+				asyncHttpRequest("POST", "https://reserve-api.arz.market/api/addExp/" .. realPlayerName .. "[" .. uid .. "]", nil, nil, nil, 1)
 			end
 		end
 
@@ -17895,7 +11764,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.57.132"
+ARZ_UPDATE_VERSION = "3.57.135"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -17960,11 +11829,125 @@ function arzSavedCfgString(fieldName)
 	return tostring(value)
 end
 
+ARZ_NETWORK_AUTH_RUNTIME = ARZ_NETWORK_AUTH_RUNTIME or {
+	activePremiumKey = nil,
+	activeTempKey = nil,
+	liveUid = nil,
+	liveUidIdentity = nil,
+	registryRead = false,
+	registryKey = "",
+	registryTempKey = ""
+}
+
+function arzNetworkMarketplaceNickname()
+	local ok, nick = pcall(function() return select(1, arzWatchdogCurrentIdentity()) end)
+	if ok and type(nick) == "string" and nick:match("%S") and not nick:find("%z") then return nick end
+	local saved = arzSavedCfgString("authNickname")
+	return saved:match("%S") and saved or ""
+end
+
+function arzNetworkNameAndUid()
+	local nick, address = arzWatchdogCurrentIdentity()
+	local serverId = serverIdByAddress[address]
+	local liveName = ""
+	if nick ~= "" and serverId ~= nil then
+		local encodedServer, encodedNick = nick:match("^%[(%-?%d+)%](%S+)$")
+		if serverId == 0 and encodedServer then
+			liveName = "[" .. encodedServer .. "]" .. encodedNick
+		elseif serverId ~= 0 then
+			liveName = "[" .. tostring(serverId) .. "]" .. nick
+		end
+	end
+	if liveName ~= "" and ARZ_NETWORK_AUTH_RUNTIME.liveUidIdentity == liveName and ARZ_NETWORK_AUTH_RUNTIME.liveUid and ARZ_NETWORK_AUTH_RUNTIME.liveUid:match("^%d+$") then
+		return liveName, ARZ_NETWORK_AUTH_RUNTIME.liveUid, liveName
+	end
+	local savedName, savedUid = arzSavedCfgString("authRealNameMode1"), arzSavedCfgString("authUid")
+	if liveName ~= "" and liveName == savedName and savedUid:match("^%d+$") then return liveName, savedUid, liveName end
+	return savedName, savedUid, liveName
+end
+
+function arzNetworkPremiumUserIdentity()
+	local ok, launchName = pcall(function() return ffi.string(ffi.C.GetCommandLineA()):match("%-n%s+(%S+)") end)
+	if ok and type(launchName) == "string" and launchName:match("%S") and not launchName:find("%z") then return launchName end
+	local nick = select(1, arzWatchdogCurrentIdentity())
+	if nick ~= "" then return nick:match("^%[%-?%d+%](%S+)$") or nick end
+	return arzSavedCfgString("authRealNameMode2")
+end
+
+function arzNetworkActivePremiumAuth()
+	local savedKey = arzSavedCfgString("authPremiumTokenAuth")
+	if not ARZ_NETWORK_AUTH_RUNTIME.registryRead and savedKey == "" then
+		ARZ_NETWORK_AUTH_RUNTIME.registryRead = true
+		local okKey, registryKey = pcall(getKey, "premiumTokenAuth")
+		local okTemp, registryTemp = pcall(getKey, "UserTempKey")
+		if okKey and type(registryKey) == "string" then ARZ_NETWORK_AUTH_RUNTIME.registryKey = registryKey end
+		if okTemp and type(registryTemp) == "string" then ARZ_NETWORK_AUTH_RUNTIME.registryTempKey = registryTemp end
+	end
+	local key = ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey or (savedKey ~= "" and savedKey or ARZ_NETWORK_AUTH_RUNTIME.registryKey)
+	local tempKey = ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey and ARZ_NETWORK_AUTH_RUNTIME.activeTempKey or (savedKey ~= "" and arzSavedCfgString("authUserTempKey") or ARZ_NETWORK_AUTH_RUNTIME.registryTempKey)
+	return key or "", tempKey or ""
+end
+
+function arzNetworkAcceptPremiumAuth(key, tempKey)
+	if type(key) ~= "string" or key == "" or key:find("[%z\r\n]") then return false end
+	ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey = key
+	ARZ_NETWORK_AUTH_RUNTIME.activeTempKey = type(tempKey) == "string" and tempKey or ""
+	if not ARZ_INI_WRITE_LOCKED then
+		arzAuthFreezeCfgString("authPremiumTokenAuth", key, "cfg:authPremiumTokenAuth")
+		if ARZ_NETWORK_AUTH_RUNTIME.activeTempKey ~= "" then
+			arzAuthFreezeCfgString("authUserTempKey", ARZ_NETWORK_AUTH_RUNTIME.activeTempKey, "cfg:authUserTempKey")
+		else
+			ini.cfg.authUserTempKey = ""
+			ARZ_AUTH_FREEZE["cfg:authUserTempKey"] = nil
+			arzAuthIniDirectSave()
+		end
+	end
+	marketState.premiumKeys[1], marketState.premiumKeys[2] = key, ARZ_NETWORK_AUTH_RUNTIME.activeTempKey
+	return true
+end
+
+function arzNetworkRequestUnban()
+	if download_marketplace ~= "blocked" or marketState.marketplaceUnbanAvailable ~= true then return false, "unban_unavailable" end
+	local activeKey = arzNetworkActivePremiumAuth()
+	local authKey = arzSavedCfgString("marketAuthKey")
+	local authToken = arzSavedCfgString("myServerToken")
+	local serverId = arzSavedCfgString("myServerId")
+	if activeKey == "" or authKey == "" or authToken == "" or serverId == "" then return false, "auth_unavailable" end
+	local requestBody = encodeJson({
+		authKey = authKey,
+		authToken = authToken,
+		scriptVersion = tostring(marketState.scriptVersion[1]),
+		serverId = serverId,
+		authClient = activeKey
+	})
+	local requestId, requestError = asyncHttpRequest("GET", "https://api.arz.market/api/getMyUnban", {
+		headers = { ["content-type"] = "application/json" },
+		data = u8(requestBody)
+	}, function(response)
+		if response.status_code == 200 or response.status_code == 304 or response.status_code == 201 then
+			local ok, data = pcall(decodeJson, response.text)
+			if ok and type(data) == "table" and data.message ~= nil then
+				local rawMessage = tostring(data.message)
+				local decodeOk, message = pcall(function() return u8:decode(rawMessage) end)
+				sendNotify(decodeOk and message or rawMessage)
+				return
+			end
+		end
+		sendNotify(u8:decode("Не удалось проверить заявку на амнистию."))
+	end, function()
+		sendNotify(u8:decode("Не удалось связаться с сервисом амнистии."))
+	end)
+	return requestId ~= nil, requestError
+end
+
+function arzNetworkTop10() return { available = false, rows = {} } end
+function arzNetworkTop10Week() return { available = false, rows = {} } end
+function list_Manager() return { arzNetworkTop10(), arzNetworkTop10Week() } end
+
 function arzApplySavedAuthRuntime()
 	if type(marketState) ~= "table" then return end
 	marketState.premiumKeys = marketState.premiumKeys or {}
-	marketState.premiumKeys[1] = arzSavedCfgString("authPremiumTokenAuth")
-	marketState.premiumKeys[2] = arzSavedCfgString("authUserTempKey")
+	marketState.premiumKeys[1], marketState.premiumKeys[2] = arzNetworkActivePremiumAuth()
 	marketState.premiumKeys[3] = arzSavedCfgString("marketAuthKey")
 	if type(marketState.myUidCheck) == "table" then
 		marketState.myUidCheck[2] = arzSavedCfgString("authUid") ~= "" and arzSavedCfgString("authUid") or nil
@@ -18011,18 +11994,23 @@ function loadPremiumFunction(premiumLoadMode)
 	end
 
 	if premiumLoadMode == 1 then
-		asyncHttpRequest("POST", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/checkKey/" .. arzSavedCfgString("authPremiumTokenAuth"), {
+		local activeKey, activeTempKey = arzNetworkActivePremiumAuth()
+		if activeKey == "" then return end
+		asyncHttpRequest("POST", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/checkKey/" .. activeKey, {
 			headers = {
 				["content-Type"] = "application/json; charset=utf-8",
-				["user-agent"] = arzSavedCfgString("authUserTempKey")
+				["user-agent"] = activeTempKey
 			}
 		}, function(premiumAuthResponse)
 			if premiumAuthResponse.status_code == 201 then
 				deAFKMessage(debug.getinfo(1, "l"), "sub: " .. premiumAuthResponse.text)
 
-				marketState.premiumUserInfo = decodeJson(premiumAuthResponse.text)
+				local decodedOk, decodedInfo = pcall(decodeJson, premiumAuthResponse.text)
+				if not decodedOk or type(decodedInfo) ~= "table" then return end
+				marketState.premiumUserInfo = decodedInfo
 
 				if marketState.premiumUserInfo.endTime then
+					arzNetworkAcceptPremiumAuth(activeKey, marketState.premiumUserInfo.UserTempKey or activeTempKey)
 					marketState.premiumUserInfo.userName = u8:decode(marketState.premiumUserInfo.userName)
 					ini.cfg.premiumTokenAuth = arzAuthFreezeNumber("ini_premiumTokenAuth", marketState.premiumUserInfo.userStatus ~= 0 and 1 or 2, -1) or ini.cfg.premiumTokenAuth
 
@@ -18067,11 +12055,14 @@ function loadPremiumFunction(premiumLoadMode)
 	end
 
 	if premiumLoadMode == 2 then
-		asyncHttpRequest("GET", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/getAllPremiumItems/" .. arzSavedCfgString("authPremiumTokenAuth"), {}, function(premiumItemsResponse)
+		local activeKey = arzNetworkActivePremiumAuth()
+		if activeKey == "" then return end
+		asyncHttpRequest("GET", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/getAllPremiumItems/" .. activeKey, {}, function(premiumItemsResponse)
 			if premiumItemsResponse.status_code == 200 or premiumItemsResponse.status_code == 304 then
 				deAFKMessage(u8:decode(premiumItemsResponse.text))
 
-				local premiumItemsData = decodeJson(u8:decode(premiumItemsResponse.text))
+				local itemsOk, premiumItemsData = pcall(decodeJson, u8:decode(premiumItemsResponse.text))
+				if not itemsOk or type(premiumItemsData) ~= "table" then return end
 
 				if not premiumItemsData.error then
 					marketState.premItems = premiumItemsData
@@ -18093,15 +12084,21 @@ function loadPremiumFunction(premiumLoadMode)
 	end
 
 	if premiumLoadMode == 3 then
+		local activeKey = arzNetworkActivePremiumAuth()
+		local _, liveAddress = arzWatchdogCurrentIdentity()
+		local liveServerId = serverIdByAddress[liveAddress]
+		local premiumUsername = arzNetworkPremiumUserIdentity()
+		local premiumServerId = liveServerId ~= nil and liveServerId or tonumber(arzSavedCfgString("myServerId"))
+		if activeKey == "" or premiumUsername == "" or premiumServerId == nil then return end
 		local premiumUserPayload = {
-			username = arzSavedCfgString("authRealNameMode2"),
-			serverId = tonumber(arzSavedCfgString("myServerId")) or arzSavedCfgString("myServerId")
+			username = premiumUsername,
+			serverId = premiumServerId
 		}
 		local premiumUserRequestBody = " [\n        " .. encodeJson(premiumUserPayload) .. "        ] "
 
 		deAFKMessage(debug.getinfo(1, "l"), "[sendPremiumNick]SEND DATA=[" .. premiumUserRequestBody .. "]")
-		deAFKMessage(debug.getinfo(1, "l"), "[sendPremiumNick]NICK=[saved]")
-		asyncHttpRequest("POST", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/insertPremiumUser/" .. arzSavedCfgString("authPremiumTokenAuth"), {
+		deAFKMessage(debug.getinfo(1, "l"), "[sendPremiumNick]NICK=[current or saved]")
+		asyncHttpRequest("POST", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/insertPremiumUser/" .. activeKey, {
 			headers = {
 				["content-type"] = "application/json"
 			},
@@ -18110,7 +12107,8 @@ function loadPremiumFunction(premiumLoadMode)
 			if premiumUserResponse.status_code == 201 or premiumUserResponse.status_code == 304 then
 				deAFKMessage(premiumUserResponse.text)
 
-				local premiumUserData = decodeJson(premiumUserResponse.text)
+				local userOk, premiumUserData = pcall(decodeJson, premiumUserResponse.text)
+				if not userOk or type(premiumUserData) ~= "table" then return end
 
 				if premiumUserData and not premiumUserData.error then
 					marketState.premUsers = premiumUserData
@@ -19113,25 +13111,22 @@ function premuimDialog()
 		if imgui.Button("Найти в таблице", imgui.ImVec2(225, 30)) then
 			marketState.search_exel_Custom = imguiNew.char[256](u8(tostring(selectedItemInfo[1])))
 
-			if menuOpen then
-				openCrr()
-			end
+			if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() then
+    arzUiExtensionsCloseHtml()
+   end
 
 			marketState.emule_ExelPremium[0] = not marketState.emule_ExelPremium[0]
 		end
 
 		if imgui.Button("Найти в МаркетПлейсе", imgui.ImVec2(225, 30)) then
-			if not menuOpen then
-				openCrr()
-			end
-
-			imgui.SelectMenu(mainMenu, 5, 1)
+			selectedMenuPage = 5
+   arzUiExtensionsOpenHtml("marketplace")
 
 			marketState.SearchMarket = imguiNew.char[256](tostring(u8(selectedItemInfo[1])))
 			marketState.searchStorage.marketPlaceBuy[2] = ""
 			marketState.searchStorage.marketPlaceSell[2] = ""
 
-			deAFKMessage(debug.getinfo(1, "l"), "[prem]imgui.SelectMenu(buttons, 5)")
+			deAFKMessage(debug.getinfo(1, "l"), "[prem]open marketplace HTML")
 		end
 
 		imgui.GetStyle().FrameBorderSize = 0
@@ -19203,126 +13198,6 @@ function avg_priceWindow()
 	imgui.End()
 end
 
-function arzInterfacePersistMode(mode)
-	mode = mode == "html" and "html" or "lua"
-	ini.cfg.interface_choice_done = true
-	ini.cfg.interface_mode = mode
-	if type(arzIniSave) == "function" then
-		pcall(arzIniSave)
-	elseif type(save_all) == "function" then
-		pcall(save_all)
-	end
-	return mode
-end
-
-function arzInterfaceBeginSelection(mode)
-	mode = mode == "html" and "html" or "lua"
-	if not ARZ_INTERFACE_CHOOSER or not ARZ_INTERFACE_CHOOSER.visible or ARZ_INTERFACE_CHOOSER.visible[0] ~= true then return false end
-	if ARZ_INTERFACE_CHOOSER.selection ~= nil or ARZ_INTERFACE_CHOOSER.finalizing == true then return false end
-	ARZ_INTERFACE_CHOOSER.selection = mode
-	ARZ_INTERFACE_CHOOSER.phase = "fading"
-	ARZ_INTERFACE_CHOOSER.transition_started = getGameTimer()
-	ARZ_INTERFACE_CHOOSER.finalizing = false
-	return true
-end
-
-function arzInterfaceCurrentPageForModeSwitch()
-	return selectedMenuPage == 1 and "sell"
-		or selectedMenuPage == 3 and "settings"
-		or selectedMenuPage == 4 and "logs"
-		or selectedMenuPage == 5 and "marketplace"
-		or selectedMenuPage == 7 and "mods"
-		or selectedMenuPage == 8 and "storage"
-		or "buy"
-end
-
-function arzInterfaceFinalizeSelection()
-	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.finalizing == true then return false end
-	local requestedMode = ARZ_INTERFACE_CHOOSER.selection
-	if requestedMode ~= "html" and requestedMode ~= "lua" then return false end
-	ARZ_INTERFACE_CHOOSER.finalizing = true
-
-	if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
-	ARZ_INTERFACE_LUA_PREVIEW = nil
-	ARZ_BARON_SHOWCASE_MODE = nil
-
-	local actualMode = requestedMode
-	if requestedMode == "html" then
-		menuOpen = false
-		if menuVisible then menuVisible[0] = false end
-		if type(resetIO) == "function" then pcall(resetIO) end
-		local opened = type(arzUiExtensionsOpenHtml) == "function" and arzUiExtensionsOpenHtml(arzInterfaceCurrentPageForModeSwitch()) == true
-		if not opened then
-			actualMode = "lua"
-			if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-			menuOpen = true
-			if menuVisible then menuVisible[0] = true end
-			kifir = 1
-			onOpenMenu = true
-			zzztime = os.clock()
-		end
-	else
-		if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-		menuOpen = true
-		if menuVisible then menuVisible[0] = true end
-		kifir = 1
-		onOpenMenu = true
-		zzztime = os.clock()
-	end
-
-	arzInterfacePersistMode(actualMode)
-	if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
-	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.completeInterfaceLoading) == "function" then
-		local okComplete, completed = pcall(ARZ_BARON_ASSISTANT.completeInterfaceLoading, actualMode)
-		if not okComplete or completed == false then
-			print("[ArzMarket][Baron] interface loading completion failed")
-		end
-	end
-
-	ARZ_INTERFACE_CHOOSER.selection = nil
-	ARZ_INTERFACE_CHOOSER.phase = "preview"
-	ARZ_INTERFACE_CHOOSER.transition_started = 0
-	ARZ_INTERFACE_CHOOSER.finalizing = false
-	return true
-end
-
-function arzInterfaceSelectMode(mode)
-	mode = mode == "html" and "html" or "lua"
-	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.selectInterface) == "function" then
-		local ok, selected = pcall(ARZ_BARON_ASSISTANT.selectInterface, mode)
-		return ok and selected ~= false
-	end
-	return arzInterfaceBeginSelection(mode)
-end
-
-function arzBaronResumePendingInterfaceSelection()
-	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
-	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
-	if type(ARZ_BARON_ASSISTANT.isActive) == "function" then
-		local okActive, active = pcall(ARZ_BARON_ASSISTANT.isActive)
-		if not okActive or active ~= true then return false end
-	end
-	if not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true then return false end
-	local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
-	if not okState or type(assistantState) ~= "table" then return false end
-	if assistantState.current_module ~= "onboarding" or assistantState.current_step ~= "interface_loading" then return false end
-	local pendingMode = assistantState.pending_interface
-	if pendingMode ~= "html" and pendingMode ~= "lua" then return false end
-
-	-- A Lua reload can happen while the chooser is already fading into the
-	-- selected interface. Do not replay the preview after reload. Finalize the
-	-- saved selection immediately and open only the real interface.
-	if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
-	ARZ_INTERFACE_LUA_PREVIEW = nil
-	ARZ_BARON_SHOWCASE_MODE = nil
-	if ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
-	ARZ_INTERFACE_CHOOSER.selection = pendingMode
-	ARZ_INTERFACE_CHOOSER.phase = "loading"
-	ARZ_INTERFACE_CHOOSER.transition_started = 0
-	ARZ_INTERFACE_CHOOSER.finalizing = false
-	return arzInterfaceFinalizeSelection()
-end
-
 function arzBaronResumeActiveTutorial()
 	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return false end
 	if not ARZ_BARON_ASSISTANT or type(ARZ_BARON_ASSISTANT.getState) ~= "function" then return false end
@@ -19332,9 +13207,9 @@ function arzBaronResumeActiveTutorial()
 	end
 	local okState, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
 	if not okState or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
-	if assistantState.current_module ~= "tutorial_lua" and assistantState.current_module ~= "tutorial_html" then return false end
+	if assistantState.current_module ~= "tutorial_html" then return false end
 
-	local mode = assistantState.interface == "html" and "html" or "lua"
+	local mode = "html"
 	local snapshot = arzBaronAssistantSnapshot(nil, mode) or {}
 	local pageMap = { sell = 1, buy = 2, settings = 3, logs = 4, marketplace = 5, mods = 7, storage = 8 }
 
@@ -19348,10 +13223,6 @@ function arzBaronResumeActiveTutorial()
 	if pageId then
 		selectedMenuPage = pageId
 		ini.cfg.lastCrrSelect = pageId
-		if UI_ANIM_BUTTON then
-			UI_ANIM_BUTTON.pending_menu = nil
-			UI_ANIM_BUTTON.time = 0
-		end
 	end
 
 	local settingsSection = nil
@@ -19371,7 +13242,6 @@ function arzBaronResumeActiveTutorial()
 	end
 
 	ARZ_BARON_SHOWCASE_MODE = nil
-	if ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible then ARZ_INTERFACE_CHOOSER.visible[0] = false end
 
 	if mode == "html" then
 		menuOpen = false
@@ -19384,140 +13254,8 @@ function arzBaronResumeActiveTutorial()
 		return false
 	end
 
-	if type(arzUiExtensionsCloseHtml) == "function" then pcall(arzUiExtensionsCloseHtml) end
-	menuOpen = true
-	if menuVisible then menuVisible[0] = true end
-	kifir = 1
-	onOpenMenu = true
-	zzztime = os.clock()
-	if restorePage == "settings" and type(modificationState) == "table" then
-		modificationState.settingsInterfaceOpen = settingsSection == "appearance"
-	end
-	return true
 end
 
-function arzRenderInterfaceLoadingModal(screenWidth, screenHeight)
-	local width, height = 390, 145
-	local x = math.floor((screenWidth - width) * 0.5)
-	local y = math.floor((screenHeight - height) * 0.5)
-	imgui.SetNextWindowPos(imgui.ImVec2(x, y), imgui.Cond.Always)
-	imgui.SetNextWindowSize(imgui.ImVec2(width, height), imgui.Cond.Always)
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
-	imgui.PushStyleVarFloat(imgui.StyleVar.WindowRounding, 14)
-	imgui.PushStyleVarFloat(imgui.StyleVar.WindowBorderSize, 1)
-	imgui.PushStyleColor(imgui.Col.WindowBg, imgui.ImVec4(0.035, 0.075, 0.105, 0.985))
-	imgui.PushStyleColor(imgui.Col.Border, imgui.ImVec4(0.20, 0.47, 0.66, 0.95))
-	imgui.Begin("##ArzMarketInterfaceLoading", nil,
-		imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoTitleBar +
-		imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse +
-		imgui.WindowFlags.NoSavedSettings + imgui.WindowFlags.NoInputs)
-	local title = "Загрузка интерфейса"
-	imgui.SetCursorPosY(34)
-	imgui.PushFont(fonts[13])
-	imgui.SetCursorPosX((width - imgui.CalcTextSize(title).x) * 0.5)
-	imgui.Text(title)
-	imgui.PopFont()
-	local dotCount = math.floor(getGameTimer() / 220) % 3 + 1
-	local dots = string.rep("●", dotCount) .. string.rep("○", 3 - dotCount)
-	imgui.SetCursorPosY(88)
-	imgui.SetCursorPosX((width - imgui.CalcTextSize(dots).x) * 0.5)
-	imgui.TextColored(imgui.ImVec4(0.30, 0.72, 0.96, 1), dots)
-	imgui.End()
-	imgui.PopStyleColor(2)
-	imgui.PopStyleVar(3)
-end
-
-function arzRenderInterfaceChooser(frame)
-	if type(arzBaronSessionGateOpen) == "function" and not arzBaronSessionGateOpen() then return end
-	local chooserNeeded = false
-	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.needsChooser) == "function" then
-		local okNeed, needValue = pcall(ARZ_BARON_ASSISTANT.needsChooser)
-		chooserNeeded = okNeed and needValue == true
-	end
-	if not chooserNeeded or not ARZ_INTERFACE_CHOOSER or ARZ_INTERFACE_CHOOSER.ready ~= true or not ARZ_INTERFACE_CHOOSER.visible or not ARZ_INTERFACE_CHOOSER.visible[0] then
-		ARZ_INTERFACE_LUA_PREVIEW = nil
-		if type(arzUiExtensionsCloseHtmlPreview) == "function" then pcall(arzUiExtensionsCloseHtmlPreview) end
-		return
-	end
-
-	frame.HideCursor = false
-	local screenWidth, screenHeight = getScreenResolution()
-	local chooserWidth, chooserHeight = 0, 0
-	local previewGap = math.max(10, math.floor(screenWidth * 0.009))
-	local sideMargin = math.max(10, math.floor(screenWidth * 0.022))
-	local topGap = math.max(10, math.floor(screenHeight * 0.015))
-	local maxSideWidth = math.floor((screenWidth - previewGap - sideMargin * 2) / 2)
-	local targetSideWidth = math.floor(screenWidth * 0.41)
-	local previewWidth = math.max(560, math.min(900, targetSideWidth, maxSideWidth))
-	local availablePreviewHeight = screenHeight - topGap * 2
-	local targetPreviewHeight = math.floor(screenHeight * 0.72)
-	local previewHeight = math.max(470, math.min(780, targetPreviewHeight, availablePreviewHeight))
-	local totalPreviewWidth = previewWidth * 2 + previewGap
-	local startX = math.max(sideMargin, math.floor((screenWidth - totalPreviewWidth) / 2))
-	local chooserX = 0
-	local chooserY = 0
-	local previewY = math.max(topGap, math.floor((screenHeight - previewHeight) / 2))
-	local luaPreviewScale = math.max(0.66, math.min(1.08, math.min(previewWidth / 820, previewHeight / 520)))
-	local htmlX = startX + previewWidth + previewGap
-
-	local previewInteractive = false
-	if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isPreviewInteractive) == "function" then
-		local okInteractive, value = pcall(ARZ_BARON_ASSISTANT.isPreviewInteractive)
-		previewInteractive = okInteractive and value == true
-	end
-
-	local luaAlpha, htmlAlpha = 1.0, 1.0
-	local selection = ARZ_INTERFACE_CHOOSER.selection
-	if selection then
-		previewInteractive = false
-		local elapsed = math.max(0, getGameTimer() - (tonumber(ARZ_INTERFACE_CHOOSER.transition_started) or getGameTimer()))
-		local fadeDuration = math.max(1, tonumber(ARZ_INTERFACE_CHOOSER.fade_duration) or 320)
-		local fadeProgress = math.min(1, elapsed / fadeDuration)
-		local eased = fadeProgress * fadeProgress * (3 - 2 * fadeProgress)
-		if selection == "lua" then htmlAlpha = 1 - eased else luaAlpha = 1 - eased end
-		if elapsed >= fadeDuration then ARZ_INTERFACE_CHOOSER.phase = "loading" end
-		if elapsed >= fadeDuration + (tonumber(ARZ_INTERFACE_CHOOSER.loading_duration) or 720) then
-			arzInterfaceFinalizeSelection()
-			return
-		end
-	end
-
-	local previousPage = ARZ_INTERFACE_LUA_PREVIEW and tonumber(ARZ_INTERFACE_LUA_PREVIEW.selectedPage) or 2
-	ARZ_INTERFACE_LUA_PREVIEW = {
-		active = true,
-		x = startX,
-		y = previewY,
-		w = previewWidth,
-		h = previewHeight,
-		scale = luaPreviewScale,
-		selectedPage = previousPage,
-		interactive = previewInteractive,
-		alpha = luaAlpha
-	}
-
-	if type(arzUiExtensionsOpenHtmlPreview) == "function" then
-		pcall(arzUiExtensionsOpenHtmlPreview, {
-			x = htmlX,
-			y = previewY,
-			w = previewWidth,
-			h = previewHeight
-		}, "buy", { interactive = previewInteractive, alpha = htmlAlpha })
-	end
-
-	local borderColor = imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], math.max(0.78, menuThemeConfig.Border[4]))
-	local windowColor = imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], 0.97)
-	local accentColor = imgui.ImVec4(menuThemeConfig.active_selector_color[1], menuThemeConfig.active_selector_color[2], menuThemeConfig.active_selector_color[3], 0.95)
-	local whiteMuted = imgui.ImVec4(1, 1, 1, 0.72)
-	local oldColor = imgui.ImVec4(0.96, 0.48, 0.40, 1)
-	local newColor = imgui.ImVec4(0.35, 0.86, 0.58, 1)
-
-	ARZ_INTERFACE_CHOOSER.lua_bounds = { x = startX, y = previewY, w = previewWidth, h = previewHeight }
-	ARZ_INTERFACE_CHOOSER.html_bounds = { x = htmlX, y = previewY, w = previewWidth, h = previewHeight }
-
-	if ARZ_INTERFACE_CHOOSER.phase == "loading" then
-		arzRenderInterfaceLoadingModal(screenWidth, screenHeight)
-	end
-end
 
 ARZ_INPUT_CURSOR_GUARD = ARZ_INPUT_CURSOR_GUARD or { last_reclaim = 0, lua_focused = false }
 
@@ -19541,12 +13279,10 @@ end
 
 function ARZ_INPUT_CURSOR_GUARD.luaUiActive()
 	if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true then return false end
-	local baronUsesLua = ini.cfg.interface_mode ~= "html"
-	if ARZ_BARON_SHOWCASE_MODE ~= nil then baronUsesLua = ARZ_BARON_SHOWCASE_MODE ~= "html" end
+	local baronUsesLua = ARZ_BARON_SHOWCASE_MODE == "intro"
 	local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
 	local baronLuaActive = baronGateOpen and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
-	local chooserActive = baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]
-	return (menuVisible and menuVisible[0] == true) or baronLuaActive or chooserActive or (sellWindowVisible and sellWindowVisible[0] == true)
+	return ARZ_SPECIAL_UI.visible[0] or baronLuaActive or (sellWindowVisible and sellWindowVisible[0] == true)
 end
 
 function ARZ_INPUT_CURSOR_GUARD.pointInsideLuaUi()
@@ -19557,6 +13293,10 @@ function ARZ_INPUT_CURSOR_GUARD.pointInsideLuaUi()
 	if menuVisible and menuVisible[0] == true and menuWP and tonumber(sizeX) and tonumber(sizeY) then
 		if x >= menuWP.x and x <= menuWP.x + tonumber(sizeX) and y >= menuWP.y and y <= menuWP.y + tonumber(sizeY) then return true end
 	end
+ if ARZ_SPECIAL_UI.visible[0] and ARZ_SPECIAL_UI.bounds then
+  local bounds = ARZ_SPECIAL_UI.bounds
+  if x >= bounds.x and x <= bounds.x + bounds.w and y >= bounds.y and y <= bounds.y + bounds.h then return true end
+ end
 	if sellWindowVisible and sellWindowVisible[0] == true and menuDIALOG then
 		if x >= menuDIALOG.x and x <= menuDIALOG.x + 650 and y >= menuDIALOG.y and y <= menuDIALOG.y + 700 then return true end
 	end
@@ -19616,27 +13356,26 @@ ARZ_INPUT_CURSOR_COMPAT_FRAME.HideCursor = true
 ARZ_INPUT_CURSOR_COMPAT_FRAME.LockPlayer = false
 
 mainUiFrame = imgui.OnFrame(function()
-	local baronUsesLua = ini.cfg.interface_mode ~= "html"
-	if ARZ_BARON_SHOWCASE_MODE ~= nil then
-		baronUsesLua = ARZ_BARON_SHOWCASE_MODE ~= "html"
-	end
+	local baronUsesLua = ARZ_BARON_SHOWCASE_MODE == "intro"
 	local baronGateOpen = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
 	local baronLuaActive = baronGateOpen and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.isActive) == "function" and ARZ_BARON_ASSISTANT.isActive() and baronUsesLua
 	local htmlUiActive = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true
 	local baronStageSyncPending = ARZ_BARON_PENDING_STAGE_SYNC ~= nil
-	return (baronGateOpen and baronStageSyncPending) or (baronGateOpen and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.ready == true and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0]) or baronLuaActive or htmlUiActive or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true and ARZ_RELEASE_NOTES_STATE.session_allowed == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
+	return ARZ_SPECIAL_UI.visible[0] or ARZ_SPECIAL_UI.popup ~= nil or marketState.scriptVersion[2] or buySellHistoryPopup.buy or marketState.askServer or marketState.videoSelector or (baronGateOpen and baronStageSyncPending) or baronLuaActive or htmlUiActive or (ARZ_RELEASE_NOTES_STATE and ARZ_RELEASE_NOTES_STATE.pending == true and ARZ_RELEASE_NOTES_STATE.session_allowed == true) or sellWindowVisible[0] or menuVisible[0] or scanButtonVisible[0] or clearSellButtonVisible[0] or lavkaScanButtonVisible[0] or averagePriceWindowVisible[0] or premiumPriceDialogVisible[0] or tradeAutomationVisible[0] or lavkaRadiusButtonVisible[0] or traderChatVisible[0] or marketState.emule_ExelPremium[0]
 end, function(frame)
 	if type(arzUiExtensionsPump) == "function" then arzUiExtensionsPump() end
+ if imgui and imgui.DisableInput ~= nil then
+  local htmlOpen = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen()
+  local popupOpen = marketState.scriptVersion[2] or buySellHistoryPopup.buy or marketState.askServer or marketState.videoSelector
+  imgui.DisableInput = htmlOpen and not ARZ_SPECIAL_UI.visible[0] and not ARZ_SPECIAL_UI.popup and not popupOpen
+ end
 	ARZ_INPUT_CURSOR_GUARD.reclaimLuaIfNeeded()
 	if ARZ_BARON_PENDING_STAGE_SYNC ~= nil and (type(arzBaronSessionGateOpen) ~= "function" or arzBaronSessionGateOpen()) then
 		arzBaronProcessPendingStageSync()
 	end
-	if (type(arzBaronSessionGateOpen) ~= "function" or arzBaronSessionGateOpen()) and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] then
-		arzRenderInterfaceChooser(frame)
-	end
 
 	local htmlUiBlurOnly = type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() == true
-		and not menuVisible[0] and not (arzPreviewMenuState and arzPreviewMenuState.active)
+		and not menuVisible[0]
 	if htmlUiBlurOnly and backgroundBlurEnabled[0] and imguiBlur then
 		local drawList = imgui.GetBackgroundDrawList()
 		if drawList then
@@ -20182,654 +13921,77 @@ end, function(frame)
 		imgui.End()
 	end
 
-	local arzPreviewMenuState = ARZ_INTERFACE_LUA_PREVIEW
-	if menuVisible[0] or (arzPreviewMenuState and arzPreviewMenuState.active) then
-		local isChooserPreviewMenu = arzPreviewMenuState and arzPreviewMenuState.active == true and (not menuVisible[0])
-		local previewUiScale = isChooserPreviewMenu and math.max(0.55, math.min(1.0, tonumber(arzPreviewMenuState.scale) or 1.0)) or nil
-		_G.ARZ_INTERFACE_PREVIEW_UI_SCALE = previewUiScale
-		local previousSelectedMenuPage = selectedMenuPage
-		if isChooserPreviewMenu then
-			selectedMenuPage = tonumber(arzPreviewMenuState.selectedPage) or 2
-		else
-			if modificationState.updateMenuMouseNavigation then
-				modificationState.updateMenuMouseNavigation()
-			end
-		end
 
-		if isChooserPreviewMenu then
-			frame.HideCursor = false
-		elseif imgui.IsMouseDown(1) then
-			frame.HideCursor = true
-		else
-			frame.HideCursor = false
-		end
-
-		alpha_z = 1
-
-		if alphaMenuEnabled[0] and zzztime ~= nil then
-			alpha_z = bringFloatTo(0, 1, zzztime, 0.5)
-		end
-
-		local menuOpacity = getMenuOpacity()
-		local previewAlpha = isChooserPreviewMenu and math.max(0, math.min(1, tonumber(arzPreviewMenuState.alpha) or 1)) or 1
-		imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, alpha_z * menuOpacity * previewAlpha)
-
-		local screenWidth, screenHeight = getScreenResolution()
-		local savedMainWindowSize = type(windowThemeConfig.mainWindowSize) == "table" and windowThemeConfig.mainWindowSize or nil
-		if isChooserPreviewMenu then
-			sizeX = math.max(360, tonumber(arzPreviewMenuState.w) or 420)
-			sizeY = math.max(240, tonumber(arzPreviewMenuState.h) or 290)
-			imgui.SetNextWindowPos(imgui.ImVec2(arzPreviewMenuState.x, arzPreviewMenuState.y), imgui.Cond.Always)
-			imgui.SetNextWindowSize(imgui.ImVec2(sizeX, sizeY), imgui.Cond.Always)
-		else
-			local baronLuaShowcase = ARZ_BARON_SHOWCASE_MODE == "lua"
-			if baronLuaShowcase then
-				-- Onboarding shows the stock Lua interface at the new standard 120%
-				-- perimeter. This is temporary and never overwrites mainWindowSize.
-				sizeX = 996
-				sizeY = 660
-				imgui.SetNextWindowPos(imgui.ImVec2(screenWidth / 2, screenHeight / 2), imgui.Cond.Always, imgui.ImVec2(0.5, 0.5))
-				imgui.SetNextWindowSize(imgui.ImVec2(sizeX, sizeY), imgui.Cond.Always)
-			else
-				sizeX = math.max(830, math.min(10000, tonumber(savedMainWindowSize and savedMainWindowSize.x) or 830))
-				sizeY = math.max(550, math.min(10000, tonumber(savedMainWindowSize and savedMainWindowSize.y) or 550))
-
-				imgui.SetNextWindowPos(imgui.ImVec2(screenWidth / 2, screenHeight / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
-
-				if modificationState.uiApplySavedWindowSize then
-					-- Restore the saved OUTER window size only once after reload.
-					-- The interface-percent slider never changes this value.
-					imgui.SetNextWindowSize(imgui.ImVec2(sizeX, sizeY), imgui.Cond.Always)
-				end
-			end
-
-			imgui.SetNextWindowSizeConstraints(imgui.ImVec2(830, 550), imgui.ImVec2(10000, 10000))
-		end
-
-		-- Apply blur to the background layer before the main window is submitted.
-		-- Dear ImGui renders the background draw list before every window, keeping
-		-- the ArzMarket UI crisp while only the GTA scene behind it is blurred.
-		local uiNowMs = getGameTimer()
-		local resizeInProgress = uiNowMs < (modificationState.uiResizeSuspendBlurUntil or 0)
-		local currentBlurStrength = math.max(0.5, math.min(4.0, tonumber(blurStrength[0]) or 2.0))
-
-		-- mimgui_blur keeps D3D textures/render-target state between frames.
-		-- Recreate those resources when blur strength is reduced so a strong blur
-		-- cannot remain as the source for a weaker setting. A clean frame is left
-		-- between invalidation and the next blur pass to break visual feedback.
-		if modificationState.blurResetPending then
-			modificationState.invalidateBackgroundBlur()
-			modificationState.blurResetPending = false
-			modificationState.blurResetFrames = 1
-		end
-
-		if (not isChooserPreviewMenu) and backgroundBlurEnabled[0] then
-			if not modificationState.blurWasEnabled then
-				modificationState.invalidateBackgroundBlur()
-				modificationState.blurResetFrames = math.max(modificationState.blurResetFrames or 0, 1)
-			end
-
-			local lastStrength = tonumber(modificationState.blurLastStrength)
-			if lastStrength and currentBlurStrength < lastStrength - 0.001 then
-				modificationState.invalidateBackgroundBlur()
-				modificationState.blurResetFrames = 1
-			end
-
-			if (modificationState.blurResetFrames or 0) > 0 then
-				modificationState.blurResetFrames = modificationState.blurResetFrames - 1
-			elseif not resizeInProgress then
-				imguiBlur.apply(imgui.GetBackgroundDrawList(), currentBlurStrength)
-			end
-
-			modificationState.blurLastStrength = currentBlurStrength
-			modificationState.blurWasEnabled = true
-		else
-			if modificationState.blurWasEnabled then
-				modificationState.invalidateBackgroundBlur()
-			end
-			modificationState.blurWasEnabled = false
-			modificationState.blurLastStrength = currentBlurStrength
-			modificationState.blurResetFrames = 0
-		end
-
-		local coreWindowFlags = imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoBackground
-		if isChooserPreviewMenu then
-			coreWindowFlags = coreWindowFlags + imgui.WindowFlags.NoMove + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoSavedSettings
-		end
-		local coreWindowOpenPtr = menuVisible
-		if isChooserPreviewMenu then coreWindowOpenPtr = nil end
-		imgui.Begin("Window", coreWindowOpenPtr, coreWindowFlags)
-		if imgui.SetWindowFontScale then
-			imgui.SetWindowFontScale(isChooserPreviewMenu and previewUiScale or 1.0)
-		end
-
-		local resizedWindowSize = imgui.GetWindowSize()
-		sizeX = resizedWindowSize.x
-		sizeY = resizedWindowSize.y
-
-		if modificationState.uiApplySavedWindowSize and not isChooserPreviewMenu then
-			modificationState.uiApplySavedWindowSize = false
-		end
-
-		if isChooserPreviewMenu then
-			modificationState.uiLastWindowWidth = nil
-			modificationState.uiLastWindowHeight = nil
-		else
-			
-		end
-		local previousWidth = modificationState.uiLastWindowWidth
-		local previousHeight = modificationState.uiLastWindowHeight
-		if previousWidth ~= nil and previousHeight ~= nil then
-			if math.abs(sizeX - previousWidth) > 0.5 or math.abs(sizeY - previousHeight) > 0.5 then
-				if (not isChooserPreviewMenu) and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.event) == "function" then
-					pcall(ARZ_BARON_ASSISTANT.event, "resize_changed", { width = sizeX, height = sizeY })
-				end
-				-- Suspend the fullscreen blur while the native resize grip is moving.
-				-- Save only after resizing settles so disk IO never runs every frame.
-				modificationState.uiResizeSuspendBlurUntil = uiNowMs + 120
-				modificationState.uiWindowSizeDirty = true
-				modificationState.uiWindowSizeSaveAt = uiNowMs + 450
-			end
-		end
-		modificationState.uiLastWindowWidth = sizeX
-		modificationState.uiLastWindowHeight = sizeY
-
-		if (not isChooserPreviewMenu) and modificationState.uiWindowSizeDirty
-			and uiNowMs >= (modificationState.uiWindowSizeSaveAt or 0)
-			and modificationState.persistMainWindowSize then
-			pcall(modificationState.persistMainWindowSize, false)
-		end
-
-		local uiScale = getMenuUiScale()
-		local leftPanelWidth = math.max(150 * uiScale, math.min(220 * uiScale, sizeX * 0.18))
-
-		dl = imgui.GetWindowDrawList()
-		p = imgui.GetCursorScreenPos()
-		menuWP = imgui.GetWindowPos()
-		if not isChooserPreviewMenu then
-			arzBaronAnchorBeginFrame()
-		end
-
-		imgui.BeginChild("left", imgui.ImVec2(leftPanelWidth, 0))
-
-
-		imgui.SetCursorPos(imgui.ImVec2(25 * uiScale, 60 * uiScale))
-
-		local selectedMenuIndex = 0
-
-		imgui.PushFont(fonts[18])
-		imgui.SetCursorPosX(25 * uiScale)
-		imgui.CreateLeftMenu(mainMenu, imgui.ImVec2(leftPanelWidth - 45 * uiScale, 200 * uiScale), selectedMenuIndex, rainbowColor, alpha)
-		imgui.PopFont()
-
-
-		if marketState.lastUpdatePremiumToken ~= -1 then
-			imgui.PushFont(fonts[17])
-			imgui.GetWindowDrawList():AddText(imgui.ImVec2(p.x + 44 * uiScale, p.y + 45 * uiScale), imgui.GetColorU32Vec4(imgui.ImVec4(1, 1, 1, 0.75)), "PREMIUM")
-			imgui.PopFont()
-		end
-
-		imgui.SetCursorPosY(sizeY - 1)
-		imgui.SetCursorPosX((imgui.GetWindowWidth() - 95) / 2)
-
-			imgui.GetWindowDrawList():AddRect(p, imgui.ImVec2(p.x + sizeX - 30, p.y + sizeY), imgui.GetColorU32Vec4(rgbWindowEnabled[0] and imgui.ImVec4(rainbowColor[1], rainbowColor[2], rainbowColor[3], rainbowColor[4]) or imgui.ImVec4(menuThemeConfig.rgb_window[1], menuThemeConfig.rgb_window[2], menuThemeConfig.rgb_window[3], menuThemeConfig.rgb_window[4])), 5, 0, 3)
-
-		imgui.EndChild()
-		imgui.SameLine(leftPanelWidth)
-		local rightChildFlags = selectedMenuPage == 4 and (imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse) or 0
-		if rightChildFlags == 0 and type(arzUiExtensionsGetRightChildFlags) == "function" then
-			rightChildFlags = arzUiExtensionsGetRightChildFlags(selectedMenuPage)
-		end
-		if isChooserPreviewMenu then
-			rightChildFlags = rightChildFlags + imgui.WindowFlags.NoInputs
-		end
-		imgui.BeginChild("right", imgui.ImVec2(0, 0), false, rightChildFlags)
-
-
-		-- Responsive width for standard widgets.
-		-- Labels attached to ColorEdit/Slider/Input/Combo now move with window width.
-		local rightContentAvail = imgui.GetContentRegionAvail()
-		local responsiveItemWidth = math.max(320 * uiScale, rightContentAvail.x - 300 * uiScale)
-		imgui.PushItemWidth(responsiveItemWidth)
-
-		imgui.SetCursorPos(imgui.ImVec2(5, 5))
-		imgui.BeginGroup()
-		imgui.PushFont(fonts[13])
-
-		if alphaMenuEnabled[0] and UI_ANIM_BUTTON and os.clock() - UI_ANIM_BUTTON.time <= UI_ANIM_BUTTON.duration then
-			local animationRange = os.clock() - UI_ANIM_BUTTON.time <= UI_ANIM_BUTTON.duration / 2 and {
-				1,
-				0
-			} or {
-				0,
-				1
-			}
-			local animationStartTime = os.clock() - UI_ANIM_BUTTON.time <= UI_ANIM_BUTTON.duration / 2 and UI_ANIM_BUTTON.time or UI_ANIM_BUTTON.time + UI_ANIM_BUTTON.duration / 2
-
-			kifir = bringFloatTo(animationRange[1], animationRange[2], animationStartTime, UI_ANIM_BUTTON.duration / 2)
-		end
-
-		imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(8, 8))
-		imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, (UI_ANIM_BUTTON and os.clock() - UI_ANIM_BUTTON.time <= UI_ANIM_BUTTON.duration and kifir or 1))
-
-		if selectedMenuPage == 1 then
-			sell(rainbowColor)
-		elseif selectedMenuPage == 2 then
-			buy(rainbowColor)
-		elseif selectedMenuPage == 3 then
-			if marketState.vr_helper.isClicked then
-				vrSelected(rainbowColor)
-			elseif marketState.isActiveChooseSputnik then
-				if marketState.download_sputnik == nil then
-					marketState.download_sputnik = false
-					sputnik_Manager()
-				end
-				if type(marketState.download_sputnik) == "table" then
-					sputnikSelection(rainbowColor)
-				else
-					imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 155) / 2, sizeY / 2 - 65))
-					imgui.Spinner("##spinnerLoadingSputnik", 50, 5, imgui.GetColorU32Vec4(imgui.ImVec4(rainbowColor[1], rainbowColor[2], rainbowColor[3], rainbowColor[4])))
-					imgui.SetCursorPosX(imgui.GetCursorPos().x + (imgui.GetWindowWidth() - imgui.CalcTextSize("Загрузка... ").x) / 2)
-					imgui.TextDisabled("Загрузка... ")
-				end
-			elseif modificationState.settingsInterfaceOpen then
-				menu_settings()
-			else
-				cfg_menu(rainbowColor)
-			end
-		elseif selectedMenuPage == 4 then
-			logs_page()
-		elseif selectedMenuPage == 5 then
-			if download_marketplace == nil then
-				if (ini.cfg.premiumTokenAuth == 1 or ini.cfg.premiumTokenAuth == 2) and not marketState.premiumKeys[1] then
-					deAFKMessage("loading..?")
-					print("marketplace pre loading...")
-				else
-					download_marketplace = false
-
-					marketplace_Manager()
-				end
-			end
-
-			if download_marketplace == true then
-				if timers[14] + 5 <= os.time() or json_vlad == nil then
-					timers[14] = os.time()
-
-					deAFKMessage(debug.getinfo(1, "l"), "recheck json_timer[14]")
-
-					json_vlad = readJsonFile(buyJsonPath)
-				end
-
-				if json_vlad ~= nil and #json_vlad ~= 0 then
-					deAFKMessage(debug.getinfo(1, "l"), "items_buy ~= nil recheck.")
-
-					download_marketplace = nil
-				end
-
-				imgui.PushFont(fonts[18])
-				imgui.SetCursorPos(imgui.ImVec2(sizeX / 15, sizeY / 2.2))
-				imgui.TextDisabled("Для того что бы данная функция была доступна нужно зайти в раздел скупки и...")
-				imgui.SetCursorPos(imgui.ImVec2(sizeX / 4, sizeY / 1.95))
-				imgui.TextDisabled("...выполнить инструкцию на экране.")
-				imgui.SetCursorPos(imgui.ImVec2(sizeX / 3.6, sizeY / 1.75))
-				imgui.Link("https://youtu.be/7SCnwFnNaYg", "https://rutube.ru/video/private/98899bc7018fdc37812a045faf96ec4a/?p=1OLMt59-z_0eRWpsPrgeLA", "[Инструкция] Как это сделать?", nil, rainbowColor, u8:decode("Ютуб"), u8:decode("Рутуб"))
-				imgui.PopFont()
-			end
-
-			if marketplaceView[2] then
-				window_marketPlace_lavka()
-			elseif type(download_marketplace) == "table" then
-				if #download_marketplace == 0 then
-					none_market()
-				else
-					window_marketPlace(rainbowColor)
-				end
-			elseif download_marketplace == "auth" then
-				window_marketAuth(rainbowColor)
-			elseif download_marketplace == "blocked" then
-				block_access_market()
-			elseif download_marketplace ~= true then
-				imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 155) / 2, sizeY / 2 - 65))
-				imgui.Spinner("##spinne3r", 45, 2, imgui.GetColorU32Vec4(imgui.ImVec4(rainbowColor[1], rainbowColor[2], rainbowColor[3], rainbowColor[4])))
-				imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 335) / 3.8, sizeY / 1.65))
-				imgui.PushFont(fonts[18])
-				imgui.TextDisabled("Загрузка интерфейса. Пожалуйста подождите " .. 28 - (timers[39][2] + timers[38][2]) .. " секунд... [" .. timers[39][2] .. "] [" .. timers[38][2] .. "]")
-				imgui.PopFont()
-
-				if marketState.marketplaceTimeOut == true and timers[38][1] + 1 < os.time() then
-					timers[38][1] = os.time()
-					timers[38][2] = timers[38][2] + 1
-
-					deAFKMessage("timer + 1 " .. timers[38][2])
-					print("timer[38] + 1 | " .. timers[38][2])
-
-					if timers[38][2] > 14 then
-						timers[39][2] = 0
-						timers[38][2] = 0
-						ini.cfg.bannedByRkn = true
-
-						print("banned by rkn")
-
-						marketState.marketplaceTimeOut = nil
-						download_marketplace = nil
-
-						save_all()
-					end
-				end
-			end
-		elseif selectedMenuPage == 6 then
-			if download_scripts == nil then
-				download_scripts = false
-
-				script_Manager()
-			end
-
-			if type(download_scripts) == "table" and download_scripts[1] and download_scripts[2] then
-				script_Page()
-			else
-				imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 155) / 2, sizeY / 2 - 65))
-				imgui.Spinner("##spi2nner", 45, 2, imgui.GetColorU32Vec4(imgui.ImVec4(rainbowColor[1], rainbowColor[2], rainbowColor[3], rainbowColor[4])))
-				imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 335) / 2.37, sizeY / 1.65))
-				imgui.PushFont(fonts[18])
-				imgui.TextDisabled("Загрузка интерфейса. Пожалуйста подождите...")
-				imgui.PopFont()
-			end
-		elseif selectedMenuPage == 7 then
-			hack_page(rainbowColor)
-		elseif selectedMenuPage == 8 then
-			if storageFinder and type(storageFinder.renderPage) == "function" then
-				storageFinder.renderPage()
-			else
-				imgui.TextDisabled("Хранилище не инициализировано.")
-			end
-		elseif selectedMenuPage == 9 then
-			authorization_page(rainbowColor)
-		elseif selectedMenuPage == 10 then
-			renderHeightCalculatorPage()
-		else
-			local renderedExtension = type(arzUiExtensionsRenderPage) == "function" and arzUiExtensionsRenderPage(selectedMenuPage, rainbowColor) or false
-			if not renderedExtension then
-				imgui.TextDisabled("Страница модуля недоступна.")
-			end
-		end
-		if not isChooserPreviewMenu then
-			handleListDeleteUndoHotkey()
-		end
-
-		imgui.PopFont()
-		imgui.PopStyleVar(2)
-		imgui.PopItemWidth()
-		imgui.EndGroup()
-
-			imgui.GetWindowDrawList():AddRect(p, imgui.ImVec2(p.x + sizeX, p.y + sizeY), imgui.GetColorU32Vec4(rgbWindowEnabled[0] and imgui.ImVec4(rainbowColor[1], rainbowColor[2], rainbowColor[3], rainbowColor[4]) or imgui.ImVec4(menuThemeConfig.rgb_window[1], menuThemeConfig.rgb_window[2], menuThemeConfig.rgb_window[3], menuThemeConfig.rgb_window[4])), 5, 0, 3)
-
-		imgui.EndChild()
-
-		q = imgui.ImVec2(p.x + (leftPanelWidth - 75) / 2, p.y + sizeY - 150)
-
-		dl:AddRectFilled(imgui.ImVec2(p.x + leftPanelWidth, p.y), imgui.ImVec2(p.x + sizeX, p.y + sizeY + 2.6), imgui.GetColorU32Vec4(imgui.ImVec4(windowColor[0], windowColor[1], windowColor[2], 1.0)), 5, 0)
-		dl:AddRectFilled(p, imgui.ImVec2(p.x + leftPanelWidth, p.y + sizeY), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.left_menu[1], menuThemeConfig.left_menu[2], menuThemeConfig.left_menu[3], 1.0)), 5, 0)
-
-		if marketState.lastUpdatePremiumToken ~= -1 then
-			imgui.PushFont(fonts[17])
-			dl:AddText(imgui.ImVec2(p.x + (44), p.y + 45), imgui.GetColorU32Vec4(imgui.ImVec4(rainbowColor[1], rainbowColor[2], rainbowColor[3], 1)), "PREMIUM")
-			imgui.PopFont()
-		end
-
-		imgui.PushFont(fonts[27])
-		dl:AddText(imgui.ImVec2(p.x + (10), p.y + 21), imgui.GetColorU32Vec4(imgui.ImVec4(rainbowColor[1], rainbowColor[2], rainbowColor[3], 1)), marketTitleBuffer)
-		imgui.PopFont()
-
-		if marketState.custom_add_item[0] then
-			item_sell_custom()
-		end
-
-		if false and sellFilterWindowVisible[0] then
-			local screenWidth, screenHeight = getScreenResolution()
-			local windowDrawList = imgui.GetWindowDrawList()
-			local cursorScreenPos = imgui.GetCursorScreenPos()
-			local distributionWindowWidth = 300
-			local distributionWindowHeight = 200
-
-			imgui.SetNextWindowPos(imgui.ImVec2(menuWP.x + 240, menuWP.y - 105), imgui.Cond.Always + imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
-			imgui.SetNextWindowSize(imgui.ImVec2(distributionWindowWidth, distributionWindowHeight), imgui.Cond.Always)
-			imgui.Begin("kakawki2", sellFilterWindowVisible, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoBackground)
-
-			local imguiCol = imgui.Col
-
-			imgui.PushStyleColor(imguiCol.WindowBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] + 0.1))
-			imgui.PushStyleColor(imguiCol.ChildBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] - 0.1))
-			imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] + 0.1))
-
-
-			imgui.BeginChild("secondImguiMenu")
-
-			local cursorScreenPos = imgui.GetCursorScreenPos()
-
-			imgui.CustomInvisibleChild("razpred", imgui.ImVec2(distributionWindowWidth, distributionWindowHeight), false, imgui.WindowFlags.NoScrollbar)
-			imgui.PushFont(fonts[17])
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.CenterText("Фильтры.")
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-			if imgui.ToggleButton("Скрывать недоступные предметы.", filterThree) then
-				ini.cfg.filter_three = filterThree[0]
-
-				save_all()
-			end
-
-			imgui.Hint("filter_threeA", "Скрывает все предметы которых у вас нет в инвентаре\nВыполнять сортировку не нужно.\nПриминяется автоматически если включен.", false)
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-			imgui.SetCursorPosY(imgui.GetCursorPos().y - 20)
-			imgui.CenterText("Сортировка предметов.")
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-			if imgui.ToggleButton("Отключить все чего нет в инвентаре.", filterOne) then
-				ini.cfg.filter_one = filterOne[0]
-
-				save_all()
-			end
-
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-			if imgui.ToggleButton("Все отключенные переместить вниз.", filterTwo) then
-				ini.cfg.filter_two = filterTwo[0]
-
-				save_all()
-			end
-
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 2)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-
-			imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-			if imgui.Button("Выполнить сортировку", imgui.ImVec2(imgui.GetWindowWidth() - 10)) then
-				if #sellList > 0 then
-					for itemIndex = 1, #sellList do
-						for itemIndex, itemData in pairs(sellList) do
-							if sellList[itemIndex].all_count == 0 and filterOne[0] then
-								sellList[itemIndex].enabled = false
-							end
-
-							if sellList[itemIndex].enabled == false and filterTwo[0] then
-								local selectedSellItem = sellList[itemIndex]
-
-								table.remove(sellList, itemIndex)
-								table.insert(sellList, #sellList + 1, selectedSellItem)
-							end
-						end
-					end
-				end
-
-				AFKMessage(u8:decode("Сортировка выполнена."))
-
-				sellFilterWindowVisible[0] = not sellFilterWindowVisible[0]
-			end
-
-			imgui.GetStyle().FrameBorderSize = 0
-
-			imgui.PopFont()
-			imgui.EndCustomInvisibleChild()
-			imgui.GetWindowDrawList():AddRect(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + distributionWindowWidth, cursorScreenPos.y + distributionWindowHeight), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 3)
-			imgui.EndChild()
-			imgui.PopStyleColor(3)
-			imgui.End()
-		end
-
-		if buyBudgetWindowVisible[0] then
-			local screenWidth, screenHeight = getScreenResolution()
-			local windowDrawList = imgui.GetWindowDrawList()
-			local cursorScreenPos = imgui.GetCursorScreenPos()
-			local buyDistributionWidth = 300
-			local buyDistributionHeight = 150
-
-			imgui.SetNextWindowPos(imgui.ImVec2(menuWP.x + (sizeX + 155), menuWP.y + sizeY), imgui.Cond.Always + imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
-			imgui.SetNextWindowSize(imgui.ImVec2(buyDistributionWidth, buyDistributionHeight), imgui.Cond.Always)
-			imgui.Begin("kakawki", buyBudgetWindowVisible, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoBackground)
-
-			local imguiCol = imgui.Col
-
-			imgui.PushStyleColor(imguiCol.WindowBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] + 0.1))
-			imgui.PushStyleColor(imguiCol.ChildBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] - 0.1))
-			imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] + 0.1))
-
-
-			imgui.BeginChild("secondImguiMenu")
-
-			local cursorScreenPos = imgui.GetCursorScreenPos()
-
-			imgui.CustomInvisibleChild("razpred", imgui.ImVec2(buyDistributionWidth, buyDistributionHeight), false, imgui.WindowFlags.NoScrollbar)
-			imgui.PushFont(fonts[17])
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.CenterText(ffi.string(buyBudgetInput.buy) >= "0" and "Примерный Остаток денег: " .. moneySeparator(GetMoneyLimit()) or "Введите кол-во вирт")
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-			imgui.Text("Кол-во вирт на скуп -")
-			imgui.SameLine()
-			imgui.PushItemWidth(100)
-			imgui.SetCursorPosY(imgui.GetCursorPos().y - 3)
-			imgui.PushStyleVarVec2(imgui.StyleVar.FramePadding, imgui.ImVec2(3, 3))
-			imgui.InputTextD(viceCityMode and " SA$" or " VC$", buyBudgetInput.buy, 32, imgui.InputTextFlags.CharsDecimal)
-			imgui.PopStyleVar()
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 35)
-			imgui.CenterText("Кол-во предметов - " .. #buyList)
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 27)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-
-			imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-			if imgui.Button("Распределить", imgui.ImVec2(imgui.GetWindowWidth() - 10)) then
-				local eligibleBuyItemCount = 0
-				local totalBudget = tonumber(ffi.string(buyBudgetInput.buy))
-
-				for itemIndex, itemData in pairs(buyList) do
-					if not itemData.maximum and itemData.enabled then
-						eligibleBuyItemCount = eligibleBuyItemCount + 1
-					end
-				end
-
-				if not totalBudget or totalBudget < 0 then
-					sendNotify("Enter a valid non-negative budget.")
-				elseif eligibleBuyItemCount == 0 then
-					sendNotify("No enabled unlimited buy items to distribute the budget.")
-				else
-					local budgetPerItem = math.floor(totalBudget) / eligibleBuyItemCount
-
-					for itemIndex, itemData in pairs(buyList) do
-						local itemPrice = tonumber(viceCityMode and itemData.price or itemData.price_vc) or 0
-
-						if itemPrice > 0 and itemData.enabled and not itemData.maximum then
-							local itemCount = math.floor(budgetPerItem / itemPrice)
-							itemData.count = math.floor(itemCount)
-						end
-					end
-
-					AFKMessage(u8:decode("Распределение завершено. Примерный остаток - {505050}") .. moneySeparator(GetMoneyLimit()))
-					buyBudgetInput.page = 0
-					buyBudgetWindowVisible[0] = not buyBudgetWindowVisible[0]
-				end
-			end
-
-			imgui.GetStyle().FrameBorderSize = 0
-
-			imgui.PopItemWidth()
-			imgui.PopFont()
-			imgui.EndCustomInvisibleChild()
-			imgui.GetWindowDrawList():AddRect(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + buyDistributionWidth, cursorScreenPos.y + buyDistributionHeight), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 3)
-			imgui.EndChild()
-			imgui.PopStyleColor(3)
-			imgui.End()
-		end
-
-
-		-- Baron anchor for dragging the whole ArzMarket window by its upper strip.
-		if not isChooserPreviewMenu then
-			arzBaronAnchorRecordRect("window_drag", menuWP.x + 18, menuWP.y + 4, math.max(180, sizeX - 36), math.max(34, 46 * getMenuUiScale()))
-		end
-
-		-- Always-visible resize grip.
-		local gripDrawList = imgui.GetWindowDrawList()
-		if not isChooserPreviewMenu then
-		local gripColor = imgui.GetColorU32Vec4(
-			imgui.ImVec4(
-				menuThemeConfig.Border[1],
-				menuThemeConfig.Border[2],
-				menuThemeConfig.Border[3],
-				1.0
-			)
-		)
-		local gripX = menuWP.x + sizeX - 8
-		local gripY = menuWP.y + sizeY - 8
-		arzBaronAnchorRecordRect("resize_handle", gripX - 22, gripY - 22, 24, 24)
-
-		gripDrawList:AddLine(
-			imgui.ImVec2(gripX - 8, gripY),
-			imgui.ImVec2(gripX, gripY - 8),
-			gripColor,
-			2.0
-		)
-		gripDrawList:AddLine(
-			imgui.ImVec2(gripX - 14, gripY),
-			imgui.ImVec2(gripX, gripY - 14),
-			gripColor,
-			2.0
-		)
-		gripDrawList:AddLine(
-			imgui.ImVec2(gripX - 20, gripY),
-			imgui.ImVec2(gripX, gripY - 20),
-			gripColor,
-			2.0
-		)
-		end
-
-		if not isChooserPreviewMenu then
-			if selectedMenuPage == 1 and ARZ_BARON_TRADE_FILTER_OPEN.sell ~= false then
-				tradeFilterRenderPanel("sell")
-			elseif selectedMenuPage == 2 and ARZ_BARON_TRADE_FILTER_OPEN.buy ~= false then
-				tradeFilterRenderPanel("buy")
-			end
-		end
-
-		if isChooserPreviewMenu then
-			selectedMenuPage = previousSelectedMenuPage
-		end
-		imgui.End()
-		imgui.PopStyleVar()
-		_G.ARZ_INTERFACE_PREVIEW_UI_SCALE = nil
-	end
+ if ARZ_SPECIAL_UI.visible[0] then
+  frame.HideCursor = false
+  local page = ARZ_SPECIAL_UI.page
+  local titles = {
+   addons = "Каталог дополнений", auth = "Авторизация",
+   height = "Калькулятор роста", piar = "Автопиар", sputnik = "Спутники"
+  }
+  imgui.SetNextWindowSize(imgui.ImVec2(850, 620), imgui.Cond.FirstUseEver)
+  if imgui.Begin((titles[page] or "ArzMarket") .. "##arzSpecial", ARZ_SPECIAL_UI.visible) then
+   local pos, windowSize = imgui.GetWindowPos(), imgui.GetWindowSize()
+   ARZ_SPECIAL_UI.bounds = { x = pos.x, y = pos.y, w = windowSize.x, h = windowSize.y }
+   sizeX, sizeY = windowSize.x, windowSize.y
+   local accent = { menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4] }
+   if page == "addons" then
+    if download_scripts == nil then script_Manager() end
+    if type(download_scripts) == "table" and download_scripts[1] and download_scripts[2] then script_Page()
+    else imgui.TextDisabled("Загрузка каталога...") end
+   elseif page == "auth" then authorization_page(accent)
+   elseif page == "height" then renderHeightCalculatorPage()
+   elseif page == "piar" then vrSelected(accent)
+   elseif page == "sputnik" then
+    if marketState.download_sputnik == nil then sputnik_Manager() end
+    if type(marketState.download_sputnik) == "table" then sputnikSelection(accent)
+    else imgui.TextDisabled("Загрузка Спутников...") end
+   end
+  end
+  imgui.End()
+ end
+
+ if ARZ_SPECIAL_UI.popup or marketState.scriptVersion[2] or buySellHistoryPopup.buy or marketState.askServer or marketState.videoSelector then
+  frame.HideCursor = false
+  imgui.SetNextWindowSize(imgui.ImVec2(1, 1), imgui.Cond.Always)
+  imgui.SetNextWindowPos(imgui.ImVec2(0, 0), imgui.Cond.Always)
+  imgui.Begin("##arzCompatPopupHost", nil, imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove + imgui.WindowFlags.NoBackground)
+  if ARZ_SPECIAL_UI.popup then
+   local popupTitles = { key = "Авторизация в маркетплейсе.", premium = "Личный кабинет.", tg = "[TG] Настройки", tgad = "[TGAD] Настройки" }
+   local popupTitle = popupTitles[ARZ_SPECIAL_UI.popup]
+   if popupTitle then
+    if ARZ_SPECIAL_UI.pending then imgui.OpenPopup(popupTitle); ARZ_SPECIAL_UI.pending = false end
+    if ARZ_SPECIAL_UI.popup == "key" then marketplaceAuthPage()
+    elseif ARZ_SPECIAL_UI.popup == "premium" then premiumPage({1, 1, 1, 1})
+    elseif ARZ_SPECIAL_UI.popup == "tg" then tg_settings()
+    elseif ARZ_SPECIAL_UI.popup == "tgad" then tg_settingsAD() end
+    if type(imgui.IsPopupOpen) == "function" then
+     local okOpen, stillOpen = pcall(imgui.IsPopupOpen, popupTitle)
+     if okOpen and stillOpen == false then ARZ_SPECIAL_UI.popup = nil end
+    end
+   end
+  end
+  if marketState.scriptVersion[2] then
+   imgui.OpenPopup("Найдено новое обновление скрипта!")
+   downloadScriptPage()
+  end
+  if buySellHistoryPopup.buy then
+   imgui.OpenPopup("Лог [Продажи/Скупки] товаров")
+   tg_settingsw()
+  end
+  if marketState.askServer then
+   imgui.OpenPopup("Копирование конфигов")
+   askServer()
+  end
+  if marketState.videoSelector then
+   imgui.OpenPopup("Открытие ссылки.")
+   videoSelector(marketState.youtubeLink, marketState.rutubeLink, marketState.isOldMethodLink)
+  end
+  imgui.End()
+ end
 
 	local baronGateOpenForRender = type(arzBaronSessionGateOpen) == "function" and arzBaronSessionGateOpen() or false
-	local baronChooserVisible = baronGateOpenForRender and ARZ_INTERFACE_CHOOSER and ARZ_INTERFACE_CHOOSER.visible and ARZ_INTERFACE_CHOOSER.visible[0] == true
-	local baronCanRenderInLua = ini.cfg.interface_mode ~= "html"
-	if ARZ_BARON_SHOWCASE_MODE ~= nil then baronCanRenderInLua = ARZ_BARON_SHOWCASE_MODE ~= "html" end
-	if baronChooserVisible then baronCanRenderInLua = true end
+	local baronCanRenderInLua = ARZ_BARON_SHOWCASE_MODE == "intro"
 	if baronGateOpenForRender and ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.render) == "function" and ARZ_BARON_ASSISTANT.isActive and ARZ_BARON_ASSISTANT.isActive() and baronCanRenderInLua then
 		local screenWidth, screenHeight = getScreenResolution()
 		local snapshot = arzBaronAssistantSnapshot(arzBaronCurrentPageName(), "lua")
@@ -20861,13 +14023,6 @@ end, function(frame)
 		elseif (not anchor) and (snapshot.target == "start_button" or snapshot.target == "add_button" or snapshot.target == "sell_scan") and menuWP then
 			anchor = { x = menuWP.x + (sizeX or 830) - 150 * getMenuUiScale(), y = menuWP.y + 75 * getMenuUiScale(), w = 120 * getMenuUiScale(), h = 34 * getMenuUiScale() }
 		end
-		local chooserBounds = nil
-		local luaPreviewBounds = nil
-		local htmlPreviewBounds = nil
-		if baronChooserVisible and ARZ_INTERFACE_CHOOSER then
-			luaPreviewBounds = ARZ_INTERFACE_CHOOSER.lua_bounds
-			htmlPreviewBounds = ARZ_INTERFACE_CHOOSER.html_bounds
-		end
 		local baronFont = fonts and (fonts.baron or fonts[18]) or nil
 		if baronFont then imgui.PushFont(baronFont) end
 		local scriptBounds = nil
@@ -20876,8 +14031,6 @@ end, function(frame)
 		end
 		local okBaronRender, baronRenderError = pcall(ARZ_BARON_ASSISTANT.render, imgui, {
 			screenWidth = screenWidth, screenHeight = screenHeight, anchor = anchor,
-			chooser = baronChooserVisible, chooserBounds = chooserBounds,
-			luaPreviewBounds = luaPreviewBounds, htmlPreviewBounds = htmlPreviewBounds,
 			scriptBounds = scriptBounds
 		})
 		if baronFont then imgui.PopFont() end
@@ -21423,25 +14576,25 @@ function marketplaceAuthPage()
 		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
 
 		if imgui.Button("Проверить авторизацию", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			if arzSavedCfgString("authPremiumTokenAuth") == "" then
-				arzAuthFreezeCfgString("authPremiumTokenAuth", ffi.string(marketState.premiumTokenAuth), "cfg:authPremiumTokenAuth")
-				arzApplySavedAuthRuntime()
-			end
+			local candidateKey = ffi.string(marketState.premiumTokenAuth)
+			if candidateKey ~= "" and not candidateKey:find("[%z\r\n]") then
 			sendNotify(u8:decode("  Попытка авторизации..."))
-			asyncHttpRequest("POST", marketState.host .. "/api/checkKey/" .. arzSavedCfgString("authPremiumTokenAuth"), {}, function(tokenAuthResponse)
+			asyncHttpRequest("POST", marketState.host .. "/api/checkKey/" .. candidateKey, {}, function(tokenAuthResponse)
 				if tokenAuthResponse.status_code == 201 then
 					deAFKMessage(debug.getinfo(1, "l"), "sub: " .. tokenAuthResponse.text)
 
-					marketState.premiumUserInfo = decodeJson(tokenAuthResponse.text)
+					local decodedOk, decodedInfo = pcall(decodeJson, tokenAuthResponse.text)
+					if not decodedOk or type(decodedInfo) ~= "table" then return end
+					marketState.premiumUserInfo = decodedInfo
 
 					if marketState.premiumUserInfo.endTime then
-						marketState.premiumKeys = {}
+						arzNetworkAcceptPremiumAuth(candidateKey, marketState.premiumUserInfo.UserTempKey)
 
 						sendNotify(u8:decode("Авторизация маркетплейса успешна!"))
 
 						ini.cfg.premiumTokenAuth = arzAuthFreezeNumber("ini_premiumTokenAuth", 2, -1) or ini.cfg.premiumTokenAuth
 
-						local writeSuccess, writeError = writeKey(tostring(ffi.string(marketState.premiumTokenAuth)), "premiumTokenAuth")
+						local writeSuccess, writeError = writeKey(candidateKey, "premiumTokenAuth")
 
 						deAFKMessage(debug.getinfo(1, "l"), "saved to regdit[1]? > " .. tostring(writeSuccess) .. " | " .. tostring(writeError))
 						save_all()
@@ -21463,6 +14616,9 @@ function marketplaceAuthPage()
 				deAFKMessage(debug.getinfo(1, "l"), "sub error")
 				sendNotify(u8:decode("Ошибка клиента/сервера. Обратитесь в поддержку."))
 			end)
+			else
+				sendNotify(u8:decode("Введите корректный Premium ключ."))
+			end
 		end
 
 		if imgui.Button("Ничего не открылось", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
@@ -21612,41 +14768,6 @@ function downloadScriptPage()
 	imgui.PopFont()
 end
 
-function SellBuyFull()
-	imgui.PushFont(fonts[18])
-
-	local imguiCol = imgui.Col
-
-	imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(0.05, 0.06, 0.1, 0.9))
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
-
-	if imgui.BeginPopupModal("Лог продаж и покупок.", _, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse) then
-		marketState.isPopupActive = true
-
-		imgui.SetWindowSizeVec2(imgui.ImVec2(900, 505))
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-		imgui.CustomInvisibleChild("SellBuyFull", imgui.ImVec2(-1, 430), false)
-		imgui.TextColoredRGB("{cccccc}" .. marketState.fullLogsDialog)
-		imgui.EndCustomInvisibleChild()
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Закрыть", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			marketState.isPopupActive = false
-
-			imgui.CloseCurrentPopup()
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.EndPopup()
-	end
-
-	imgui.PopStyleVar()
-	imgui.PopStyleColor()
-	imgui.PopFont()
-end
 
 function premiumPage(frame)
 	imgui.PushFont(fonts[18])
@@ -21694,25 +14815,25 @@ function premiumPage(frame)
 		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
 
 		if imgui.Button("Проверить ключ", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			if arzSavedCfgString("authPremiumTokenAuth") == "" then
-				arzAuthFreezeCfgString("authPremiumTokenAuth", ffi.string(marketState.premiumTokenAuth), "cfg:authPremiumTokenAuth")
-				arzApplySavedAuthRuntime()
-			end
+			local candidateKey = ffi.string(marketState.premiumTokenAuth)
+			if candidateKey ~= "" and not candidateKey:find("[%z\r\n]") then
 			sendNotify(u8:decode("  Попытка авторизации..."))
-			arzRequestPremiumKeyCheck(arzSavedCfgString("authPremiumTokenAuth"), function(tokenCheckResponse)
+			arzRequestPremiumKeyCheck(candidateKey, function(tokenCheckResponse)
 				if tokenCheckResponse.status_code == 201 then
 					deAFKMessage(debug.getinfo(1, "l"), "sub: " .. tokenCheckResponse.text)
 
-					marketState.premiumUserInfo = decodeJson(tokenCheckResponse.text)
+					local decodedOk, decodedInfo = pcall(decodeJson, tokenCheckResponse.text)
+					if not decodedOk or type(decodedInfo) ~= "table" then return end
+					marketState.premiumUserInfo = decodedInfo
 
 					if marketState.premiumUserInfo.endTime then
+						arzNetworkAcceptPremiumAuth(candidateKey, marketState.premiumUserInfo.UserTempKey)
 						marketState.VisibleKey = false
-						marketState.premiumKeys = {}
 						marketState.premiumUserInfo.userName = u8:decode(marketState.premiumUserInfo.userName)
 						marketState.lastUpdatePremiumToken = marketState.premiumUserInfo.userStatus ~= 0 and os.time() or -1
 						ini.cfg.premiumTokenAuth = arzAuthFreezeNumber("ini_premiumTokenAuth", marketState.premiumUserInfo.userStatus ~= 0 and 1 or 2, -1) or ini.cfg.premiumTokenAuth
 
-						local writeSuccess, writeError = writeKey(tostring(ffi.string(marketState.premiumTokenAuth)), "premiumTokenAuth")
+						local writeSuccess, writeError = writeKey(candidateKey, "premiumTokenAuth")
 
 						deAFKMessage(debug.getinfo(1, "l"), "saved to regdit[1]? > " .. tostring(writeSuccess) .. " | " .. tostring(writeError))
 
@@ -21755,15 +14876,19 @@ function premiumPage(frame)
 				sendNotify(u8:decode("Ошибка клиента/сервера. Обратитесь в поддержку."))
 				sendNotify(u8:decode("Для решения вашей проблемы возможно поможет команда /premhost, напишите ее в чат игры"))
 			end)
+			else
+				sendNotify(u8:decode("Введите корректный Premium ключ."))
+			end
 		end
 
 		if marketState.isMenuActive == 1 and imgui.Button("Привязать аккаунт", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			local savedRealPlayerName = arzSavedCfgString("authRealNameMode1")
-			local savedUid = arzSavedCfgString("authUid")
+			local savedRealPlayerName, savedUid = arzNetworkNameAndUid()
+			local candidateKey = ffi.string(marketState.premiumTokenAuth)
+			if candidateKey == "" then candidateKey = arzNetworkActivePremiumAuth() end
 
-			if savedUid ~= "" and savedRealPlayerName ~= "" then
+			if savedUid ~= "" and savedRealPlayerName ~= "" and candidateKey ~= "" then
 				local bindingRequestBody = encodeJson({
-					keyAccept = arzSavedCfgString("authPremiumTokenAuth"),
+					keyAccept = candidateKey,
 					gameNickname = savedRealPlayerName .. "[" .. savedUid .. "]"
 				})
 
@@ -21776,7 +14901,8 @@ function premiumPage(frame)
 					if bindingResponse.status_code == 201 or bindingResponse.status_code == 304 then
 						deAFKMessage(debug.getinfo(1, "l"), "sub: " .. bindingResponse.text)
 
-						local bindingData = decodeJson(bindingResponse.text)
+					local bindingOk, bindingData = pcall(decodeJson, bindingResponse.text)
+					if not bindingOk or type(bindingData) ~= "table" then return end
 
 						if bindingData.isMenuActive then
 							marketState.isMenuActive = bindingData.isMenuActive
@@ -21928,342 +15054,7 @@ function sputnikCustomer()
 	imgui.PopFont()
 end
 
-function newFilter(listType)
-	imgui.PushFont(fonts[18])
 
-	local imguiCol = imgui.Col
-
-	imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(0.05, 0.06, 0.1, 0.9))
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
-
-	if imgui.BeginPopupModal("Фильтры.", _, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse) then
-		marketState.isPopupActive = true
-
-		imgui.SetWindowSizeVec2(imgui.ImVec2(550, 450))
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-
-		local cursorScreenPos = imgui.GetCursorScreenPos()
-
-		imgui.CustomInvisibleChild("razpred", imgui.ImVec2(-1, 370), false, imgui.WindowFlags.NoScrollbar)
-		imgui.PushFont(fonts[17])
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 23)
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-		imgui.SetCursorPosY(imgui.GetCursorPos().y - 20)
-		imgui.CenterText("Сортировка предметов.")
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-		if imgui.ToggleButton("Отключить все чего нет в инвентаре.", filterOne) then
-			ini.cfg.filter_one = filterOne[0]
-
-			save_all()
-		end
-
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-		if imgui.ToggleButton("Все отключенные переместить вниз.", filterTwo) then
-			ini.cfg.filter_two = filterTwo[0]
-
-			save_all()
-		end
-
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 2)
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Выполнить сортировку", imgui.ImVec2(imgui.GetWindowWidth() - 10)) then
-			if #sellList > 0 then
-				for itemIndex = 1, #sellList do
-					for itemIndex, itemData in pairs(sellList) do
-						if sellList[itemIndex].all_count == 0 and filterOne[0] then
-							sellList[itemIndex].enabled = false
-						end
-
-						if sellList[itemIndex].enabled == false and filterTwo[0] then
-							local var_122_2 = sellList[itemIndex]
-
-							table.remove(sellList, itemIndex)
-							table.insert(sellList, #sellList + 1, var_122_2)
-						end
-					end
-				end
-			end
-
-			marketState.isPopupActive = false
-
-			AFKMessage(u8:decode("Сортировка выполнена."))
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-		if imgui.ToggleButton("Скрывать недоступные предметы.", filterThree) then
-			ini.cfg.filter_three = filterThree[0]
-
-			save_all()
-		end
-
-		imgui.Hint("filter_threeA", "Скрывает все предметы которых у вас нет в инвентаре\nВыполнять сортировку не нужно.\nПриминяется автоматически если включен.", false)
-
-		if listType == 1 then
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-			if imgui.ToggleButton("Скрывать непередаваемые предметы.", marketState.filter_four) then
-				local var_122_3 = false
-
-				if json_vlad == nil or json_vlads == nil then
-					json_vlads = readJsonFile(sellJsonPath)
-					json_vlad = readJsonFile(buyJsonPath)
-				end
-
-				if next(json_vlad) == nil then
-					AFKMessage(u8:decode("У вас не отсканирована скупка в меню скрипта (/crr)! Зайдите в раздел скупки и прочитайте инструкцию по середине меню."))
-
-					marketState.filter_four[0] = false
-					var_122_3 = true
-				end
-
-				if var_122_3 == false then
-					sellScanMode = true
-					sellScanResults = {}
-
-					SendToServer("/stats")
-					AFKMessage(u8:decode("Проходит сканирование инвентаря. Подождите..."))
-				end
-
-				ini.cfg.filter_four = marketState.filter_four[0]
-
-				save_all()
-			end
-
-			imgui.Hint("filter_fourA", "Скрывает все предметы которые нельзя продать.\nВажно помнить что нужно обновлять список предметов во вкладке \"Скупка\"\nЕсли каждое обновление не обновлять список предметов в скупке - будут скрываться ошибочные предметы.", false)
-		end
-
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-		if imgui.ToggleButton("Пролистывание до добавленного предмета.", marketState.filter_five) then
-			ini.cfg.filter_five = marketState.filter_five[0]
-
-			save_all()
-		end
-
-		imgui.Hint("filter_fiveA", "После того как вы добавляете товар данная функция будет...\n автоматически пролистывать товар до того места куда он был добавлен.", false)
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-		if imgui.ToggleButton("Действия с товарами.", marketState.filter_six) then
-			save_all()
-		end
-
-		imgui.Hint("filter_sixA", "Настройка для включения или отключения всех товаров во вкладке.", false)
-
-		if marketState.filter_six[0] then
-			imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-			if imgui.Button("Отключить все товары во вкладке", imgui.ImVec2(imgui.GetWindowWidth() / 2.02, 30)) then
-				for itemIndex, itemData in pairs(listType == 1 and sellList or buyList) do
-					itemData.enabled = false
-				end
-
-				marketState.filter_six[0] = false
-			end
-
-			imgui.SameLine()
-
-			if imgui.Button("Включить все товары во вкладке", imgui.ImVec2(imgui.GetWindowWidth() / 2.02, 30)) then
-				for itemIndex, itemData in pairs(listType == 1 and sellList or buyList) do
-					itemData.enabled = true
-				end
-
-				marketState.filter_six[0] = false
-			end
-
-			imgui.GetStyle().FrameBorderSize = 0
-		end
-
-		if listType == 1 then
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-			if imgui.ToggleButton("Выставлять на один товар меньше.", marketState.filter_seven) then
-				ini.cfg.filter_seven = marketState.filter_seven[0]
-
-				save_all()
-			end
-
-			imgui.Hint("filter_sevenA", "Товары во вкладке продажи будут выставляться на 1 товар меньше.", false)
-		end
-
-		if listType == 1 then
-		end
-
-		imgui.PopFont()
-		imgui.EndCustomInvisibleChild()
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Закрыть", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			marketState.isPopupActive = false
-
-			imgui.CloseCurrentPopup()
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.EndPopup()
-	end
-
-	imgui.PopStyleVar()
-	imgui.PopStyleColor()
-	imgui.PopFont()
-end
-
-function configManager(sourceConfig, configType)
-	imgui.PushFont(fonts[18])
-
-	local imguiCol = imgui.Col
-
-	imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(0.05, 0.06, 0.1, 0.9))
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
-
-	if imgui.BeginPopupModal("Конфиг менеджер.", _, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse) then
-		marketState.isPopupActive = true
-
-		local configManagerUiScale = getMenuUiScale()
-		local configManagerExpanded = marketState.selectConfigMove[3].selectMove ~= -1
-		local configManagerWindowHeight = (configManagerExpanded and 350 or 278) * configManagerUiScale
-		local configManagerChildHeight = (configManagerExpanded and 200 or 160) * configManagerUiScale
-
-		imgui.SetWindowSizeVec2(imgui.ImVec2(550, configManagerWindowHeight))
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-		imgui.BeginChild("configManagers", imgui.ImVec2(-1, configManagerChildHeight), true)
-		imgui.PushFont(fonts[17])
-		imgui.CenterText("Вы хотите скопировать что то из конфига " .. (configType == 1 and "продажи" or "скупки"), nil)
-		imgui.CenterText((configType == 1 and u8(loadedSellConfig) or u8(loadedBuyConfig)) .. "?", nil)
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 7)
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		for configKey, configValue in pairs(marketState.selectConfigMove[2]) do
-			if imgui.RadioButtonIntPtr(configValue .. "##configManagers" .. tostring(configKey + 1), marketState.selectConfigMove[1], configKey) then
-			end
-		end
-
-		if marketState.selectConfigMove[3].selectMove ~= -1 and imgui.RadioButtonIntPtr(" [!] Вставить конфиг в " .. (configType == 1 and "продажу" or "скупку") .. "##configManagers", marketState.selectConfigMove[1], 4) then
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.PopFont()
-		imgui.EndChild()
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Выбрать и " .. (marketState.selectConfigMove[1][0] ~= 4 and "скопировать" or "вставить конфиг из буфера"), imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			deAFKMessage("selected: " .. marketState.selectConfigMove[1][0])
-
-			if marketState.selectConfigMove[1][0] ~= 4 then
-				marketState.selectConfigMove[3] = {
-					config = copyTbl(sourceConfig),
-					selectMove = marketState.selectConfigMove[1][0]
-				}
-			else
-				if marketState.selectConfigMove[3].selectMove == 1 then
-					for itemIndex, destinationItem in pairs(marketState.selectConfigMove[3].config) do
-						for itemIndex, sourceItem in pairs(sourceConfig) do
-							if destinationItem.name == sourceItem.name then
-								sourceItem.price = destinationItem.price
-								sourceItem.price_vc = destinationItem.price_vc
-
-								break
-							end
-						end
-					end
-				elseif marketState.selectConfigMove[3].selectMove == 2 then
-					for itemIndex, destinationItem in pairs(marketState.selectConfigMove[3].config) do
-						for itemIndex, sourceItem in pairs(sourceConfig) do
-							if destinationItem.name == sourceItem.name then
-								sourceItem.count = destinationItem.count
-
-								break
-							end
-						end
-					end
-				elseif marketState.selectConfigMove[3].selectMove == 3 then
-					for itemIndex, destinationItem in pairs(marketState.selectConfigMove[3].config) do
-						local var_123_1 = false
-
-						for itemIndex, sourceItem in pairs(sourceConfig) do
-							if destinationItem.name == sourceItem.name then
-								var_123_1 = true
-								sourceItem.price = destinationItem.price
-								sourceItem.price_vc = destinationItem.price_vc
-								sourceItem.count = destinationItem.count
-								sourceItem.enabled = destinationItem.enabled
-
-								break
-							end
-						end
-
-						if not var_123_1 then
-							if not destinationItem.all_count then
-								destinationItem.all_count = 0
-							end
-
-							addToData(destinationItem, sourceConfig, sortMode and 1 or nil)
-						end
-					end
-				end
-
-				marketState.selectConfigMove[3] = {
-					selectMove = -1,
-					config = {}
-				}
-			end
-
-			marketState.selectConfigMove[1][0] = 333
-			marketState.isPopupActive = false
-
-			imgui.CloseCurrentPopup()
-		end
-
-		if marketState.selectConfigMove[3].selectMove ~= -1 and imgui.Button("Очистить буфер", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			marketState.selectConfigMove[3] = {
-				selectMove = -1,
-				config = {}
-			}
-			marketState.selectConfigMove[1][0] = 333
-		end
-
-		if imgui.Button("Закрыть", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			marketState.isPopupActive = false
-			marketState.selectConfigMove[1][0] = 333
-
-			imgui.CloseCurrentPopup()
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.EndPopup()
-	end
-
-	imgui.PopStyleVar()
-	imgui.PopStyleColor()
-	imgui.PopFont()
-end
 
 function crrXlGraphs(priceHistory)
 	imgui.PushFont(fonts[18])
@@ -22869,103 +15660,7 @@ function isNodeInstalled()
 	end
 end
 
-function lavka_color_edit()
-	imgui.PushFont(fonts[44])
 
-	local imguiCol = imgui.Col
-
-	imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(0.05, 0.06, 0.1, 1))
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
-
-	if imgui.BeginPopupModal("[Color] Настройки лавки", _, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse) then
-		imgui.SetWindowSizeVec2(imgui.ImVec2(300, 305))
-		imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-		imgui.BeginChild("lavka_color_edit", imgui.ImVec2(-1, imgui.GetWindowWidth() - 70), true)
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		local var_135_1 = 0
-
-		for paletteLine in magiclines(rainbowPaletteText) do
-			imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(hexToRGBA(paletteLine:match("{......}"))))
-
-			if imgui.Button(paletteLine:gsub("{......}", "") .. "##" .. var_135_1, imgui.ImVec2(imgui.GetWindowWidth() - 10, 30)) then
-				AFKMessage(u8:decode("Вы выбрали ") .. paletteLine .. u8:decode(" [Цвет]"))
-
-				activeLavkaColorIndex = var_135_1
-				ini.cfg.dynamic_lavka_color = activeLavkaColorIndex
-
-				save_all()
-				imgui.CloseCurrentPopup()
-			end
-
-			imgui.PopStyleColor()
-
-			var_135_1 = var_135_1 + 1
-		end
-
-		imgui.EndChild()
-
-		if imgui.Button("Закрыть", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			imgui.CloseCurrentPopup()
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.EndPopup()
-	end
-
-	imgui.PopStyleVar()
-	imgui.PopStyleColor()
-	imgui.PopFont()
-end
-
-function changeDate()
-	if imgui.BeginPopupModal("Выбор даты", _, imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove) then
-		imgui.SetWindowSizeVec2(imgui.ImVec2(300, 305))
-		imgui.BeginChild("changeDate", imgui.ImVec2(-1, imgui.GetWindowWidth() - 70), true)
-
-		local sortedDates = {}
-
-		for date, dayLog in pairs(jsonLog) do
-			local day, month, year = date:match("(%d+)%.(%d+)%.(%d+)")
-
-			table.insert(sortedDates, {
-				key = date,
-				date = tonumber(year .. month .. day)
-			})
-		end
-
-		table.sort(sortedDates, function(leftItem, rightItem)
-			return leftItem.date > rightItem.date
-		end)
-
-		if imgui.Button("За весь период", imgui.ImVec2(-1)) then
-			marketState.searchStorage.logPage_1[2] = ""
-			date_select = -1
-
-			imgui.CloseCurrentPopup()
-		end
-
-		for dateIndex, dateEntry in ipairs(sortedDates) do
-			if imgui.Button(dateEntry.key, imgui.ImVec2(-1)) then
-				marketState.searchStorage.logPage_1[2] = ""
-				date_select = dateEntry.key
-
-				imgui.CloseCurrentPopup()
-			end
-		end
-
-		imgui.EndChild()
-
-		if imgui.Button("Закрыть", imgui.ImVec2(-1, 30)) then
-			imgui.CloseCurrentPopup()
-		end
-
-		imgui.EndPopup()
-	end
-end
 
 function imgui.Hint(hintId, hintText, alignLeft, offset, forceVisible)
 	if hintsEnabled[0] == false then
@@ -23087,431 +15782,9 @@ function imgui.Hint(hintId, hintText, alignLeft, offset, forceVisible)
 	imgui.SetCursorPos(cursorPos)
 end
 
-function imgui.Spinner(label, radius, thickness, color)
-	local style = imgui.GetStyle()
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local spinnerSize = imgui.ImVec2(radius * 2, (radius + style.FramePadding.y) * 2)
 
-	imgui.Dummy(imgui.ImVec2(spinnerSize.x + style.ItemSpacing.x, spinnerSize.y))
 
-	local windowDrawList = imgui.GetWindowDrawList()
 
-	windowDrawList:PathClear()
-
-	local segmentCount = 30
-	local startAngle = 6.28 * math.abs(math.sin(imgui.GetTime() * 1.8) * (segmentCount - 5)) / segmentCount
-	local endAngle = 6.28 * (segmentCount - 3) / segmentCount
-	local center = imgui.ImVec2(cursorScreenPos.x + radius, cursorScreenPos.y + radius + style.FramePadding.y)
-
-	for segmentIndex = 0, segmentCount do
-		local angle = startAngle + segmentIndex / segmentCount * (endAngle - startAngle)
-
-		windowDrawList:PathLineTo(imgui.ImVec2(center.x + math.cos(angle + imgui.GetTime() * 8) * radius, center.y + math.sin(angle + imgui.GetTime() * 8) * radius))
-	end
-
-	windowDrawList:PathStroke(color, false, thickness)
-
-	return true
-end
-
-function imgui.BufferingBar(label, progress, size, backgroundColor, foregroundColor)
-	local var_144_0 = imgui.GetStyle()
-	local var_144_1 = size
-	local windowDrawList = imgui.GetWindowDrawList()
-
-	var_144_1.x = var_144_1.x - var_144_0.FramePadding.x * 2
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-
-	imgui.Dummy(imgui.ImVec2(var_144_1.x, var_144_1.y))
-
-	local var_144_4 = var_144_1.x * 0.85
-	local var_144_5 = var_144_1.x - var_144_4
-
-	windowDrawList:AddRectFilled(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + var_144_4, cursorScreenPos.y + var_144_1.y), backgroundColor)
-	windowDrawList:AddRectFilled(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + var_144_4 * progress, cursorScreenPos.y + var_144_1.y), foregroundColor)
-
-	return true
-end
-
-function imgui.CreateLeadersMenu(id, leaders, size)
-	local var_145_0 = {
-		SIZE_BOX_CHILD = 39,
-		SIZE_NUMBER_BUTTON = 26,
-		ROUNDING = 5,
-		TEXT_COLOR = imgui.GetStyle().Colors[imgui.Col.Text],
-		HEADER_COLOR = imgui.ImVec4(menuThemeConfig.input[1], menuThemeConfig.input[2], menuThemeConfig.input[3], 0.02),
-		NUMBER_BUTTON_COLOR = imgui.ImVec4(menuThemeConfig.input[1], menuThemeConfig.input[2], menuThemeConfig.input[3], 0.02)
-	}
-
-	imgui.BeginChild(id, size, true, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-	imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(var_145_0.HEADER_COLOR))
-	imgui.BeginChild(id .. "start", imgui.ImVec2(-1, imgui.CalcTextSize().y * 1.5), false, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-
-	local windowDrawList = imgui.GetWindowDrawList()
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-
-	windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + 10, cursorScreenPos.y + (imgui.CalcTextSize().y * 1.5 - imgui.CalcTextSize("Место").y) / 2), imgui.GetColorU32Vec4(var_145_0.TEXT_COLOR), "Место")
-	windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + 100, cursorScreenPos.y + (imgui.CalcTextSize().y * 1.5 - imgui.CalcTextSize("Ник").y) / 2), imgui.GetColorU32Vec4(var_145_0.TEXT_COLOR), "Ник")
-	windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + 305, cursorScreenPos.y + (imgui.CalcTextSize().y * 1.5 - imgui.CalcTextSize("Опыт").y) / 2), imgui.GetColorU32Vec4(var_145_0.TEXT_COLOR), "Опыт")
-	windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + size.x - imgui.CalcTextSize("Уровень").x - 10 - 10, cursorScreenPos.y + (imgui.CalcTextSize().y * 1.5 - imgui.CalcTextSize("Уровень").y) / 2), imgui.GetColorU32Vec4(var_145_0.TEXT_COLOR), "Уровень")
-	imgui.EndChild()
-	imgui.PopStyleColor()
-	imgui.BeginChild(id .. "list", imgui.ImVec2(-1, -1), false, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-	imgui.PushStyleColor(imgui.Col.ChildBg, imgui.ImVec4(menuThemeConfig.input[1], menuThemeConfig.input[2], menuThemeConfig.input[3], 0.02))
-
-	for rank, leader in pairs(leaders) do
-		if rank < 15 then
-			if rank < 4 then
-				var_145_0.NUMBER_BUTTON_COLOR = ({
-					imgui.ImVec4(1, 0.84, 0, 0.5),
-					imgui.ImVec4(0.75, 0.75, 0.75, 0.52),
-					(imgui.ImVec4(0.8, 0.5, 0.2, 0.42))
-				})[rank]
-			else
-				var_145_0.NUMBER_BUTTON_COLOR = imgui.ImVec4(menuThemeConfig.input[1], menuThemeConfig.input[2], menuThemeConfig.input[3], 0.02)
-			end
-
-			imgui.BeginChild(id .. tostring(rank), imgui.ImVec2(-1, var_145_0.SIZE_BOX_CHILD), false, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-
-			local windowDrawList = imgui.GetWindowDrawList()
-			local cursorScreenPos = imgui.GetCursorScreenPos()
-			local var_145_5 = imgui.ImVec2(cursorScreenPos.x + 10 + imgui.CalcTextSize("Место").x / 2 - var_145_0.SIZE_NUMBER_BUTTON / 2, cursorScreenPos.y + (var_145_0.SIZE_BOX_CHILD - var_145_0.SIZE_NUMBER_BUTTON) / 2)
-
-			windowDrawList:AddRectFilled(var_145_5, imgui.ImVec2(var_145_5.x + var_145_0.SIZE_NUMBER_BUTTON, var_145_5.y + var_145_0.SIZE_NUMBER_BUTTON), imgui.GetColorU32Vec4(var_145_0.NUMBER_BUTTON_COLOR), var_145_0.ROUNDING)
-			windowDrawList:AddText(imgui.ImVec2(var_145_5.x + (var_145_0.SIZE_NUMBER_BUTTON - imgui.CalcTextSize(tostring(rank)).x) / 2, var_145_5.y + (var_145_0.SIZE_NUMBER_BUTTON - imgui.CalcTextSize(tostring(rank)).y) / 2), imgui.GetColorU32Vec4(var_145_0.TEXT_COLOR), tostring(rank))
-			windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + 100, cursorScreenPos.y + (var_145_0.SIZE_BOX_CHILD - imgui.CalcTextSize(leader.name).y) / 2), imgui.GetColorU32Vec4(imgui.GetStyle().Colors[imgui.Col.Text]), leader.name)
-			windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + 305 + (imgui.CalcTextSize(tostring("Опыт")).x - imgui.CalcTextSize(tostring(leader.exp)).x) / 2, cursorScreenPos.y + (var_145_0.SIZE_BOX_CHILD - imgui.CalcTextSize(tostring(leader.exp)).y) / 2), imgui.GetColorU32Vec4(var_145_0.TEXT_COLOR), tostring(leader.exp))
-			windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + size.x - imgui.CalcTextSize("Уровень").x - 10 - 10 + imgui.CalcTextSize("Уровень").x / 2 - imgui.CalcTextSize(tostring(leader.lvl)).x / 2, cursorScreenPos.y + (var_145_0.SIZE_BOX_CHILD - imgui.CalcTextSize(tostring(leader.lvl)).y) / 2), imgui.GetColorU32Vec4(var_145_0.TEXT_COLOR), tostring(leader.lvl))
-			imgui.EndChild()
-		end
-	end
-
-	imgui.PopStyleColor()
-	imgui.EndChild()
-	imgui.EndChild()
-end
-
-function imgui.CreateLeftMenu(menuSections, selectedSection, currentMenuIndex, activeColor, inactiveColor)
-	local uiScale = getMenuUiScale()
-	local sectionTitleHeight = 13 * uiScale
-	local sectionGap = 5 * uiScale
-	local itemTextHeight = 17 * uiScale
-	local itemGap = 10 * uiScale
-	local itemSectionGap = 5 * uiScale
-	local itemStep = itemTextHeight + itemGap + itemSectionGap
-	local selectorExtraWidth = 14 * uiScale
-	local stripeStartOffset = 8 * uiScale
-	local selectorRounding = 5 * uiScale
-	local var_146_0 = 0
-	local var_146_1 = currentMenuIndex
-	local var_146_2 = imgui.GetStyle().FramePadding.y * 2 + itemTextHeight
-	local selectedItemExpandX = 4
-	local selectedItemExpandY = math.max(0, math.min(3, (itemStep - var_146_2) / 2))
-	local selectedStripeExpandX = 1
-	local windowDrawList = imgui.GetWindowDrawList()
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-
-	SelectMenuVertical = cursorScreenPos.y
-	local isBaronInterfacePreview = ARZ_INTERFACE_LUA_PREVIEW and ARZ_INTERFACE_LUA_PREVIEW.active == true
-	local baronNavAnchors = {
-		[1] = "nav_sell", [2] = "nav_buy", [3] = "nav_settings", [4] = "nav_logs",
-		[5] = "nav_marketplace", [7] = "nav_mods", [8] = "nav_storage"
-	}
-
-	if UI_ANIM_BUTTON == nil then
-		UI_ANIM_BUTTON = {
-			duration = 0.4,
-			time = 0,
-			label = menuSections[1].list[1],
-			pos = {
-				current = 0,
-				last = 0,
-				next = 0
-			},
-			easing = function(progress)
-				progress = progress - 1
-
-				return progress * progress * progress + 1
-			end
-		}
-	end
-
-	local function var_146_5(colorName)
-		return imgui.GetColorU32Vec4(imgui.GetStyle().Colors[imgui.Col[colorName]])
-	end
-
-	local var_146_6 = {
-		default = imgui.ImVec4(0, 0, 0, 0),
-		active = imgui.ImVec4(menuThemeConfig.active_selector_color[1], menuThemeConfig.active_selector_color[2], menuThemeConfig.active_selector_color[3], menuThemeConfig.active_selector_color[4]),
-		side = imgui.ImVec4(1, 1, 1, 0),
-		hovered = imgui.ImVec4(0.08, 0.09, 0.19, 0)
-	}
-
-	if not isBaronInterfacePreview then
-	if marketState.autoUpdateCheck[1] then
-		marketState.autoUpdateCheck[1] = false
-		marketState.autoUpdateCheck[2] = true
-	end
-
-	if marketState.selectAfterLoad ~= -1 then
-		imgui.SelectMenu(menuSections, marketState.selectAfterLoad)
-
-		marketState.selectAfterLoad = -1
-	end
-
-	if marketState.scriptVersion[2] then
-		imgui.OpenPopup("Найдено новое обновление скрипта!")
-		downloadScriptPage()
-	end
-
-	if buySellHistoryPopup.buy then
-		imgui.OpenPopup("Лог [Продажи/Скупки] товаров")
-		tg_settingsw()
-	end
-
-	if marketState.askServer then
-		imgui.OpenPopup("Копирование конфигов")
-		askServer()
-	end
-
-	if marketState.videoSelector then
-		imgui.OpenPopup("Открытие ссылки.")
-		videoSelector(marketState.youtubeLink, marketState.rutubeLink, marketState.isOldMethodLink)
-	end
-
-	if marketState.day_timer_price + 86400 <= os.time() then
-		AFKMessage(u8:decode("У вас устарели средние цены. Обновляем."))
-
-		marketState.day_timer_price = os.time()
-		ini.cfg.day_timer_price = marketState.day_timer_price
-
-		save_all()
-		get_prices()
-	end
-
-	if marketState.day_timer_sputnik + 86400 <= os.time() and marketState.isEnabledSputnik[0] then
-		sendNotify(u8:decode("Обновляем данные Спунтиков."))
-
-		marketState.day_timer_sputnik = os.time()
-		ini.cfg.day_timer_sputnik = marketState.day_timer_sputnik
-
-		save_all()
-		sputnik_Manager()
-	end
-	end
-
-	local function var_146_7(fromValue, toValue, startTime, duration)
-		local var_149_0 = os.clock() - startTime
-
-		if duration <= var_149_0 then
-			return toValue
-		end
-
-		local var_149_1 = var_149_0 / duration
-		local var_149_2 = UI_ANIM_BUTTON.easing(var_149_1)
-
-		return fromValue + (toValue - fromValue) * var_149_2
-	end
-
-	if UI_ANIM_BUTTON.pending_menu and os.clock() >= UI_ANIM_BUTTON.menu_change_time then
-		selectedMenuPage = UI_ANIM_BUTTON.pending_menu
-		UI_ANIM_BUTTON.pending_menu = nil
-		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.onPageChanged) == "function" then
-			pcall(ARZ_BARON_ASSISTANT.onPageChanged, arzBaronCurrentPageName())
-		end
-	end
-
-	for sectionIndex, section in ipairs(menuSections) do
-		if sectionIndex == 4 then
-			var_146_0 = var_146_0 + (95 * uiScale)
-		end
-
-		var_146_0 = var_146_0 + sectionTitleHeight + sectionGap
-
-		for itemIndex, itemLabel in ipairs(section.list) do
-			var_146_1 = var_146_1 + 1
-
-			local cursorX, cursorY = getCursorPos()
-			local var_146_10 = cursorX >= cursorScreenPos.x and cursorX <= cursorScreenPos.x + selectedSection.x + selectorExtraWidth and cursorY >= cursorScreenPos.y + var_146_0 and cursorY <= cursorScreenPos.y + var_146_0 + var_146_2
-			if not isBaronInterfacePreview and baronNavAnchors[var_146_1] then
-				arzBaronAnchorRecordRect(
-					baronNavAnchors[var_146_1],
-					cursorScreenPos.x,
-					cursorScreenPos.y + var_146_0,
-					selectedSection.x + selectorExtraWidth,
-					var_146_2
-				)
-			end
-
-			local sameMenuSubpage = var_146_1 == selectedMenuPage and modificationState.isMenuSubpageActive(var_146_1)
-
-			if not isBaronInterfacePreview and var_146_10 and imgui.IsMouseClicked(0) and var_146_1 == selectedMenuPage and not marketState.isPopupActive then
-				if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.onPageChanged) == "function" then
-					pcall(ARZ_BARON_ASSISTANT.onPageChanged, arzBaronCurrentPageName())
-				end
-			end
-
-			if var_146_10 and imgui.IsMouseClicked(0) and (var_146_1 ~= selectedMenuPage or sameMenuSubpage) and not marketState.isPopupActive then
-				local previewState = ARZ_INTERFACE_LUA_PREVIEW
-				if previewState and previewState.active == true then
-					if previewState.interactive == true then
-						previewState.selectedPage = var_146_1
-						selectedMenuPage = var_146_1
-						UI_ANIM_BUTTON.label = itemLabel
-						UI_ANIM_BUTTON.time = os.clock()
-						UI_ANIM_BUTTON.pos.current = cursorScreenPos.y + var_146_0
-						UI_ANIM_BUTTON.pos.last = UI_ANIM_BUTTON.pos.current
-						UI_ANIM_BUTTON.pos.next = UI_ANIM_BUTTON.pos.current
-						UI_ANIM_BUTTON.pending_menu = nil
-					end
-				else
-					resetIO()
-
-					buyBudgetWindowVisible[0] = false
-					sellFilterWindowVisible[0] = false
-					marketState.custom_add_item[0] = false
-					selectedListItem = {
-						imguiNew.int(333),
-						333,
-						false
-					}
-
-					modificationState.returnToMenuRoot(var_146_1)
-
-					if var_146_1 ~= selectedMenuPage then
-						UI_ANIM_BUTTON.label = itemLabel
-						UI_ANIM_BUTTON.time = os.clock()
-						UI_ANIM_BUTTON.pos.last = UI_ANIM_BUTTON.pos.current
-						UI_ANIM_BUTTON.pos.next = cursorScreenPos.y + var_146_0
-						UI_ANIM_BUTTON.menu_change_time = os.clock() + UI_ANIM_BUTTON.duration / 2
-						ini.cfg.lastCrrSelect = var_146_1
-						UI_ANIM_BUTTON.pending_menu = var_146_1
-					end
-
-					save_all()
-				end
-			end
-
-			local isSelectedItem = var_146_1 == selectedMenuPage
-			local itemExpandX = isSelectedItem and selectedItemExpandX or 0
-			local itemExpandY = isSelectedItem and selectedItemExpandY or 0
-
-			windowDrawList:AddRectFilled(imgui.ImVec2(cursorScreenPos.x - itemExpandX, cursorScreenPos.y + var_146_0 - itemExpandY), imgui.ImVec2(cursorScreenPos.x + selectedSection.x + selectorExtraWidth + itemExpandX, cursorScreenPos.y + var_146_0 + var_146_2 + itemExpandY), imgui.GetColorU32Vec4(var_146_6[os.clock() - UI_ANIM_BUTTON.time <= UI_ANIM_BUTTON.duration and "default" or isSelectedItem and "active" or var_146_10 and "hovered" or "default"]), selectorRounding)
-
-			if UI_ANIM_BUTTON.label == itemLabel then
-				if os.clock() - UI_ANIM_BUTTON.time <= UI_ANIM_BUTTON.duration then
-					UI_ANIM_BUTTON.pos.current = var_146_7(UI_ANIM_BUTTON.pos.last, UI_ANIM_BUTTON.pos.next, UI_ANIM_BUTTON.time, UI_ANIM_BUTTON.duration)
-
-					imgui.GetWindowDrawList():AddRectFilled(imgui.ImVec2(cursorScreenPos.x - selectedItemExpandX, UI_ANIM_BUTTON.pos.current - selectedItemExpandY), imgui.ImVec2(cursorScreenPos.x + selectedSection.x + selectorExtraWidth + selectedItemExpandX, UI_ANIM_BUTTON.pos.current + var_146_2 + selectedItemExpandY), imgui.GetColorU32Vec4(var_146_6.active), selectorRounding)
-				else
-					UI_ANIM_BUTTON.pos.current = cursorScreenPos.y + var_146_0
-				end
-
-				if var_146_1 and var_146_6 ~= nil and activeColor ~= nil then
-					imgui.GetWindowDrawList():AddRectFilled(imgui.ImVec2(cursorScreenPos.x + selectedSection.x + stripeStartOffset - selectedStripeExpandX, UI_ANIM_BUTTON.pos.current - selectedItemExpandY), imgui.ImVec2(cursorScreenPos.x + selectedSection.x + selectorExtraWidth + selectedStripeExpandX, UI_ANIM_BUTTON.pos.current + var_146_2 + selectedItemExpandY), imgui.GetColorU32Vec4(imgui.ImVec4(activeColor[1], activeColor[2], activeColor[3], 0.2)), selectorRounding, 10)
-				end
-			end
-
-			var_146_0 = var_146_0 + itemStep
-		end
-	end
-
-	local var_146_11 = 0
-	local textMenuIndex = currentMenuIndex
-
-	imgui.PushFont(fonts[18])
-
-	for sectionIndex, section in ipairs(menuSections) do
-		if sectionIndex == 4 then
-			var_146_11 = var_146_11 + (95 * uiScale)
-		end
-
-		imgui.PushFont(fonts[18])
-		windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x, cursorScreenPos.y + var_146_11), var_146_5("TextDisabled"), section.title)
-		imgui.PopFont()
-
-		var_146_11 = var_146_11 + sectionTitleHeight + sectionGap
-
-		for itemIndex, itemLabel in ipairs(section.list) do
-			textMenuIndex = textMenuIndex + 1
-
-			local isSelectedText = textMenuIndex == selectedMenuPage
-
-			if isSelectedText then
-				imgui.PushFont(fonts[20])
-			end
-
-			local itemTextSize = imgui.CalcTextSize(itemLabel)
-
-			windowDrawList:AddText(imgui.ImVec2(cursorScreenPos.x + 5, cursorScreenPos.y + var_146_11 + (var_146_2 - itemTextSize.y) / 2 + 0.8), var_146_5("Text"), itemLabel)
-
-			if isSelectedText then
-				imgui.PopFont()
-			end
-
-			var_146_11 = var_146_11 + itemStep
-		end
-	end
-
-	imgui.PopFont()
-
-end
-
-function calculateProgress(value, maximum)
-	local minimumProgress = 0
-	local maximumProgress = 1
-	local progress = value / maximum * (1 - minimumProgress) + minimumProgress
-
-	return math.min(maximumProgress, math.max(minimumProgress, progress))
-end
-
-function imgui.SelectMenu(menuSections, selectedIndex, loadMode)
-	local sectionOffset = 13 + 5
-	local itemStep = 17 + 10 + 5
-	if loadMode == 1 then
-		marketState.selectAfterLoad = selectedIndex
-
-		return
-	end
-
-	buyBudgetWindowVisible[0] = false
-	sellFilterWindowVisible[0] = false
-	marketState.custom_add_item[0] = false
-	selectedListItem = {
-		imguiNew.int(333),
-		333,
-		false
-	}
-
-	local currentIndex = 0
-	local yOffset = 0
-
-	for sectionIndex, section in ipairs(menuSections) do
-		yOffset = yOffset + sectionOffset
-
-		for itemIndex, itemLabel in ipairs(section.list) do
-			currentIndex = currentIndex + 1
-
-			if currentIndex == selectedIndex then
-				local threadToken = "" .. os.clock()
-
-				UI_ANIM_BUTTON.label = itemLabel
-				UI_ANIM_BUTTON.time = os.clock()
-				UI_ANIM_BUTTON.pos.last = UI_ANIM_BUTTON.pos.current
-				UI_ANIM_BUTTON.pos.next = SelectMenuVertical + yOffset
-
-				lua_thread.create(function(threadToken)
-					selectedMenuPage = currentIndex, wait(UI_ANIM_BUTTON.duration / 2 * 1000)
-				end, threadToken)
-
-				return
-			end
-
-			yOffset = yOffset + itemStep
-		end
-	end
-end
 
 function imgui.CustomSeparator(width, offsetX, offsetY)
 	local savedCursorPos
@@ -23789,7 +16062,7 @@ function arzBaronTutorialLocksInterface()
 	local ok, assistantState = pcall(ARZ_BARON_ASSISTANT.getState)
 	if not ok or type(assistantState) ~= "table" or assistantState.active ~= true then return false end
 	local moduleId = tostring(assistantState.current_module or "")
-	return moduleId == "tutorial_lua" or moduleId == "tutorial_html"
+	return moduleId == "tutorial_html"
 end
 
 function onWindowMessage(message, wparam, lparam)
@@ -23887,6 +16160,7 @@ end
 
 function onScriptTerminate(script, quitGame)
 	if script == thisScript() then
+		if type(arzMainDonorLauncherReleaseWorker) == "function" then pcall(arzMainDonorLauncherReleaseWorker, true) end
 		if type(arzUiExtensionsShutdown) == "function" then pcall(arzUiExtensionsShutdown, quitGame == true) end
 		-- mimgui and arz_html_ui release only the MoonLoader cursor they own.
 		-- Never reset SA-MP cursor mode here because a game dialog/CEF or another
@@ -23936,8 +16210,20 @@ function onScriptTerminate(script, quitGame)
 			end
 		end
 
-		if last_dialog_id ~= nil then
-			sampSendDialogResponsed(last_dialog_id, 0, 0, false)
+		if last_dialog_id ~= nil and type(sampSendDialogResponse) == "function" then
+			local sampReady = true
+			if type(isSampAvailable) == "function" then
+				local ok, value = pcall(isSampAvailable)
+				sampReady = ok and value == true
+			end
+			local dialogActive = sampReady
+			if dialogActive and type(sampIsDialogActive) == "function" then
+				local ok, value = pcall(sampIsDialogActive)
+				dialogActive = ok and value == true
+			end
+			if dialogActive then
+				pcall(sampSendDialogResponse, last_dialog_id, 0, 0, "")
+			end
 		end
 
 		arzWorkerNext("dialog")
@@ -23953,18 +16239,6 @@ function onScriptTerminate(script, quitGame)
 	end
 end
 
-function nextpage()
-	if imgui.CustomOnlyBorderButton(u8("<##0"), imgui.ImVec2(imgui.GetWindowWidth() / 2 - 300, 27)) then
-		imgui.SelectMenu(mainMenu, selectedMenuPage)
-	end
-
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetWindowWidth() - 35)
-
-	if imgui.CustomOnlyBorderButton(u8(">##0"), imgui.ImVec2(35, 27)) then
-		imgui.SelectMenu(mainMenu, selectedMenuPage)
-	end
-end
 
 function openBrouser(url, browserId, browserType)
 	local var_162_0 = {
@@ -24152,34 +16426,6 @@ function openBrouser(url, browserId, browserType)
 	end
 end
 
-function imgui.AnimButton(label, size, pageId, color)
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local buttonHeight = size and size.x > 0 and size.x or imgui.GetStyle().FramePadding.y * 2 + imgui.CalcTextSize(label).x + 5
-	local isSelected = size and size.y > 0 and size.y or imgui.GetStyle().FramePadding.y * 2 + imgui.CalcTextSize(label).y
-	local var_164_3 = pageId and pageId == selectedMenuPage
-	local var_164_4 = {
-		default = imgui.ImVec4(0, 0, 0, 0),
-		active = imgui.ImVec4(0.11, 0.12, 0.24, 0.4),
-		side = imgui.ImVec4(0.28, 0.3, 0.5, 1),
-		hovered = imgui.ImVec4(0.08, 0.09, 0.19, 1)
-	}
-
-	imgui.PushStyleVarVec2(imgui.StyleVar.ButtonTextAlign, imgui.ImVec2(0, 0.5))
-	imgui.PushStyleColor(imgui.Col.Button, var_164_4[var_164_3 and "active" or "default"])
-	imgui.PushStyleColor(imgui.Col.ButtonHovered, var_164_4[var_164_3 and "active" or "hovered"])
-	imgui.PushStyleColor(imgui.Col.ButtonActive, var_164_4[var_164_3 and "active" or "hovered"])
-
-	local clicked = imgui.Button(label, imgui.ImVec2(buttonHeight, isSelected))
-
-	imgui.PopStyleVar(1)
-	imgui.PopStyleColor(3)
-
-	if var_164_3 and var_164_4 ~= nil and color ~= nil then
-		imgui.GetWindowDrawList():AddRectFilled(imgui.ImVec2(cursorScreenPos.x + buttonHeight - 5, cursorScreenPos.y), imgui.ImVec2(cursorScreenPos.x + buttonHeight, cursorScreenPos.y + isSelected), imgui.GetColorU32Vec4(imgui.ImVec4(imgui.ImVec4(color[1], color[2], color[3], 0.1))), 5, 10)
-	end
-
-	return clicked
-end
 
 function imgui.Link(primaryUrl, alternativeUrl, label, disabled, textColor, primaryTitle, alternativeTitle)
 	local ImVec2 = imgui.ImVec2
@@ -24688,756 +16934,6 @@ function imgui.CustomOnlyBorderButton(...)
 	return clicked
 end
 
-function cfg_menu(linkTextColor)
-	imgui.PushFont(fonts[18])
-	if ARZ_BARON_ASSISTANT and type(arzBaronAnchorRecordRect) == "function" then
-		local settingsPos = imgui.GetCursorScreenPos()
-		local settingsAvail = imgui.GetContentRegionAvail()
-		arzBaronAnchorRecordRect("settings_main", settingsPos.x, settingsPos.y, math.max(120, settingsAvail.x), math.max(120, settingsAvail.y))
-	end
-	local settingsToolbarButtonWidth = 35
-	local settingsToolbarGap = imgui.GetStyle().ItemSpacing.x
-	local settingsToolbarWidth = settingsToolbarButtonWidth * 3 + settingsToolbarGap * 2
-	imgui.SetCursorPos(imgui.ImVec2(math.max(0, imgui.GetWindowWidth() - settingsToolbarWidth - 5), 5))
-
-	if imgui.CustomOnlyBorderButton(fa("CART_ARROW_UP") .. "##", imgui.ImVec2(settingsToolbarButtonWidth, 27)) then
-		imgui.SelectMenu(mainMenu, 1)
-	end
-
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("CART_CIRCLE_PLUS") .. "##", imgui.ImVec2(settingsToolbarButtonWidth, 27)) then
-		imgui.SelectMenu(mainMenu, 2)
-	end
-
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(settingsToolbarButtonWidth, 27)) then
-		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
-		OnClose = true
-	end
-
-	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
-	imgui.PopFont()
-
-	imgui.PushFont(fonts[18])
-	local appearanceUiScale = getMenuUiScale()
-	local appearanceButtonSize = imgui.ImVec2(math.min(360 * appearanceUiScale, imgui.GetContentRegionAvail().x), 40)
-	imgui.PushFont(fonts[20])
-	local appearanceClicked = imgui.Button("Оформление", appearanceButtonSize)
-	if ARZ_BARON_ASSISTANT and type(arzBaronAnchorRecordItem) == "function" then
-		arzBaronAnchorRecordItem("settings_appearance_tab")
-	end
-	imgui.PopFont()
-	-- Use the actual rendered item rectangle. imgui.Button is wrapped by the UI-scale
-	-- layer, so the final button may be larger than the requested ImVec2.
-	local appearanceButtonMin = imgui.GetItemRectMin()
-	local appearanceButtonMax = imgui.GetItemRectMax()
-	imgui.GetWindowDrawList():AddRect(
-		appearanceButtonMin,
-		appearanceButtonMax,
-		imgui.GetColorU32Vec4(imgui.ImVec4(linkTextColor[1], linkTextColor[2], linkTextColor[3], 1)),
-		6 * appearanceUiScale,
-		0,
-		2.5 * appearanceUiScale
-	)
-	if appearanceClicked then
-		modificationState.settingsInterfaceOpen = true
-		if ARZ_BARON_ASSISTANT and type(ARZ_BARON_ASSISTANT.event) == "function" then
-			pcall(ARZ_BARON_ASSISTANT.event, "settings_section_changed", { section = "appearance" })
-		end
-		imgui.PopFont()
-		return
-	end
-	imgui.TextDisabled("Цвета, палитра, размер, прозрачность, размытие и обводка.")
-	imgui.CustomSeparator(imgui.GetContentRegionAvail().x)
-	imgui.PopFont()
-	local cfgColumnsAvail = imgui.GetContentRegionAvail()
-	local cfgColumnGap = 8
-	local cfgColumnWidth = (cfgColumnsAvail.x - cfgColumnGap) / 2
-	local cfgColumnHeight = cfgColumnsAvail.y
-	imgui.CustomInvisibleChild("cfgBlockFirstsz", imgui.ImVec2(cfgColumnWidth, cfgColumnHeight), false, imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse)
-	imgui.Scroller("cfgBlockFirstsz", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-	imgui.PushFont(fonts[18])
-	imgui.CenterText("Настройки")
-	imgui.PushItemWidth(150)
-
-	if imgui.ToggleButton("Всегда конвертировать [VC$/SA$]", alwaysConvert) then
-		ini.cfg.Always_convert = alwaysConvert[0]
-
-		save_all()
-	end
-
-	if alwaysConvert[0] and imgui.ToggleButton("Конвертировать только 1 раз", alwaysConvertBlock) then
-		ini.cfg.Always_convert_block = alwaysConvertBlock[0]
-
-		save_all()
-	end
-
-	buyVcBuffer = imguiNew.char[256]("" .. ini.cfg.buy_vc)
-
-	if imgui.InputTextD("  Курс покупки VC$", buyVcBuffer, ffi.sizeof(buyVcBuffer), imgui.InputTextFlags.CharsDecimal) and ffi.string(buyVcBuffer):match("^%d+$") and tonumber(ffi.string(buyVcBuffer)) > 0 then
-		ini.cfg.buy_vc = ffi.string(buyVcBuffer)
-
-		save_all()
-	end
-
-	sellVcBuffer = imguiNew.char[256]("" .. ini.cfg.sell_vc)
-
-	if imgui.InputTextD("  Курс продажи VC$", sellVcBuffer, ffi.sizeof(sellVcBuffer), imgui.InputTextFlags.CharsDecimal) and ffi.string(sellVcBuffer):match("^%d+$") and tonumber(ffi.string(sellVcBuffer)) > 0 then
-		ini.cfg.sell_vc = ffi.string(sellVcBuffer)
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Авто-пиар в чаты в игре", marketState.vr_helper.status) then
-		ini.cfg.vr_helper = marketState.vr_helper.status[0]
-
-		save_all()
-	end
-
-	if ini.cfg.vr_helper then
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Открыть конструктор авто-пиара", imgui.ImVec2(imgui.GetWindowWidth(), 27)) then
-			marketState.vr_helper.isClicked = true
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-	end
-
-	if imgui.ToggleButton("Включить помощника установки лавки", lavkaHelperEnabled) then
-		setLavkaHelperEnabled(lavkaHelperEnabled[0], "settings", true)
-	end
-
-	if imgui.ToggleButton("Автоматически отключать помощник после отхода от своей лавки", lavkaHelperAutoDisable) then
-		ini.cfg.lavka_helper_auto_disable = lavkaHelperAutoDisable[0]
-		save_all()
-	end
-	imgui.Hint("lavka_helper_auto_disable", "Если включено, после успешной установки или аренды лавки помощник останется активным возле нее и автоматически выключится только после того, как вы отойдете от своей лавки. Если лавку снять и поставить снова, отслеживание начнется заново.", false)
-
-	if ini.cfg.lavka_helper then
-		imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 15))
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.SliderFloat(" Радиус зоны установки", marketState.renderLavkaRadius, 5, 50) then
-			ini.cfg.renderLavkaRadius = marketState.renderLavkaRadius[0]
-
-			if invalidateLavkaHelperGrid then
-				invalidateLavkaHelperGrid()
-			end
-
-			save_all()
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.PopStyleVar(1)
-	end
-
-	-- Sputnik is a separate helper/mascot feature, not an appearance setting.
-	if imgui.ToggleButton("Система спутников", marketState.isEnabledSputnik) then
-		ini.cfg.isEnabledSputnik = marketState.isEnabledSputnik[0]
-		save_all()
-	end
-
-	if marketState.isEnabledSputnik[0] and imgui.Button("Открыть настройки спутников", imgui.ImVec2(imgui.GetWindowWidth(), 27)) then
-		marketState.isActiveChooseSputnik = true
-	end
-
-	if imgui.ToggleButton("Телеграмм уведомления", telegramNotifyEnabled) then
-		ini.cfg.telegram_notf = telegramNotifyEnabled[0]
-
-		save_all()
-	end
-
-	if telegramNotifyEnabled[0] then
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Открыть настройки уведомлений", imgui.ImVec2(imgui.GetWindowWidth(), 27)) then
-			imgui.OpenPopup("[TG] Настройки")
-		end
-
-		tg_settings()
-
-		imgui.GetStyle().FrameBorderSize = 0
-	end
-
-	if imgui.ToggleButton("Телеграмм реклама", marketState.Telegram_Ad) then
-		ini.cfg.Telegram_Ad = marketState.Telegram_Ad[0]
-
-		save_all()
-	end
-
-	if marketState.Telegram_Ad[0] then
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Открыть настройки авто телеграмм рекламы", imgui.ImVec2(imgui.GetWindowWidth(), 27)) then
-			if not doesDirectoryExist(getWorkingDirectory() .. "\\ArzMarket_TgBot") then
-				createDirectory(getWorkingDirectory() .. "\\ArzMarket_TgBot")
-			end
-
-			imgui.OpenPopup("[TGAD] Настройки")
-		end
-
-		tg_settingsAD()
-
-		imgui.GetStyle().FrameBorderSize = 0
-	end
-
-	if imgui.ToggleButton("Показывать процесс выставки товаров", buySellHistoryEnabled) then
-		ini.cfg.buy_sell_history = buySellHistoryEnabled[0]
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Чат с трейдером", traderEnabled) then
-		ini.cfg.trader_bool = traderEnabled[0]
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Авто принятие трейда", tradeCreateEnabled) then
-		ini.cfg.trade_create = tradeCreateEnabled[0]
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Автоматически называть лавку", autoLavkaNameEnabled) then
-		ini.cfg.auto_name_lavka = autoLavkaNameEnabled[0]
-
-		save_all()
-	end
-
-	if autoLavkaNameEnabled[0] then
-		imgui.PushFont(fonts[18])
-
-		if imgui.InputTextWithHintD("##nazvanie lavki", "Название лавки", lavkaNameBuffer, ffi.sizeof(lavkaNameBuffer)) then
-			ini.cfg.lavka_name = ffi.string(lavkaNameBuffer)
-
-			save_all()
-		end
-
-		imgui.PopFont()
-
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Открыть настройки цвета лавки", imgui.ImVec2(imgui.GetWindowWidth(), 27)) then
-			imgui.OpenPopup("[Color] Настройки лавки")
-		end
-
-		lavka_color_edit()
-
-		imgui.GetStyle().FrameBorderSize = 0
-	end
-
-
-	if imgui.ToggleButton("Отображение средних цен", averagePricesEnabled) then
-		ini.cfg.avg_price = averagePricesEnabled[0]
-
-		save_all()
-	end
-
-	if averagePricesEnabled[0] then
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button(marketState.avg_price_choose[0] and "Новое окно цен" or "Старое окно цен", imgui.ImVec2(imgui.GetWindowWidth(), 27)) then
-			marketState.avg_price_choose[0] = not marketState.avg_price_choose[0]
-			ini.cfg.avg_price_choose = marketState.avg_price_choose[0]
-
-			save_all()
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-
-		imgui.Hint("avg_price_choose", marketState.avg_price_choose[0] and "[Новое окно цен]\nНовое окно цен полностью изменяет диалоги с информацией о предметах на новый интерфейс!" or "[Старое окно цен]\nВсем привычное окно которое открывается справа при просмотре информации о предмете.", false)
-	end
-
-	sellPercentBuffer = imguiNew.char[256]("" .. ini.cfg.sell_percent)
-
-	if imgui.InputTextD("  Ваша коммисия в %", sellPercentBuffer, ffi.sizeof(sellPercentBuffer), imgui.InputTextFlags.CharsDecimal) and ffi.string(sellPercentBuffer):match("^%d+$") then
-		ini.cfg.sell_percent = ffi.string(sellPercentBuffer)
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Fps Up при выставлении товаров", fpsUpSell) then
-		ini.cfg.fps_up_sell = fpsUpSell[0]
-
-		save_all()
-	end
-
-
-	if imgui.ToggleButton("Режим просмотра игроков через (/id)", marketState.IsArzmarketCheck) then
-		ini.cfg.IsArzmarketCheck = marketState.IsArzmarketCheck[0]
-
-		save_all()
-	end
-
-	if marketState.isPremiumAuthedStatus == true and imgui.ToggleButton("[!] Премиум табличка с ценами", marketState.premiumDialogEnabled) then
-		ini.cfg.premiumDialogEnabled = marketState.premiumDialogEnabled[0]
-
-		save_all()
-	end
-
-	imgui.PopItemWidth()
-	imgui.PopFont()
-	imgui.EndCustomInvisibleChild()
-	imgui.SameLine()
-	imgui.CustomInvisibleChild("cfgSellBlockFirst", imgui.ImVec2(cfgColumnWidth, cfgColumnHeight), false, imgui.WindowFlags.NoScrollbar)
-	imgui.PushFont(fonts[18])
-	imgui.CenterText("Продажа")
-	imgui.PopFont()
-	round_text(1)
-	local cfgListHeight = math.max(120, (imgui.GetWindowHeight() - 180) / 2)
-	imgui.CustomInvisibleChild("cfgSellBlockSecond", imgui.ImVec2(imgui.GetContentRegionAvail().x, cfgListHeight), true, imgui.WindowFlags.NoScrollWithMouse)
-	imgui.Scroller("cfg1", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-	round_text(0)
-
-	for fileName in lfs.dir(getWorkingDirectory() .. "\\ArzMarket\\sell-cfg") do
-		if fileName == nil then
-		elseif fileName:match(".+%.cfg") then
-			imgui.PushFont(fonts[18])
-
-			local var_194_0 = u8("{FFFFFF}") .. fileName:match(".+%.cfg")
-
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-
-			if fileName:match(".+%.cfg") == loadedSellConfig .. ".cfg" then
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_0 .. " {808080}[plt.lua]{ffff00} [Loaded]", 100)))
-			else
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_0 .. " {808080}[plt.lua]", 100)))
-			end
-
-			if #var_194_0 > 50 and imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-				imgui.TextColoredRGB(var_194_0)
-				imgui.EndTooltip()
-			end
-
-			imgui.PopFont()
-			imgui.SameLine()
-			imgui.PushFont(fonts[18])
-			imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - (69), imgui.GetCursorPos().y - 2))
-
-			if imgui.CustomOnlyBorderButton(fa("ARROWS_ROTATE") .. "##" .. fileName:match(".+%.cfg")) then
-				local var_194_1 = getWorkingDirectory() .. "\\ArzMarket\\sell-cfg\\" .. tostring(fileName:match(".+%.cfg"))
-
-				if doesFileExist(var_194_1) then
-					local var_194_2 = false
-
-					if doesFileExist(getWorkingDirectory() .. "\\ArzMarket\\sell-cfg\\" .. fileName:match("(.+)%.cfg") .. ".json") then
-						var_194_2 = true
-					end
-
-					pltcfg(var_194_1, 1)
-
-					ini.cfg.load_config_sell = fileName:match("(.+)%.cfg") .. (var_194_2 == true and math.floor(os.clock()) or "") .. ".json"
-					loadedSellConfig = fileName:match("(.+)%.cfg") .. (var_194_2 == true and math.floor(os.clock()) or "") .. ".json"
-
-					deAFKMessage("| " .. tostring(ini.cfg.load_config_sell) .. " | " .. tostring(loadedSellConfig))
-
-					if loadedSellConfig ~= "" then
-						configFileNames.sell = loadedSellConfig:match("(.+)%.json") and loadedSellConfig or loadedSellConfig .. ".json"
-
-						if createConfig("sell-cfg/" .. configFileNames.sell, sellList, "sell-cfg", configFileNames.sell) then
-							AFKMessage(u8:decode("Конфиг {505050}") .. loadedSellConfig .. u8:decode("{ffffff} успешно загружен."))
-
-							local var_194_3, var_194_4 = os.rename(var_194_1, getWorkingDirectory() .. "\\ArzMarket\\sell-cfg\\backups\\" .. fileName:match("(.+)%.cfg") .. math.floor(os.clock()) .. ".cfg")
-
-							if not var_194_3 then
-								saveLog(u8:decode("Ошибка при перемещении файла: ") .. var_194_4 .. " | " .. var_194_1)
-							else
-								saveLog(u8:decode("Файл успешно перемещён. ") .. var_194_1)
-							end
-						end
-					end
-
-					save_all()
-				end
-			end
-
-			imgui.Hint("ARROWS_ROTATE" .. fileName:match(".+%.cfg"), "После нажатия кнопки ваш конфиг будет конвертирован в наш формат.\nВы сможете его изменять и сохранять.\nКонфиг от палатки будет перемещен в папку sell-cfg/backups.", false)
-			imgui.SameLine()
-
-			if imgui.CustomOnlyBorderButton(fa("trash") .. "##" .. fileName .. fileName:match("(.+)%.cfg")) then
-				local var_194_5, var_194_6 = os.remove("moonloader/ArzMarket/sell-cfg/" .. fileName:match("(.+)%.cfg") .. ".cfg")
-
-				if var_194_5 then
-					if fileName == loadedSellConfig .. ".cfg" then
-						ini.cfg.load_config_sell = ""
-						loadedSellConfig = ""
-
-						save_all()
-					end
-
-					AFKMessage(u8:decode("Конфиг {505050}") .. fileName:match("(.+)%.cfg") .. u8:decode(" {ffffff}удален."))
-				else
-					print(var_194_6)
-				end
-			end
-
-			imgui.PopFont()
-		elseif fileName:match(".+%.json") then
-			imgui.PushFont(fonts[18])
-
-			local var_194_7 = u8("{ffffff}") .. fileName
-
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-
-			if fileName == loadedSellConfig then
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_7 .. "{ffff00} [Loaded]", 50)))
-			else
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_7, 50)))
-			end
-
-			if #var_194_7 > 50 and imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-				imgui.TextColoredRGB(var_194_7)
-				imgui.EndTooltip()
-			end
-
-			if imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-
-				local var_194_8 = readJsonFile("moonloader/ArzMarket/sell-cfg/" .. fileName:match("(.+)%.json") .. ".json")
-
-				imgui.Text(u8(u8:decode("Название конфига: ") .. fileName:match("(.+)%.json") .. "\n "))
-
-				if var_194_8 ~= nil then
-					for itemIndex, itemData in pairs(var_194_8) do
-						imgui.Text(tostring(u8(itemData.name)))
-					end
-				end
-
-				imgui.EndTooltip()
-			end
-
-			imgui.PopFont()
-			imgui.SameLine()
-			imgui.PushFont(fonts[18])
-			imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - (65), imgui.GetCursorPos().y - 2))
-
-			if imgui.CustomOnlyBorderButton(fa("PLAY") .. "##" .. fileName:match(".+%.json")) then
-				sellList = loadConfig("moonloader/ArzMarket/sell-cfg/" .. fileName)
-
-				if type(sellList) == "nil" then
-					AFKMessage(u8:decode("К сожалению конфиг был поврежден. Загрузить его не получится."))
-
-					sellList = {}
-					ini.cfg.load_config_sell = ""
-					loadedSellConfig = ""
-
-					save_all()
-				else
-					AFKMessage(u8:decode("Конфиг {505050}") .. fileName:match("(.+)%.json") .. u8:decode("{ffffff} успешно загружен."), sellList)
-
-					ini.cfg.load_config_sell = fileName
-					loadedSellConfig = fileName
-
-					save_all()
-				end
-			end
-
-			imgui.SameLine()
-
-			if imgui.CustomOnlyBorderButton(fa("trash") .. "##" .. fileName .. fileName:match("(.+)%.json")) then
-				local var_194_9, var_194_10 = os.remove("moonloader/ArzMarket/sell-cfg/" .. fileName:match("(.+)%.json") .. ".json")
-
-				if var_194_9 then
-					if fileName == loadedSellConfig then
-						ini.cfg.load_config_sell = ""
-						loadedSellConfig = ""
-
-						save_all()
-					end
-
-					AFKMessage(u8:decode("Конфиг {505050}") .. fileName:match("(.+)%.json") .. u8:decode(" {ffffff}удален."))
-				else
-					print(var_194_10)
-				end
-			end
-
-			imgui.PopFont()
-		end
-	end
-
-	imgui.EndCustomInvisibleChild()
-	imgui.PushItemWidth(imgui.GetWindowWidth() - 43)
-	imgui.PushFont(fonts[18])
-	imgui.InputTextWithHintD("##search_cfg_sell", "Название конфига", sellConfigNameBuffer, ffi.sizeof(sellConfigNameBuffer))
-	imgui.PopItemWidth()
-	imgui.SameLine()
-	imgui.PushFont(fonts[18])
-
-	if imgui.CustomOnlyBorderButton(fa("FOLDER") .. "##0.21223123") then
-		os.execute("explorer " .. getWorkingDirectory() .. "\"\\ArzMarket\\sell-cfg")
-	end
-
-	imgui.PopFont()
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	if imgui.Button("Создать", imgui.ImVec2(imgui.GetWindowWidth() - 15, 35)) then
-		configFileNames.sell = u8:decode(ffi.string(sellConfigNameBuffer)):gsub("[\"<|:>]", "")
-
-		if configFileNames.sell == "" or configFileNames.sell == nil or configFileNames.sell:match("^%s*$") ~= nil then
-			AFKMessage(u8:decode("{ff3535}[Error]:{ffffff} Вы не можете создать {505050}безымянный {ffffff}конфиг."))
-		else
-			createConfig("sell-cfg/" .. configFileNames.sell .. ".json", {}, "sell-cfg", configFileNames.sell)
-			AFKMessage(u8:decode("[Продажа] Конфиг {505050}") .. tostring(configFileNames.sell) .. u8:decode("{ffffff} создан2."))
-		end
-	end
-
-	imgui.GetStyle().FrameBorderSize = 0
-
-	imgui.PopFont()
-	round_text(0)
-	imgui.PushFont(fonts[18])
-	imgui.CenterText("Скупка")
-	imgui.PopFont()
-	round_text(1)
-	imgui.CustomInvisibleChild("cfgBuyBlockSecond", imgui.ImVec2(imgui.GetContentRegionAvail().x, cfgListHeight), true, imgui.WindowFlags.NoScrollWithMouse)
-	imgui.Scroller("cfg2", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-	round_text(0)
-
-	buyConfigMultiMergeEnsureState()
-	local selectedMergeCount = buyConfigMultiMergeCount()
-	imgui.Text("Объединение конфигов. Выбрано: " .. tostring(selectedMergeCount))
-	imgui.SetNextItemWidth(math.max(160, imgui.GetContentRegionAvail().x))
-	imgui.InputTextWithHintD("##merge_buy_configs_name", "Название нового объединённого конфига", BUY_CONFIG_MULTI_MERGE.name, ffi.sizeof(BUY_CONFIG_MULTI_MERGE.name))
-	local mergeButtonsWidth = math.max(120, (imgui.GetContentRegionAvail().x - imgui.GetStyle().ItemSpacing.x) / 2)
-	if imgui.Button("Создать из выбранных", imgui.ImVec2(mergeButtonsWidth, 30)) then
-		local mergeName = u8:decode(ffi.string(BUY_CONFIG_MULTI_MERGE.name))
-		createMergedBuyConfigFromSelection(mergeName)
-	end
-	imgui.SameLine()
-	if imgui.Button("Сбросить выбор", imgui.ImVec2(mergeButtonsWidth, 30)) then
-		buyConfigMultiMergeClearSelection()
-	end
-	imgui.TextDisabled("Отметьте галочками минимум 2 JSON-конфига. Будет создан новый файл, а выбранные не изменяются.")
-	imgui.CustomSeparator(imgui.GetWindowWidth())
-
-	for fileName in lfs.dir(getWorkingDirectory() .. "\\ArzMarket\\buy-cfg") do
-		if fileName == nil then
-		elseif fileName:match(".+%.cfg") then
-			imgui.PushFont(fonts[18])
-
-			local var_194_11 = u8("{FFFFFF}") .. fileName:match(".+%.cfg")
-
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-
-			if fileName:match(".+%.cfg") == loadedBuyConfig .. ".cfg" then
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_11 .. " {808080}[plt.lua]{ffff00} [Loaded]", 100)))
-			else
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_11 .. " {808080}[plt.lua]", 100)))
-			end
-
-			if #var_194_11 > 50 and imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-				imgui.TextColoredRGB(var_194_11)
-				imgui.EndTooltip()
-			end
-
-			imgui.PopFont()
-			imgui.SameLine()
-			imgui.PushFont(fonts[18])
-			imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - (69), imgui.GetCursorPos().y - 2))
-
-			if imgui.CustomOnlyBorderButton(fa("ARROWS_ROTATE") .. "##s" .. fileName:match(".+%.cfg")) then
-				local var_194_12 = getWorkingDirectory() .. "\\ArzMarket\\buy-cfg\\" .. tostring(fileName:match(".+%.cfg"))
-
-				if doesFileExist(var_194_12) then
-					local var_194_13 = false
-
-					if doesFileExist(getWorkingDirectory() .. "\\ArzMarket\\buy-cfg\\" .. fileName:match("(.+)%.cfg") .. ".json") then
-						var_194_13 = true
-					end
-
-					pltcfg(var_194_12, 2)
-
-					ini.cfg.load_config_buy = fileName:match("(.+)%.cfg") .. (var_194_13 == true and math.floor(os.clock()) or "") .. ".json"
-					loadedBuyConfig = fileName:match("(.+)%.cfg") .. (var_194_13 == true and math.floor(os.clock()) or "") .. ".json"
-
-					deAFKMessage("| " .. tostring(ini.cfg.load_config_buy) .. " | " .. tostring(loadedBuyConfig))
-
-					if loadedBuyConfig ~= "" then
-						configFileNames.buy = loadedBuyConfig:match("(.+)%.json") and loadedBuyConfig or loadedBuyConfig .. ".json"
-
-						if createConfig("buy-cfg/" .. configFileNames.buy, buyList, "buy-cfg", configFileNames.buy) then
-							AFKMessage(u8:decode("Конфиг {505050}") .. loadedBuyConfig .. u8:decode("{ffffff} успешно загружен."))
-
-							local var_194_14, var_194_15 = os.rename(var_194_12, getWorkingDirectory() .. "\\ArzMarket\\buy-cfg\\backups\\" .. fileName:match("(.+)%.cfg") .. math.floor(os.clock()) .. ".cfg")
-
-							if not var_194_14 then
-								saveLog(u8:decode("Ошибка при перемещении файла:") .. var_194_15 .. " | " .. var_194_12)
-							else
-								saveLog(u8:decode("Файл успешно перемещён. ") .. var_194_12)
-							end
-						end
-					end
-
-					save_all()
-				end
-			end
-
-			imgui.Hint("ARROWS_ROTATEs" .. fileName:match(".+%.cfg"), "После нажатия кнопки ваш конфиг будет конвертирован в наш формат.\nВы сможете его изменять и сохранять.\nКонфиг от палатки будет перемещен в папку buy-cfg/backups.", false)
-			imgui.SameLine()
-
-			if imgui.CustomOnlyBorderButton(fa("trash") .. "##" .. fileName .. fileName:match("(.+)%.cfg")) then
-				local var_194_16, var_194_17 = os.remove("moonloader/ArzMarket/buy-cfg/" .. fileName:match("(.+)%.cfg") .. ".cfg")
-
-				if var_194_16 then
-					if fileName == loadedBuyConfig .. ".cfg" then
-						ini.cfg.load_config_buy = ""
-						loadedBuyConfig = ""
-
-						save_all()
-					end
-
-					AFKMessage(u8:decode("Конфиг {505050}") .. fileName:match("(.+)%.cfg") .. u8:decode(" {ffffff}удален."))
-				else
-					print(var_194_17)
-				end
-			end
-
-			imgui.PopFont()
-		elseif fileName:match(".+%.json") then
-			imgui.PushFont(fonts[18])
-
-			local var_194_18 = u8("{ffffff}") .. fileName
-
-			imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-			local mergeSelected = imguiNew.bool(buyConfigMultiMergeEnsureState().selected[fileName] == true)
-			if imgui.Checkbox("##buy_cfg_merge_select_" .. fileName, mergeSelected) then
-				buyConfigMultiMergeSetSelected(fileName, mergeSelected[0])
-			end
-			imgui.Hint("buy_cfg_merge_select_hint_" .. fileName, "Выбрать этот конфиг для создания нового объединённого конфига.", false)
-			imgui.SameLine()
-			imgui.PushFont(fonts[18])
-
-			if fileName == loadedBuyConfig then
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_18 .. "{ffff00} [Loaded]", 45)))
-			else
-				imgui.TextColoredRGB(tostring(changeExtraSim(var_194_18, 45)))
-			end
-
-			imgui.PushFont(fonts[18])
-
-			if #var_194_18 > 50 and imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-				imgui.TextColoredRGB(var_194_18)
-				imgui.EndTooltip()
-			end
-
-			if imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-
-				local var_194_19 = readJsonFile("moonloader/ArzMarket/buy-cfg/" .. fileName:match("(.+)%.json") .. ".json")
-
-				imgui.Text(u8(u8:decode("Название конфига: ") .. fileName:match("(.+)%.json") .. "\n "))
-
-				if var_194_19 ~= nil then
-					for itemIndex, itemData in pairs(var_194_19) do
-						imgui.Text(tostring(u8(itemData.name)))
-					end
-				end
-
-				imgui.EndTooltip()
-			end
-
-			imgui.PopFont()
-			imgui.SameLine(100)
-			imgui.PushFont(fonts[18])
-			imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - (69), imgui.GetCursorPos().y))
-
-			if imgui.CustomOnlyBorderButton(fa("PLAY") .. "##" .. fileName:match(".+%.json")) then
-				buyList = loadConfig("moonloader/ArzMarket/buy-cfg/" .. fileName)
-
-				if type(buyList) == "nil" then
-					AFKMessage(u8:decode("К сожалению конфиг был поврежден. Загрузить его не получится."))
-
-					buyList = {}
-					ini.cfg.load_config_buy = ""
-					loadedBuyConfig = ""
-
-					save_all()
-				else
-					AFKMessage(u8:decode("Конфиг {505050}") .. fileName:match("(.+)%.json") .. u8:decode("{ffffff} успешно загружен."), sellList)
-
-					ini.cfg.load_config_buy = fileName
-					loadedBuyConfig = fileName
-
-					deAFKMessage("| " .. tostring(ini.cfg.load_config_buy) .. " | " .. tostring(loadedBuyConfig))
-					save_all()
-				end
-			end
-
-			imgui.SameLine()
-			if imgui.CustomOnlyBorderButton(fa("trash") .. "##" .. fileName:match("(.+)%.json")) then
-				local var_194_20, var_194_21 = os.remove("moonloader/ArzMarket/buy-cfg/" .. fileName:match("(.+)%.json") .. ".json")
-
-				if var_194_20 then
-					buyConfigMultiMergeSetSelected(fileName, false)
-					if fileName == loadedBuyConfig then
-						ini.cfg.load_config_buy = ""
-						loadedBuyConfig = ""
-
-						save_all()
-					end
-
-					AFKMessage(u8:decode("Конфиг {505050}") .. fileName:match("(.+)%.json") .. u8:decode(" {ffffff}удален."))
-				else
-					print(var_194_21)
-				end
-			end
-
-			imgui.PopFont()
-			imgui.PopFont()
-			imgui.PopFont()
-		end
-	end
-
-	imgui.EndCustomInvisibleChild()
-	imgui.PushItemWidth(imgui.GetWindowWidth() - 42)
-	imgui.PushFont(fonts[18])
-	imgui.InputTextWithHintD("##search_cfg_buy", "Название конфига", buyConfigNameBuffer, ffi.sizeof(buyConfigNameBuffer))
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("FOLDER") .. "##0.29919293") then
-		os.execute("explorer " .. getWorkingDirectory() .. "\"\\ArzMarket\\buy-cfg")
-	end
-
-	imgui.PopItemWidth()
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	if imgui.Button("Создать##0", imgui.ImVec2(imgui.GetWindowWidth() - 15, 35)) then
-		configFileNames.buy = u8:decode(ffi.string(buyConfigNameBuffer)):gsub("[\"<|:>]", "")
-
-		if configFileNames.buy == "" or configFileNames.buy == nil or configFileNames.buy:match("^%s*$") ~= nil then
-			AFKMessage(u8:decode("{ff3535}[Error]:{ffffff} Вы не можете создать {505050}безымянный {ffffff}конфиг."))
-		else
-			createConfig("buy-cfg/" .. configFileNames.buy .. ".json", {}, "buy-cfg", configFileNames.buy)
-			AFKMessage(u8:decode("[Скупка] Конфиг {505050}") .. tostring(configFileNames.buy) .. u8:decode("{ffffff} создан."))
-		end
-	end
-
-	imgui.GetStyle().FrameBorderSize = 0
-
-	imgui.SetCursorPos(imgui.ImVec2(0, imgui.GetWindowHeight() - 35))
-	imgui.Text("  Баги, предложения")
-	imgui.SameLine()
-	imgui.Link("https://vk.com/arzmarket_tech", "https://t.me/arzmarket_dev", "сюда.", nil, linkTextColor, u8:decode("Вконтакте"), u8:decode("Телеграмм"))
-	imgui.SameLine()
-	imgui.Text("Мы заботимся о вас.")
-	imgui.PopFont()
-	imgui.EndCustomInvisibleChild()
-end
 
 function round_text(text)
 	imgui.GetStyle().WindowBorderSize = text
@@ -25448,874 +16944,7 @@ function round_text(text)
 	imgui.GetStyle().TabBorderSize = text
 end
 
-function item_sell_custom()
-	local screenWidth, screenHeight = getScreenResolution()
-	local windowDrawList = imgui.GetWindowDrawList()
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_196_4 = 300
-	local var_196_5 = 200
 
-	imgui.SetNextWindowPos(imgui.ImVec2(menuWP.x + 267, menuWP.y - 105), imgui.Cond.Always + imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
-	imgui.SetNextWindowSize(imgui.ImVec2(var_196_4, var_196_5), imgui.Cond.Always)
-	imgui.Begin("kakawki3", marketState.custom_add_item, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoBackground)
-
-	local imguiCol = imgui.Col
-
-	imgui.PushStyleColor(imguiCol.WindowBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] + 0.1))
-	imgui.PushStyleColor(imguiCol.ChildBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] - 0.1))
-	imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(menuThemeConfig.window[1], menuThemeConfig.window[2], menuThemeConfig.window[3], menuThemeConfig.window[4] + 0.1))
-
-
-	imgui.BeginChild("customadd")
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-
-	imgui.CustomInvisibleChild("razpreds", imgui.ImVec2(var_196_4, var_196_5), false, imgui.WindowFlags.NoScrollbar)
-	imgui.PushFont(fonts[17])
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-	imgui.CenterText("Кастомное добавление товара.")
-	imgui.CustomSeparator(imgui.GetWindowWidth())
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-	imgui.PushItemWidth(200)
-	imgui.PushFont(uiFonts[1])
-	imgui.NewInput("          Поиск предметов", marketState.search_sell_Custom, 255, "search_sell_Custom")
-	imgui.PopItemWidth()
-	imgui.SameLine()
-	imgui.PushItemWidth(80)
-
-	imgui.GetStyle().PopupBorderSize = 2
-
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 15))
-
-	local var_196_8 = {
-		"(+0)",
-		"(+1)",
-		"(+2)",
-		"(+3)",
-		"(+4)",
-		"(+5)",
-		"(+6)",
-		"(+7)",
-		"(+8)",
-		"(+9)",
-		"(+10)",
-		"(+11)",
-		"(+12)",
-		"(+13)"
-	}
-	local var_196_9 = imgui.new["const char*"][#var_196_8](var_196_8)
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	if imgui.Combo(u8("##enchantitem"), marketState.selected_item, var_196_9, #var_196_8, imgui.ComboFlags.NoArrowButton) then
-		deAFKMessage(tostring(marketState.selected_item[0]) .. " | " .. var_196_8[marketState.selected_item[0] + 1] .. " | " .. marketState.selected_custom_item .. (marketState.selected_item[0] == 0 and "" or var_196_8[marketState.selected_item[0] + 1]))
-	end
-	imgui.PopItemWidth()
-
-	imgui.Hint("enchantitem_combo", "Выберите заточку предмета.\nЕсли вы хотите оставить предмет без заточки или же у предмета не существует заточки - оставьте +0/", false)
-
-	imgui.GetStyle().FrameBorderSize = 0
-	imgui.GetStyle().PopupBorderSize = 1
-
-	imgui.PopStyleVar(1)
-	imgui.PopFont()
-	imgui.SetCursorPosY(imgui.GetCursorPos().y - 3)
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-	imgui.CustomInvisibleChild("customADDSELL", imgui.ImVec2(imgui.GetWindowWidth() / 1.05, 104), true, imgui.WindowFlags.NoScrollWithMouse)
-
-	if timers[1] + 2 <= os.time() or json_vlad == nil then
-		timers[1] = os.time()
-		json_vlad = readJsonFile(buyJsonPath)
-	end
-
-	if json_vlad == nil or #json_vlad == 0 then
-		AFKMessage(u8:decode("Перейдите в раздел скупки и выполните инструкцию которая у вас написана в этом разделе."))
-
-		marketState.custom_add_item[0] = false
-
-		resetIO()
-	end
-
-	local var_196_10 = {}
-
-	if json_vlad then
-		for itemIndex, itemData in pairs(json_vlad) do
-			if #u8:decode(ffi.string(marketState.search_sell_Custom)) > 0 and string.nlower(itemData):find(string.nlower(u8:decode(ffi.string(marketState.search_sell_Custom))), nil, true) then
-				table.insert(var_196_10, itemData)
-			end
-		end
-	end
-
-	imgui.Scroller("customADDSELL", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(8, 8))
-
-	local var_196_11 = #ffi.string(marketState.search_sell_Custom) == 0 and json_vlad or var_196_10
-	local listClipper = imgui.ImGuiListClipper(#var_196_11)
-	local var_196_13
-
-	listClipper:Begin(#var_196_11)
-
-	while listClipper:Step() do
-		for visibleItemIndex = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-			imgui.PushFont(fonts[18])
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 2)
-
-			if var_196_11[visibleItemIndex + 1] == marketState.selected_custom_item then
-				imgui.TextColoredRGB("{808080}" .. changeExtraSim(var_196_11[visibleItemIndex + 1], 35))
-
-				if imgui.IsItemHovered() then
-					imgui.SameLine()
-					imgui.SetCursorPosY(imgui.GetCursorPos().y + 2)
-					imgui.TextDisabled(fa("CIRCLE_XMARK"))
-
-					if #(visibleItemIndex + 1 .. ". " .. var_196_11[visibleItemIndex + 1]) > 35 then
-						imgui.BeginTooltip()
-						imgui.Text(u8(var_196_11[visibleItemIndex + 1]))
-						imgui.EndTooltip()
-					end
-
-					imgui.SetCursorPosY(imgui.GetCursorPos().y - 2)
-				end
-			else
-				imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(var_196_11[visibleItemIndex + 1], 35))
-
-				if imgui.IsItemClicked() then
-					marketState.selected_custom_item = var_196_11[visibleItemIndex + 1]
-				end
-
-				if imgui.IsItemHovered() then
-					imgui.SameLine()
-					imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-					imgui.TextDisabled(fa("CART_CIRCLE_PLUS"))
-
-					if #(visibleItemIndex + 1 .. ". " .. var_196_11[visibleItemIndex + 1]) > 35 then
-						imgui.BeginTooltip()
-						imgui.Text(u8(var_196_11[visibleItemIndex + 1]))
-						imgui.EndTooltip()
-					end
-
-					imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-				end
-			end
-
-			imgui.PopFont()
-		end
-	end
-
-	listClipper:End()
-	imgui.PopStyleVar()
-	imgui.EndCustomInvisibleChild()
-	imgui.SetCursorPosY(imgui.GetCursorPos().y - 2)
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	if imgui.Button("Добавить товар", imgui.ImVec2(imgui.GetWindowWidth() - 10)) then
-		if marketState.selected_custom_item ~= "" then
-			if not containsItem(sellList, marketState.selected_custom_item .. (marketState.selected_item[0] == 0 and "" or var_196_8[marketState.selected_item[0] + 1])) then
-				local var_196_14 = {
-					enabled = true,
-					slot_id = "999",
-					all_count = "999",
-					price_vc = 9,
-					maximum = true,
-					name = marketState.selected_custom_item .. (marketState.selected_item[0] == 0 and "" or var_196_8[marketState.selected_item[0] + 1]),
-					price = sellDefaults.price,
-					count = sellDefaults.count,
-					slot_count = {
-						"999"
-					}
-				}
-
-				addToData(var_196_14, sellList, sortMode and 1 or nil)
-				tradeFilterMarkNewItem("sell", var_196_14)
-
-				marketState.selected_custom_item = ""
-				marketState.selected_item[0] = 0
-
-				AFKMessage(u8:decode("Товар добавлен."))
-				resetIO()
-			else
-				marketState.selected_custom_item = ""
-				marketState.selected_item[0] = 0
-
-				AFKMessage(u8:decode("Такой товар уже существует в вашем списке товаров. Добавить его не получится."))
-				resetIO()
-			end
-		else
-			AFKMessage(u8:decode("Выберите товар, затем уже сможете добавить его. Выбрать товар нужно из списка ниже, нажмите ЛКМ для выбора."))
-		end
-	end
-
-	imgui.GetStyle().FrameBorderSize = 0
-
-	imgui.PopFont()
-	imgui.EndCustomInvisibleChild()
-	imgui.GetWindowDrawList():AddRect(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + var_196_4, cursorScreenPos.y + var_196_5), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 3)
-	imgui.EndChild()
-	imgui.PopStyleColor(3)
-	imgui.End()
-end
-
-function logs_page()
-	-- Logs uses its own inner list scrolling. Keep the parent panel at the top.
-	if (tonumber(imgui.GetScrollY()) or 0) ~= 0 then imgui.SetScrollY(0) end
-	-- Show all dates by default so the page is never empty only because no date was selected.
-	if date_select == nil then date_select = -1 end
-
-	imgui.PushFont(fonts[18])
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-
-	local logTopAvailable = math.max(1, imgui.GetContentRegionAvail().x)
-	local logTopGap = imgui.GetStyle().ItemSpacing.x
-	local logDateButtonWidth = 145
-	local logTodayButtonWidth = 90
-	local logFilterButtonWidth = 115
-	local logSearchWidth = math.max(120, logTopAvailable - logDateButtonWidth - logTodayButtonWidth - logFilterButtonWidth - logTopGap * 3)
-	local logDateLabel = date_select == -1 and "Все даты" or tostring(date_select)
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-	if imgui.Button("Дата: " .. logDateLabel, imgui.ImVec2(logDateButtonWidth, 27)) then
-		imgui.OpenPopup("Выбор даты")
-	end
-	imgui.SameLine()
-
-	if imgui.Button("Сегодня", imgui.ImVec2(logTodayButtonWidth, 27)) then
-		marketState.searchStorage.logPage_1[2] = ""
-		date_select = os.date("%d.%m.%Y")
-	end
-	imgui.SameLine()
-
-	imgui.SetNextItemWidth(logSearchWidth)
-	imgui.NewInput("Поиск по логу", logSearchBuffer, 444)
-	imgui.SameLine()
-
-	if imgui.Button("Фильтры", imgui.ImVec2(logFilterButtonWidth, 27)) then
-		imgui.OpenPopup("logs_filters_popup")
-	end
-	imgui.GetStyle().FrameBorderSize = 0
-	-- Keep popup size fixed on every frame. BeginPopup may auto-fit its window
-	-- after the appearing frame, so Cond.Appearing alone can make it shrink.
-	imgui.SetNextWindowSize(imgui.ImVec2(300, 300), imgui.Cond.Always)
-	imgui.SetNextWindowSizeConstraints(imgui.ImVec2(300, 300), imgui.ImVec2(300, 300))
-	if imgui.BeginPopup("logs_filters_popup") then
-		imgui.Text("Фильтры логов")
-		imgui.CustomSeparator(imgui.GetContentRegionAvail().x)
-
-		if imgui.Button("Продажа и скупка", imgui.ImVec2(-1, 30)) then
-			marketState.searchStorage.logPage_1[2] = ""
-			customItemPage = 0
-			imgui.CloseCurrentPopup()
-		end
-
-		if imgui.Button("Аренда", imgui.ImVec2(-1, 30)) then
-			marketState.searchStorage.logPage_1[2] = ""
-			customItemPage = 4
-			imgui.CloseCurrentPopup()
-		end
-
-		if imgui.Button("Банк переводы", imgui.ImVec2(-1, 30)) then
-			marketState.searchStorage.logPage_1[2] = ""
-			customItemPage = 3
-			imgui.CloseCurrentPopup()
-		end
-
-		if imgui.Button(u8("/storage"), imgui.ImVec2(-1, 30)) then
-			marketState.searchStorage.logPage_1[2] = ""
-			customItemPage = 1
-			imgui.CloseCurrentPopup()
-		end
-
-		if imgui.Button("Предметы", imgui.ImVec2(-1, 30)) then
-			marketState.searchStorage.logPage_1[2] = ""
-			customItemPage = 1
-			imgui.CloseCurrentPopup()
-		end
-
-		if imgui.Button("Трейды", imgui.ImVec2(-1, 30)) then
-			marketState.searchStorage.logPage_1[2] = ""
-			customItemPage = 2
-			imgui.CloseCurrentPopup()
-		end
-
-		imgui.EndPopup()
-	end
-
-	changeDate()
-	round_text(1)
-	local logsListStartX = imgui.GetCursorPosX()
-	local logsListStartY = imgui.GetCursorPosY()
-	local logsListAvail = imgui.GetContentRegionAvail()
-	local logsListHeight = math.max(80, logsListAvail.y)
-	-- A zero size makes BeginChild use all remaining space in the parent window.
-	imgui.CustomInvisibleChild("botHelper", imgui.ImVec2(0, 0), true, imgui.WindowFlags.NoScrollWithMouse)
-	round_text(0)
-	imgui.Scroller("botHel123per", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-
-	local function var_197_0(versionText)
-		local var_198_0, var_198_1, var_198_2 = versionText:match("(%d+)%.(%d+)%.(%d+)")
-
-		return tonumber(var_198_2) * 10000 + tonumber(var_198_1) * 100 + tonumber(var_198_0)
-	end
-
-	local function var_197_1()
-		local var_199_0 = {
-			buy_sa = 0,
-			sell_sa = 0,
-			buy_vc = 0,
-			sell_vc = 0
-		}
-
-		for date, dayLog in pairs(jsonLog) do
-			var_199_0.sell_sa = var_199_0.sell_sa + (dayLog[2] or 0)
-			var_199_0.buy_sa = var_199_0.buy_sa + (dayLog[3] or 0)
-			var_199_0.sell_vc = var_199_0.sell_vc + (dayLog[4] or 0)
-			var_199_0.buy_vc = var_199_0.buy_vc + (dayLog[5] or 0)
-		end
-
-		return var_199_0
-	end
-
-	local selectedDateKey = date_select ~= -1 and tostring(date_select) or nil
-	local selectedDateMissing = selectedDateKey ~= nil and (type(jsonLog) ~= "table" or jsonLog[selectedDateKey] == nil)
-
-	if selectedDateMissing then
-		imgui.CenterText("Нет статистики за выбранную дату.")
-		imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-		imgui.CustomSeparator(imgui.GetWindowWidth())
-	else
-	if customItemPage == 0 and date_select then
-		if jsonLog ~= nil then
-			local var_197_2 = {}
-
-			if date_select == -1 then
-				local var_197_3 = {}
-
-				for iter_197_0, iter_197_1 in pairs(jsonLog) do
-					table.insert(var_197_3, iter_197_0)
-				end
-
-				table.sort(var_197_3, function(leftEntry, rightEntry)
-					return var_197_0(leftEntry) > var_197_0(rightEntry)
-				end)
-
-				for iter_197_2, iter_197_3 in ipairs(var_197_3) do
-					local var_197_4 = jsonLog[iter_197_3]
-
-					if var_197_4[1] then
-						table.insert(var_197_2, "selectedDate=" .. iter_197_3)
-
-						for iter_197_4 = #var_197_4[1], 1, -1 do
-							table.insert(var_197_2, var_197_4[1][iter_197_4])
-						end
-					end
-				end
-
-				local var_197_5 = var_197_1()
-
-				imgui.CenterText("\nПродали за всё время: SA$" .. moneySeparator(var_197_5.sell_sa) .. " | Скупили за всё время: SA$" .. moneySeparator(var_197_5.buy_sa) .. "\nПродали за всё время: VC$" .. moneySeparator(var_197_5.sell_vc) .. " | Скупили за всё время: VC$" .. moneySeparator(var_197_5.buy_vc) .. "\n ")
-			else
-				var_197_2 = jsonLog[os.date(date_select)][1] or {}
-
-				imgui.CenterText("\nПродали за день: SA$" .. moneySeparator(jsonLog[os.date(date_select)][2]) .. " | Скупили за день: SA$" .. moneySeparator(jsonLog[os.date(date_select)][3]) .. "\nПродали за день: VC$" .. moneySeparator(jsonLog[os.date(date_select)][4]) .. " | Скупили за день: VC$" .. moneySeparator(jsonLog[os.date(date_select)][5]) .. "\n ")
-			end
-
-
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-
-			if marketState.searchStorage.logPage_1[2] ~= #ffi.string(logSearchBuffer) then
-				deAFKMessage("scan logs")
-
-				marketState.searchStorage.logPage_1 = {
-					{},
-					#ffi.string(logSearchBuffer)
-				}
-
-				for iter_197_6 = #var_197_2, 1, -1 do
-					if var_197_2[iter_197_6]:match("selectedDate=(.+)") then
-						table.insert(marketState.searchStorage.logPage_1[1], var_197_2[iter_197_6])
-					elseif u8:decode(ffi.string(logSearchBuffer)) ~= 0 and string.find(string.nlower(var_197_2[iter_197_6]), string.nlower(u8:decode(ffi.string(logSearchBuffer))), nil, true) then
-						table.insert(marketState.searchStorage.logPage_1[1], var_197_2[iter_197_6])
-					end
-				end
-			end
-
-			local var_197_7 = marketState.searchStorage.logPage_1[1]
-			local listClipper = imgui.ImGuiListClipper(#var_197_7)
-
-			-- Let ImGui measure the actual row height. A forced oversized row height
-			-- makes the clipper stop drawing before the bottom of the child window.
-			listClipper:Begin(#var_197_7)
-
-			while listClipper:Step() do
-				for iter_197_7 = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-					if var_197_7[iter_197_7 + 1]:match("selectedDate=(.+)") then
-						imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-						imgui.CustomSeparator(imgui.GetWindowWidth())
-						imgui.CenterText(var_197_7[iter_197_7 + 1]:match("selectedDate=(.+)"))
-						imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-						imgui.CustomSeparator(imgui.GetWindowWidth())
-					else
-						imgui.TextColoredRGB(changeExtraSim(var_197_7[iter_197_7 + 1], 80))
-
-						if #var_197_7[iter_197_7 + 1] > 80 and imgui.IsItemHovered() then
-							imgui.BeginTooltip()
-							imgui.PushFont(fonts[18])
-							imgui.Text(u8(var_197_7[iter_197_7 + 1]))
-							imgui.PopFont()
-							imgui.EndTooltip()
-						end
-					end
-				end
-			end
-
-			listClipper:End()
-		else
-			imgui.CenterText("Нет статистики за этот день или не выбрана дата.")
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-		end
-	elseif customItemPage == 1 then
-		if jsonLog ~= nil and date_select then
-			local var_197_9 = {}
-
-			if date_select == -1 then
-				local var_197_10 = {}
-
-				for iter_197_8, iter_197_9 in pairs(jsonLog) do
-					table.insert(var_197_10, iter_197_8)
-				end
-
-				table.sort(var_197_10, function(leftEntry, rightEntry)
-					return var_197_0(leftEntry) > var_197_0(rightEntry)
-				end)
-
-				for iter_197_10, iter_197_11 in ipairs(var_197_10) do
-					local var_197_11 = jsonLog[iter_197_11]
-
-					if var_197_11[1] then
-						table.insert(var_197_9, "selectedDate=" .. iter_197_11)
-
-						for iter_197_12 = #var_197_11[1], 1, -1 do
-							table.insert(var_197_9, var_197_11[1][iter_197_12])
-						end
-					end
-				end
-			else
-				var_197_9 = jsonLog[os.date(date_select)][1] or {}
-			end
-
-			if date_select ~= -1 then
-				imgui.CenterText("\nПродали за день: $" .. moneySeparator(jsonLog[os.date(date_select)][2]) .. " Скупили за день: $" .. moneySeparator(jsonLog[os.date(date_select)][3]) .. "\n Продали за день: VC$" .. moneySeparator(jsonLog[os.date(date_select)][4]) .. " Скупили за день: VC$" .. moneySeparator(jsonLog[os.date(date_select)][5]) .. "\n ")
-			end
-
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-
-			local var_197_12 = {}
-
-			for iter_197_13, iter_197_14 in ipairs(var_197_9) do
-				if iter_197_14:match("selectedDate=(.+)") then
-					var_197_12[iter_197_14] = {
-						date = 1
-					}
-				else
-					local var_197_13 = iter_197_14:find(u8:decode("продал")) and iter_197_14:match(u8:decode("продал \"(.+)\" за")) or iter_197_14:match(u8:decode("\"(.+)\" за"))
-					local var_197_14 = var_197_13:find(u8:decode("%(%d+ шт%.%)$")) and var_197_13:match(u8:decode("%((%d+) шт%.%)$")) or 1
-					local var_197_15 = var_197_13:find(u8:decode("%(%d+ шт%.%)$")) and var_197_13:gsub(u8:decode("%(%d+ шт%.%)$"), "") or var_197_13
-
-					if not var_197_12[var_197_15] then
-						var_197_12[var_197_15] = {
-							sell = 0,
-							buy = 0
-						}
-					end
-
-					var_197_12[var_197_15][iter_197_14:find(u8:decode("продал")) and "buy" or "sell"] = var_197_12[var_197_15][iter_197_14:find(u8:decode("продал")) and "buy" or "sell"] + var_197_14
-				end
-			end
-
-			for iter_197_15, iter_197_16 in pairs(var_197_12) do
-				if iter_197_16.date then
-					imgui.CustomSeparator(imgui.GetWindowWidth() - 10)
-					imgui.CenterText(iter_197_15:match("selectedDate=(.+)"))
-					imgui.CustomSeparator(imgui.GetWindowWidth() - 10)
-				else
-					imgui.SetCursorPosX(2)
-					imgui.TextColoredRGB((u8:decode("{808080} %s {ffffff}| Купили у меня:{808080} %s {ffffff}| Продали мне:{808080} %s {ffffff}")):format(iter_197_15:gsub(" $", ""), iter_197_16.sell, iter_197_16.buy))
-				end
-			end
-		else
-			imgui.CenterText("Нет статистики за этот день или не выбрана дата.")
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-		end
-	elseif customItemPage == 2 then
-		if jsonLog ~= nil and date_select then
-			local var_197_16 = {
-				{},
-				{}
-			}
-
-			if date_select == -1 then
-				local var_197_17 = {}
-
-				for iter_197_17, iter_197_18 in pairs(jsonLog) do
-					table.insert(var_197_17, iter_197_17)
-				end
-
-				table.sort(var_197_17, function(leftEntry, rightEntry)
-					return var_197_0(leftEntry) > var_197_0(rightEntry)
-				end)
-
-				for iter_197_19, iter_197_20 in ipairs(var_197_17) do
-					local var_197_18 = jsonLog[iter_197_20]
-
-					if var_197_18[11] then
-						for iter_197_21 = #var_197_18[11], 1, -1 do
-							table.insert(var_197_16[1], var_197_18[11][iter_197_21])
-							table.insert(var_197_16[2], var_197_18[6][iter_197_21])
-						end
-					end
-				end
-
-				local var_197_19 = {
-					buy_sa = 0,
-					sell_sa = 0,
-					buy_vc = 0,
-					sell_vc = 0
-				}
-
-				for iter_197_22, iter_197_23 in pairs(jsonLog) do
-					if iter_197_23[11] then
-						for iter_197_24, iter_197_25 in ipairs(iter_197_23[11]) do
-							if iter_197_25:find(u8:decode("Вы получили VC")) then
-								var_197_19.sell_vc = var_197_19.sell_vc + (iter_197_23[9][iter_197_24] or 0)
-								var_197_19.buy_vc = var_197_19.buy_vc + (iter_197_23[8][iter_197_24] or 0)
-							else
-								var_197_19.sell_sa = var_197_19.sell_sa + (iter_197_23[9][iter_197_24] or 0)
-								var_197_19.buy_sa = var_197_19.buy_sa + (iter_197_23[8][iter_197_24] or 0)
-							end
-						end
-					end
-				end
-
-				imgui.CenterText("\nПолучили за всё время: $" .. moneySeparator(var_197_19.sell_sa) .. " | Потратили за всё время: $" .. moneySeparator(var_197_19.buy_sa))
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 22)
-				imgui.CenterText("\nПолучили за всё время: VC$" .. moneySeparator(var_197_19.sell_vc) .. " | Потратили за всё время: VC$" .. moneySeparator(var_197_19.buy_vc))
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 17)
-			else
-				var_197_16 = {
-					jsonLog[os.date(date_select)][11],
-					jsonLog[os.date(date_select)][6]
-				} or {}
-			end
-
-			if date_select ~= -1 and jsonLog[date_select][11] ~= nil then
-				local var_197_20 = {
-					buy_sa = 0,
-					sell_sa = 0,
-					buy_vc = 0,
-					sell_vc = 0
-				}
-
-				for iter_197_26, iter_197_27 in ipairs(jsonLog[date_select][11]) do
-					if iter_197_27:find(u8:decode("Вы получили VC")) then
-						var_197_20.sell_vc = var_197_20.sell_vc + tonumber(jsonLog[date_select][9][iter_197_26])
-						var_197_20.buy_vc = var_197_20.buy_vc + tonumber(jsonLog[date_select][8][iter_197_26])
-					else
-						var_197_20.sell_sa = var_197_20.sell_sa + tonumber(jsonLog[date_select][9][iter_197_26])
-						var_197_20.buy_sa = var_197_20.buy_sa + tonumber(jsonLog[date_select][8][iter_197_26])
-					end
-				end
-
-				imgui.CenterText("\nПолучили за день: $" .. moneySeparator(var_197_20.sell_sa) .. " Потратили за день: $" .. moneySeparator(var_197_20.buy_sa))
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 22)
-				imgui.CenterText("\n Получили за день: VC$" .. moneySeparator(var_197_20.sell_vc) .. " Потратили за день: VC$" .. moneySeparator(var_197_20.buy_vc))
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 17)
-			end
-
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-
-			for iter_197_28, iter_197_29 in ipairs(var_197_16[1]) do
-				imgui.TextColoredRGB(iter_197_29)
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 2)
-				imgui.Hint("jsonLogdate_select" .. iter_197_28, "Нажмите ЛКМ для того что бы просмотреть информацию о обмене.", false)
-
-				if imgui.IsItemClicked() then
-					if imgui.GetIO().MouseDown[0] then
-						imgui.GetIO().MouseDown[0] = false
-					end
-
-					marketState.openAfterCloseMenu = true
-
-					sendNotify(u8:decode("Меню скрыто для просмотра лога."))
-					openCrr()
-					create_dialog(31313, 0, u8:decode("Логи продаж."), u8:decode("Закрыть"), "", var_197_16[2][iter_197_28])
-				end
-			end
-		else
-			imgui.CenterText("Нет статистики за этот день или не выбрана дата.")
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-		end
-	elseif customItemPage == 3 then
-		if jsonLog ~= nil and date_select then
-			local var_197_21 = {}
-
-			if date_select == -1 then
-				local var_197_22 = {}
-
-				for iter_197_30, iter_197_31 in pairs(jsonLog) do
-					table.insert(var_197_22, iter_197_30)
-				end
-
-				table.sort(var_197_22, function(leftEntry, rightEntry)
-					return var_197_0(leftEntry) > var_197_0(rightEntry)
-				end)
-
-				for iter_197_32, iter_197_33 in ipairs(var_197_22) do
-					local var_197_23 = jsonLog[iter_197_33]
-
-					if var_197_23[12] then
-						for iter_197_34 = #var_197_23[12], 1, -1 do
-							table.insert(var_197_21, var_197_23[12][iter_197_34])
-						end
-					end
-				end
-			else
-				var_197_21 = jsonLog[os.date(date_select)][12] or {}
-			end
-
-			if date_select ~= -1 and jsonLog[date_select][12] ~= nil then
-				imgui.CenterText("\nПолучили за день: $" .. moneySeparator(jsonLog[date_select][13]) .. " Потратили за день: $" .. moneySeparator(jsonLog[date_select][14]))
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 17)
-			end
-
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-
-			for iter_197_35, iter_197_36 in ipairs(var_197_21) do
-				imgui.TextColoredRGB(iter_197_36)
-			end
-		else
-			imgui.CenterText("Нет статистики за этот день или не выбрана дата.")
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-		end
-	elseif customItemPage == 4 then
-		if jsonLog ~= nil and date_select then
-			local var_197_24 = {}
-
-			if date_select == -1 then
-				local var_197_25 = {}
-
-				for iter_197_37, iter_197_38 in pairs(jsonLog) do
-					table.insert(var_197_25, iter_197_37)
-				end
-
-				table.sort(var_197_25, function(leftEntry, rightEntry)
-					return var_197_0(leftEntry) > var_197_0(rightEntry)
-				end)
-
-				for iter_197_39, iter_197_40 in ipairs(var_197_25) do
-					local var_197_26 = jsonLog[iter_197_40]
-
-					if var_197_26[15] then
-						for iter_197_41 = #var_197_26[15], 1, -1 do
-							table.insert(var_197_24, var_197_26[15][iter_197_41])
-						end
-					end
-				end
-			else
-				var_197_24 = jsonLog[os.date(date_select)][15] or {}
-			end
-
-			if date_select ~= -1 and jsonLog[date_select][15] ~= nil then
-				imgui.CenterText("\nПолучили за день: $" .. moneySeparator(jsonLog[date_select][17]))
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 22)
-				imgui.CenterText("\n Получили за день: VC$" .. moneySeparator(jsonLog[date_select][16]))
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 17)
-			end
-
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-
-			for iter_197_42, iter_197_43 in ipairs(var_197_24) do
-				imgui.TextColoredRGB(iter_197_43)
-			end
-		else
-			imgui.CenterText("Нет статистики за этот день или не выбрана дата.")
-			imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-			imgui.CustomSeparator(imgui.GetWindowWidth())
-		end
-	end
-	end
-
-	imgui.PopFont()
-
-	imgui.GetStyle().FrameBorderSize = 0
-	imgui.EndCustomInvisibleChild()
-
-	imgui.PushFont(fonts[18])
-	local appearanceButtonWidth = 125
-	local appearanceButtonHeight = 30
-	local appearanceButtonPadding = 5
-	local appearanceButtonX = logsListStartX + math.max(0, logsListAvail.x - appearanceButtonWidth - appearanceButtonPadding)
-	local appearanceButtonY = logsListStartY + math.max(0, logsListHeight - appearanceButtonHeight - appearanceButtonPadding)
-	imgui.SetCursorPos(imgui.ImVec2(appearanceButtonX, appearanceButtonY))
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-	if imgui.Button("Оформление", imgui.ImVec2(appearanceButtonWidth, appearanceButtonHeight)) then
-		imgui.OpenPopup("logs_appearance_popup")
-	end
-	imgui.GetStyle().FrameBorderSize = 0
-
-	-- Keep appearance popup stable too, for the same reason as the filters popup.
-	imgui.SetNextWindowSize(imgui.ImVec2(560, 310), imgui.Cond.Always)
-	imgui.SetNextWindowSizeConstraints(imgui.ImVec2(560, 310), imgui.ImVec2(560, 310))
-	if imgui.BeginPopup("logs_appearance_popup") then
-		imgui.Text("Оформление логов")
-		imgui.CustomSeparator(imgui.GetContentRegionAvail().x)
-		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-		if imgui.Button("Изменить позицию окна [Окно лавки]", imgui.ImVec2(-1, 30)) then
-			imgui.CloseCurrentPopup()
-			marketWindowPositionEditMode = true
-			replaceLoggerVisible[0] = true
-
-			if activeLavkaId == -1 then
-				activeLavkaId = 1337228
-			end
-
-			sampSetCursorMode(4)
-
-			local var_197_27 = "" .. os.clock()
-
-			lua_thread.create(function(threadToken)
-				while true do
-					marketWindowPos = imgui.ImVec2(select(1, getCursorPos()), select(2, getCursorPos()))
-
-					if imgui.IsMouseClicked(0) then
-						AFKMessage(u8:decode("Сохранено."))
-
-						marketWindowPositionEditMode = false
-						windowThemeConfig.marketPos = {
-							x = marketWindowPos.x,
-							y = marketWindowPos.y
-						}
-
-						sampSetCursorMode(0)
-						writeJsonFile(windowThemeConfig, windowThemePath)
-
-						if activeLavkaId == 1337228 then
-							AFKMessage(u8:decode("Окно лавки скрыто, так как у вас не установлена лавка."))
-							replaceLoggerVisible[0] = false
-						end
-
-						break
-					end
-
-					wait(0)
-				end
-			end, var_197_27)
-		end
-
-		imgui.Text("Размер окна")
-		imgui.PushItemWidth(120)
-		if imgui.DragInt("##marketSizeX", marketWindowSize.x, 1, 0, select(1, getScreenResolution()), "%.0f") then
-			windowThemeConfig.marketSize.x = marketWindowSize.x[0]
-			writeJsonFile(windowThemeConfig, windowThemePath)
-		end
-		imgui.SameLine()
-		if imgui.DragInt("##marketSizeY", marketWindowSize.y, 1, 0, select(2, getScreenResolution()), "%.0f") then
-			windowThemeConfig.marketSize.y = marketWindowSize.y[0]
-			writeJsonFile(windowThemeConfig, windowThemePath)
-		end
-		imgui.PopItemWidth()
-
-		if imgui.ColorEdit4(" Цвет текста в окне лавки.", marketColorBuffers.text) then
-			windowThemeConfig.marketColor.text[1], windowThemeConfig.marketColor.text[2], windowThemeConfig.marketColor.text[3], windowThemeConfig.marketColor.text[4] = marketColorBuffers.text[0], marketColorBuffers.text[1], marketColorBuffers.text[2], marketColorBuffers.text[3]
-			writeJsonFile(windowThemeConfig, windowThemePath)
-			imgui.FrameTheme()
-		end
-
-		if imgui.ColorEdit4(" Цвет окна лавки.", marketColorBuffers.window) then
-			windowThemeConfig.marketColor.window[1], windowThemeConfig.marketColor.window[2], windowThemeConfig.marketColor.window[3], windowThemeConfig.marketColor.window[4] = marketColorBuffers.window[0], marketColorBuffers.window[1], marketColorBuffers.window[2], marketColorBuffers.window[3]
-			writeJsonFile(windowThemeConfig, windowThemePath)
-			imgui.FrameTheme()
-		end
-
-		imgui.SetNextItemWidth(120)
-		if imgui.DragFloat(" Размер шрифта", logWindowFontScale, 0.01, 0.1, 3, "%.1f") then
-			windowThemeConfig.log_windowFont = logWindowFontScale[0]
-			writeJsonFile(windowThemeConfig, windowThemePath)
-		end
-
-		if imgui.ToggleButton("Заменять окно лавки.", replaceWindowEnabled) then
-			ini.cfg.replace_window = replaceWindowEnabled[0]
-			replaceLoggerVisible[0] = replaceWindowEnabled[0]
-			save_all()
-		end
-
-		if imgui.Button("Сбросить настройки этой вкладки.", imgui.ImVec2(-1, 30)) then
-			AFKMessage(u8:decode("Настройки успешно сброшены!"))
-
-			windowThemeConfig = {
-				log_windowFont = 1,
-				mainWindowSize = {
-					x = 830,
-					y = 550
-				},
-				marketSize = {
-					x = 600,
-					y = 250
-				},
-				marketColor = {
-					text = {
-						1,
-						1,
-						1,
-						1.1
-					},
-					window = {
-						0.072,
-						0.091,
-						0.207,
-						0.784
-					}
-				},
-				marketPos = {
-					x = -1,
-					y = -1
-				},
-				LogsPos = {
-					x = -1,
-					y = -1
-				}
-			}
-			logWindowFontScale = imguiNew.float(windowThemeConfig.log_windowFont)
-			marketColorBuffers = {
-				text = imguiNew.float[4](windowThemeConfig.marketColor.text),
-				window = imguiNew.float[4](windowThemeConfig.marketColor.window)
-			}
-			marketWindowPos = imgui.ImVec2(windowThemeConfig.marketPos.x, windowThemeConfig.marketPos.y)
-			logsWindowPos = imgui.ImVec2(windowThemeConfig.LogsPos.x, windowThemeConfig.LogsPos.y)
-			marketWindowSize = {
-				x = imguiNew.int(windowThemeConfig.marketSize.x),
-				y = imguiNew.int(windowThemeConfig.marketSize.y)
-			}
-
-			writeJsonFile(windowThemeConfig, windowThemePath)
-		end
-
-		imgui.GetStyle().FrameBorderSize = 0
-		imgui.EndPopup()
-	end
-
-	imgui.PopFont()
-end
 
 function create_dialog(dialogId, dialogTitle, dialogText, button1, button2, style)
 	deAFKMessage(debug.getinfo(1, "l"), "create custom dialog")
@@ -26397,821 +17026,7 @@ function baronLoadTradeConfig(side, fileName)
 	return true
 end
 
-function baronRenderTradeConfigSelector(side)
-	local active = side == "sell" and loadedSellConfig or loadedBuyConfig
-	local preview = active ~= "" and active:gsub("%.json$", "") or u8:decode("Не выбран")
-	imgui.PushFont(fonts[18])
-	imgui.Text(u8(u8:decode("Конфиг:")))
-	imgui.SameLine()
-	imgui.PushItemWidth(math.max(150, 190 * getMenuUiScale()))
-	local opened = imgui.BeginCombo("##baron_trade_config_" .. side, u8(preview))
-	arzBaronAnchorRecordItem(side == "sell" and "sell_config" or "buy_config")
-	if opened then
-		for _, fileName in ipairs(baronTradeConfigFiles(side)) do
-			local selected = fileName == active
-			if imgui.Selectable(u8(fileName:gsub("%.json$", "")), selected) then
-				baronLoadTradeConfig(side, fileName)
-			end
-		end
-		imgui.EndCombo()
-	end
-	imgui.PopItemWidth()
-	imgui.PopFont()
-end
 
-function buy(frame)
-	if timers[1] + 2 <= os.time() or json_vlad == nil then
-		timers[1] = os.time()
-		json_vlad = readJsonFile(buyJsonPath)
-
-		if #buyList > 0 and json_vlad ~= nil and loadedBuyConfig ~= "" then
-			configFileNames.buy = loadedBuyConfig:match("(.+)%.json") and loadedBuyConfig or loadedBuyConfig .. ".json"
-
-			createConfig("buy-cfg/" .. configFileNames.buy, buyList, "buy-cfg", configFileNames.buy)
-		end
-	end
-
-	imgui.PushFont(fonts[18])
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-
-	if imgui.CustomOnlyBorderButton(buyScanMode and fa("MAGNIFYING_GLASS_LOCATION") or fa("magnifying_glass"), imgui.ImVec2(30, 27)) then
-		buyScanMode = not buyScanMode
-
-		if buyScanMode then
-			setGameKeyState(21, 255)
-			sampForceOnfootSync()
-			AFKMessage(u8:decode("Откройте меню лавки [ALT], если скрипт автоматически не открыл и скрипт автоматически начнет сканирование"))
-		else
-			AFKMessage(u8:decode("Сканирование было отменено."))
-		end
-	end
-
-	imgui.Hint("MAGNIFYING_GLASS_LOCATION", "Данная функция используется для сканирования предметов в лавке!", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(sortMode and fa("ARROW_UP_SHORT_WIDE") or fa("ARROW_DOWN_WIDE_SHORT"), imgui.ImVec2(30, 27)) then
-		sortMode = not sortMode
-		ini.cfg.sort_mode = sortMode
-
-		save_all()
-	end
-
-	imgui.Hint("ARROW_UP_SHORT_WIDE", "Функция заполнения предметов в правый столбец.\n Если стрелка кнопки смотрит вниз то при добавлении предмета, он будет добавлен вниз.", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("ARROWS_ROTATE"), imgui.ImVec2(30, 27)) then
-		sendNotify(u8:decode("Обновление списков скупки..."))
-		get_buyList()
-	end
-
-	imgui.Hint("ARROWS_ROTATE1", "Моментально обновит список предметов на скупку.\nНе нужно бежать к своей лавке, все происходит удалённо!", false)
-	imgui.SameLine()
-
-	local baronBuyAutoPricesClicked = imgui.CustomOnlyBorderButton(fa("EQUALS") .. "##apply_avg_buy", imgui.ImVec2(30, 27))
-	arzBaronAnchorRecordItem("buy_auto_prices")
-	if baronBuyAutoPricesClicked then
-		applyAveragePricesToBuyList()
-	end
-
-	imgui.Hint("apply_avg_buy", "Автоматически установить средние цены для включённых товаров текущего конфига скупки. Количество не меняется.", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("FACE_SMILE_HEARTS"), imgui.ImVec2(30, 27)) then
-		imgui.OpenPopup("Личный кабинет.")
-	end
-
-	premiumPage(frame)
-	imgui.Hint("FACE_SMILE_HEARTS", "Личный кабинет.\nЗдесь вы можете авторизоваться в вашем кабинете если вы купили ключ.\nЕсли нет - мы можем рассказать о плюсах подписки, нажав сюда.", false)
-	imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 355) / 2, 5))
-
-	if #ffi.string(logSearchBuffer) ~= 0 then
-		if imgui.CustomOnlyBorderButton(fa("TRASH_CAN_UNDO") .. "##", imgui.ImVec2(25, 27)) then
-			logSearchBuffer = imguiNew.char[256]()
-		end
-
-		imgui.Hint("TRASH_CAN_UNDO", "Очищает поле ввода (Поиск)", false)
-		imgui.SameLine()
-	end
-
-	imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 300) / 2, 5))
-	imgui.PushItemWidth(255)
-	imgui.PopFont()
-	imgui.NewInput("Поиск предметов", logSearchBuffer, 255, "search_buy")
-	arzBaronAnchorRecordItem("buy_search")
-	imgui.PopItemWidth()
-	imgui.PushFont(fonts[18])
-	imgui.Hint("search_sell", "Данная функция ведет поиск в двух столбцах, в правом и левом.\nВы можете найти какой-то товар, добавить.\nТак же не забывайте что вы можете найти товар, затем выбрать для переноса, очистить поиск и перетащить куда вам нужно.", false)
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 285, 5))
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetCursorPos().x - 5, imgui.GetCursorPos().y - 1))
-
-	if imgui.CustomOnlyBorderButton(viceCityMode and "SA$" or "VC$", imgui.ImVec2(35, 27)) then
-		viceCityMode = not viceCityMode
-		ini.cfg.vice_city_mode = viceCityMode
-
-		save_all()
-		vc_converter()
-	end
-
-	imgui.Hint("vice_city_mode", "[buy] Нажав кнопку Вы смените режим цен на [ViceCity].\nТак же во вкладке \"Настройки\" Вы можете изменить функцию конвертации. Внимательно изучите ее!", false)
-	imgui.SameLine()
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetCursorPos().x, imgui.GetCursorPos().y + 1))
-
-	if imgui.CustomOnlyBorderButton(fa("COPY"), imgui.ImVec2(35, 27)) then
-		imgui.OpenPopup("Конфиг менеджер.")
-	end
-
-	configManager(buyList, 2)
-	imgui.Hint("COPY_MODE", "Новая функция которая позволит быстро копировать что либо из конфига.\nПосле нажатия у вас откроется настройки функции.", false)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x - 5)
-
-	if imgui.CustomOnlyBorderButton(fa("download") .. "##", imgui.ImVec2(35, 27)) then
-		sendNotify(u8:decode("Вы начали скачку средних цен."))
-		get_prices()
-	end
-
-	imgui.Hint("download", "Нажав кнопку Вы скачаете средние цены.\nОни будут доступны при выборе товара в самом меню скрипта или же на центральном рынке при выборе товара!\nТак же не забывайте вы можете добавить товар, затем навести на название товара курсор и вам откроется список средних цен!\nЕсли вы зажмете ЛКМ и будете листать вниз колесиком мыши - вы сможете прокрутить вниз.", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("trash") .. "##", imgui.ImVec2(35, 27)) then
-		clearTradeListAndPersist("buy")
-	end
-
-	imgui.Hint("trash", "Нажав кнопку Вы удалите все добавленные товары в списке ниже. (В правой колонке)", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("FOLDER") .. "##", imgui.ImVec2(35, 27)) then
-		imgui.SelectMenu(mainMenu, 3)
-	end
-
-	imgui.Hint("FOLDER", "Нажав кнопку Вы быстро переместитесь во вкладку \"Настройки\".\nТам вы сможете изменить настройки скрипта, а так же загрузить конфиг.\nП-сссс. Открою секрет, у нас работает конфиг от палатки! Только никому не говори!", false)
-	imgui.SameLine()
-	if imgui.CustomOnlyBorderButton("HTML##arz_html_buy", imgui.ImVec2(48, 27)) then
-		arzUiExtensionsOpenHtml("buy")
-	end
-	imgui.Hint("arz_html_buy", "Открыть HTML интерфейс без перезапуска скрипта.", false)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetWindowWidth() - 40)
-
-	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(35, 27)) then
-		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
-		OnClose = true
-	end
-
-	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
-	imgui.PopFont()
-
-	if json_vlad ~= nil and #json_vlad ~= 0 then
-		local buyListsAvail = imgui.GetContentRegionAvail()
-		local buyColumnGap = 8
-		local buyLeftWidth = math.max(260, (buyListsAvail.x - buyColumnGap) * 0.45)
-		local buyRightWidth = math.max(260, buyListsAvail.x - buyLeftWidth - buyColumnGap)
-		local buyFooterHeight = math.ceil(96 * getMenuUiScale())
-		local buyListsHeight = math.max(120, buyListsAvail.y - buyFooterHeight)
-
-		-- Match the Sale page behavior: the left source-items list is not
-		-- constrained by the footer and should extend to the bottom of the page.
-		local buyLeftListHeight = math.max(120, buyListsAvail.y)
-		imgui.CustomInvisibleChild("buyLeftList", imgui.ImVec2(buyLeftWidth, buyLeftListHeight), true, imgui.WindowFlags.NoScrollWithMouse)
-
-		local var_210_0 = {}
-
-		if json_vlad then
-			for itemIndex, itemData in pairs(json_vlad) do
-				if #u8:decode(ffi.string(logSearchBuffer)) > 0 and string.nlower(itemData):find(string.nlower(u8:decode(ffi.string(logSearchBuffer))), nil, true) then
-					table.insert(var_210_0, itemData)
-				end
-			end
-		end
-
-		imgui.Scroller("buyLeftList", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-
-		local var_210_1 = #ffi.string(logSearchBuffer) == 0 and json_vlad or var_210_0
-		local listClipper = imgui.ImGuiListClipper(#var_210_1)
-
-		listClipper:Begin(#var_210_1)
-
-		while listClipper:Step() do
-			for visibleItemIndex = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-				imgui.PushFont(fonts[18])
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 2)
-
-				if containsItem(buyList, var_210_1[visibleItemIndex + 1]) then
-					imgui.TextColoredRGB("{808080}" .. changeExtraSim(visibleItemIndex + 1 .. ". " .. var_210_1[visibleItemIndex + 1], 35))
-
-					if imgui.IsItemHovered() then
-						imgui.SameLine()
-
-						if imgui.IsMouseClicked(1) then
-							SaveInput(var_210_1[visibleItemIndex + 1])
-						end
-
-						imgui.SetCursorPosY(imgui.GetCursorPos().y + 2)
-						imgui.TextDisabled(fa("CIRCLE_XMARK"))
-
-						if #(visibleItemIndex + 1 .. ". " .. var_210_1[visibleItemIndex + 1]) > 1 then
-							imgui.BeginTooltip()
-							imgui.Text(u8(var_210_1[visibleItemIndex + 1]))
-							imgui.EndTooltip()
-						end
-
-						imgui.SetCursorPosY(imgui.GetCursorPos().y - 2)
-					end
-				else
-					imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(visibleItemIndex + 1 .. ". " .. var_210_1[visibleItemIndex + 1], 35))
-
-					if imgui.IsItemClicked() then
-						local var_210_3 = false
-						marketFinishAllItemEditors()
-
-						if not tradeAutomation.buy and var_210_3 == false then
-							deAFKMessage(debug.getinfo(1, "l"), "buy201 " .. var_210_1[visibleItemIndex + 1] .. " " .. buyDefaults.price .. " " .. buyDefaults.count)
-
-							local var_210_4 = {
-								continue = 1,
-								enabled = true,
-								maximum = false,
-								count_maximum = 0,
-								price_vc = 10,
-								name = var_210_1[visibleItemIndex + 1],
-								price = buyDefaults.price,
-								count = buyDefaults.count
-							}
-
-							addToData(var_210_4, buyList, sortMode and 1 or nil)
-							tradeFilterMarkNewItem("buy", var_210_4)
-
-							if marketState.filter_five[0] then
-								marketState.applyScrollMax = true
-							end
-						end
-					end
-
-					if imgui.IsItemHovered() then
-						if imgui.IsMouseClicked(1) then
-							SaveInput(var_210_1[visibleItemIndex + 1])
-						end
-
-						imgui.SameLine()
-						imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-						imgui.TextDisabled(fa("CART_CIRCLE_PLUS"))
-
-						if #(visibleItemIndex + 1 .. ". " .. var_210_1[visibleItemIndex + 1]) > 1 then
-							imgui.BeginTooltip()
-							imgui.Text(u8(var_210_1[visibleItemIndex + 1]))
-							imgui.EndTooltip()
-						end
-
-						imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-					end
-
-					imgui.PopFont()
-				end
-			end
-		end
-
-		listClipper:End()
-		imgui.EndCustomInvisibleChild()
-		imgui.SameLine()
-		imgui.SetCursorPosX(imgui.GetCursorPos().x - 8)
-
-		local var_210_5 = 0
-
-		imgui.CustomInvisibleChild("buyRightList", imgui.ImVec2(buyRightWidth, buyListsHeight), true, imgui.WindowFlags.NoScrollWithMouse)
-
-		local var_210_6 = {}
-
-		if buyList then
-			for itemIndex, itemData in pairs(buyList) do
-				if buyList[itemIndex].enabled and not buyList[itemIndex].maximum then
-					var_210_5 = var_210_5 + (viceCityMode and buyList[itemIndex].price or buyList[itemIndex].price_vc) * buyList[itemIndex].count
-				end
-
-				if #u8:decode(ffi.string(logSearchBuffer)) ~= 0 and string.nlower(itemData.name):find(string.nlower(u8:decode(ffi.string(logSearchBuffer))), nil, true) then
-					itemData.position_tab = itemIndex
-
-					table.insert(var_210_6, itemData)
-				end
-			end
-		end
-
-		if #buyList > 0 then
-			local var_210_7 = math.floor(getPlayerMoney() - var_210_5)
-
-			if var_210_7 > 0 then
-				local var_210_8 = 0
-
-				for itemIndex, itemData in pairs(buyList) do
-					if (viceCityMode and itemData.price or itemData.price_vc) ~= 0 and itemData.maximum and itemData.enabled then
-						var_210_8 = var_210_8 + 1
-					end
-				end
-
-				local var_210_9 = var_210_7 / var_210_8
-
-				for itemIndex, itemData in pairs(buyList) do
-					local var_210_10 = viceCityMode and itemData.price or itemData.price_vc
-
-					if var_210_10 ~= 0 and itemData.maximum and itemData.enabled then
-						local var_210_11 = math.floor(var_210_9 / var_210_10)
-						local var_210_12 = var_210_11 * var_210_10
-
-						itemData.count_maximum = math.floor(var_210_11)
-					end
-				end
-			end
-		end
-
-		imgui.Scroller("buyRightList", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-
-		if marketState.applyScrollMax then
-			marketState.applyScrollMax = false
-
-			imgui.SetScrollY(sortMode and 1 or imgui.GetScrollMaxY() + 150)
-		end
-
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-
-		local var_210_13 = tradeFilterBuildView(buyList, "buy", u8:decode(ffi.string(logSearchBuffer)))
-
-		-- Split the visible buy list into category groups. Each group has its own clipper,
-		-- so category headers may have their own height without breaking scrolling.
-		tradeFilterEnsureLoaded()
-		local buyFilterSideState = tradeFilterState and tradeFilterState.buy or tradeFilterDefaultSide("buy")
-		local buyFilterGroups = {}
-		local buyFilterGroupByCategory = {}
-		local buyNewOnly = tradeFilterIsNewOnly("buy")
-
-		if buyNewOnly then
-			local newGroup = {
-				number = 0,
-				category = "__new_items__",
-				is_new_items = true,
-				indices = {}
-			}
-			for viewIndex = 1, #var_210_13 do
-				newGroup.indices[#newGroup.indices + 1] = viewIndex
-			end
-			buyFilterGroups[1] = newGroup
-		else
-			for categoryNumber, category in ipairs(buyFilterSideState.category_order or TRADE_FILTER_CATEGORY_ORDER_DEFAULT) do
-				local group = {
-					number = categoryNumber,
-					category = category,
-					indices = {}
-				}
-				buyFilterGroups[#buyFilterGroups + 1] = group
-				buyFilterGroupByCategory[category] = group
-			end
-
-			for viewIndex, item in ipairs(var_210_13) do
-				local category = tradeFilterItemCategory(item)
-				local group = buyFilterGroupByCategory[category]
-				if group then
-					group.indices[#group.indices + 1] = viewIndex
-				end
-			end
-		end
-
-		local buyCategoryJumpRequest = TRADE_FILTER_CATEGORY_JUMP_REQUEST.buy
-
-		if buyNewOnly and #var_210_13 == 0 then
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 8)
-			imgui.TextDisabled(u8(u8:decode("Новых товаров пока нет.")))
-		end
-
-		for _, buyFilterGroup in ipairs(buyFilterGroups) do
-			if #buyFilterGroup.indices > 0 then
-				local categoryLabel = buyFilterGroup.is_new_items
-					and u8:decode("Новые товары")
-					or (TRADE_FILTER_CATEGORY_LABELS[buyFilterGroup.category] or buyFilterGroup.category)
-				local headerText = buyFilterGroup.is_new_items
-					and tostring(categoryLabel)
-					or (tostring(buyFilterGroup.number) .. ". " .. tostring(categoryLabel))
-				local headerStart = imgui.GetCursorScreenPos()
-				local headerWidth = math.max(1, imgui.GetContentRegionAvail().x)
-				local redColor = imgui.GetColorU32Vec4(imgui.ImVec4(0.92, 0.16, 0.18, 1.0))
-
-				imgui.GetWindowDrawList():AddRectFilled(
-					imgui.ImVec2(headerStart.x, headerStart.y),
-					imgui.ImVec2(headerStart.x + headerWidth, headerStart.y + 2),
-					redColor
-				)
-				imgui.Dummy(imgui.ImVec2(1, 5))
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 8)
-				imgui.TextColored(imgui.ImVec4(0.95, 0.28, 0.30, 1.0), u8(headerText))
-				if not buyFilterGroup.is_new_items and tradeFilterConsumeCategoryJump("buy", buyFilterGroup.category) then
-					imgui.SetScrollHereY(0.0)
-				end
-				imgui.Spacing()
-
-				local groupClipper = imgui.ImGuiListClipper(#buyFilterGroup.indices)
-				groupClipper:Begin(#buyFilterGroup.indices)
-
-				while groupClipper:Step() do
-					for groupVisibleIndex = groupClipper.DisplayStart, groupClipper.DisplayEnd - 1 do
-						local visibleItemIndex = buyFilterGroup.indices[groupVisibleIndex + 1] - 1
-				imgui.PushFont(fonts[18])
-
-				index = (var_210_13[visibleItemIndex + 1].position_tab or (visibleItemIndex + 1)) - 1
-
-				if tostring(var_210_13[visibleItemIndex + 1]) == "nil" then
-				else
-					local buyRowItem = var_210_13[visibleItemIndex + 1]
-					local buyRowUiKey = marketItemStableUiKey("buy", buyRowItem)
-
-					if tostring(buyRowItem.continue) == "nil" then
-						buyRowItem.continue = buyRowItem.count
-
-						deAFKMessage(debug.getinfo(1, "l"), "[con dbug] nil in cfg")
-					end
-
-					if tostring(buyRowItem.count_maximum) == "nil" then
-						buyRowItem.count_maximum = 0
-
-						deAFKMessage(debug.getinfo(1, "l"), "[count_maximum dbug] nil in cfg")
-					end
-
-					imgui.CustomSeparator(imgui.GetWindowWidth())
-
-					if var_210_13[visibleItemIndex + 1].enabled == true then
-						if imgui.CustomOnlyBorderButton(fa("TOGGLE_ON") .. "##buy_toggle_" .. buyRowUiKey, imgui.ImVec2(50)) then
-							buyRowItem.enabled = false
-						end
-					elseif imgui.CustomOnlyBorderButton(fa("TOGGLE_OFF") .. "##buy_toggle_" .. buyRowUiKey, imgui.ImVec2(50)) then
-						buyRowItem.enabled = true
-					end
-
-					imgui.SameLine()
-					imgui.SetCursorPosY(imgui.GetCursorPos().y - 2)
-					imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-
-					imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-					if imgui.RadioButtonIntPtr("##buy_reorder_" .. buyRowUiKey, selectedListItem[1], index + 1) then
-						selectedListItem[3] = false
-
-						if selectedListItem[2] ~= 333 then
-							local var_210_15 = buyList[selectedListItem[2]]
-
-							table.remove(buyList, selectedListItem[2])
-							table.insert(buyList, index + 1, var_210_15)
-
-							selectedListItem[2] = 333
-							selectedListItem[1][0] = 333
-							selectedListItem[3] = true
-						end
-
-						if selectedListItem[3] == false then
-							selectedListItem[2] = index + 1
-						end
-					end
-
-					imgui.GetStyle().FrameBorderSize = 0
-
-					imgui.SameLine()
-					imgui.TextColoredRGB(var_210_13[visibleItemIndex + 1].enabled and ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(index + 1 .. ". " .. var_210_13[visibleItemIndex + 1].name, 35) or "{808080}" .. changeExtraSim(index + 1 .. ". " .. var_210_13[visibleItemIndex + 1].name, 35))
-
-					if #(visibleItemIndex + 1 .. ". " .. var_210_13[visibleItemIndex + 1].name) > 1 and imgui.IsItemHovered() then
-						if timers[24][1] + 1 <= os.time() then
-							timers[24][1] = os.time()
-							timers[24][2] = 0
-
-							deAFKMessage(debug.getinfo(1, "l"), " reload SelectMenu [set 0]")
-						end
-
-						if imgui.IsItemClicked() then
-							timers[24][2] = timers[24][2] + 1
-
-							if timers[24][2] > 1 then
-								imgui.SelectMenu(mainMenu, 5)
-
-								marketState.SearchMarket = imguiNew.char[256](tostring(u8(var_210_13[visibleItemIndex + 1].name)))
-								marketState.searchStorage.marketPlaceBuy[2] = ""
-								marketState.searchStorage.marketPlaceSell[2] = ""
-
-								deAFKMessage(debug.getinfo(1, "l"), "[buy]imgui.SelectMenu(buttons, 5)")
-							end
-						end
-
-						imgui.BeginTooltip()
-						imgui.PushFont(uiFonts[17])
-						imgui.Text(u8(var_210_13[visibleItemIndex + 1].name))
-						show_prices(var_210_13[visibleItemIndex + 1].name, visibleItemIndex)
-						imgui.PopFont()
-						imgui.EndTooltip()
-					end
-
-					-- Per-item filter assignment. "Авто" restores automatic category detection.
-					local buyFilterItem = buyRowItem
-					if type(buyFilterItem) == "table" then
-						local assignedCategory = buyFilterItem.trade_filter_category
-						local previewLabel = assignedCategory and TRADE_FILTER_CATEGORY_LABELS[assignedCategory] or u8:decode("Авто")
-						local comboWidth = math.max(125, 145 * getMenuUiScale())
-
-						imgui.SameLine()
-						imgui.SetCursorPosX(math.max(imgui.GetCursorPos().x + 6, imgui.GetWindowWidth() - comboWidth - 12))
-						imgui.PushItemWidth(comboWidth)
-
-						if imgui.BeginCombo("##buy_item_filter_" .. buyRowUiKey, u8(previewLabel)) then
-							local autoSelected = assignedCategory == nil or TRADE_FILTER_CATEGORY_LABELS[assignedCategory] == nil
-							if imgui.Selectable(u8(u8:decode("Авто")), autoSelected) then
-								tradeFilterSetItemCategory("buy", buyFilterItem, "auto")
-							end
-
-							for _, category in ipairs(TRADE_FILTER_CATEGORY_ORDER_DEFAULT) do
-								local categoryLabel = TRADE_FILTER_CATEGORY_LABELS[category] or category
-								local isSelected = assignedCategory == category
-								if imgui.Selectable(u8(categoryLabel), isSelected) then
-									tradeFilterSetItemCategory("buy", buyFilterItem, category)
-								end
-							end
-
-							imgui.EndCombo()
-						end
-
-						if imgui.IsItemHovered() then
-							imgui.SetTooltip(u8(u8:decode("Привязать предмет к фильтру. Авто - определять категорию автоматически.")))
-						end
-
-						imgui.PopItemWidth()
-					end
-
-					imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-					local buyPriceField = viceCityMode and "price" or "price_vc"
-					local buyCurrentPrice = tonumber(buyRowItem[buyPriceField]) or 10
-					if buyCurrentPrice < 10 then
-						buyCurrentPrice = 10
-						buyRowItem[buyPriceField] = 10
-					end
-
-					local buyPriceBuffer, buyPriceState = marketItemEditorBuffer("buy", buyRowItem, "price", buyCurrentPrice)
-					imgui.PushItemWidth(viceCityMode and 110 or 110)
-
-					if buyPriceState and buyPriceState.active and buyPriceBuffer then
-						if imgui.InputTextD(
-							viceCityMode and " SA$##buy_price_" .. buyRowUiKey or " VC$##buy_price_" .. buyRowUiKey,
-							buyPriceBuffer,
-							32,
-							imgui.InputTextFlags.CharsDecimal
-						) and ffi.string(buyPriceBuffer):match("^%d+$") then
-							if tonumber(ffi.string(buyPriceBuffer)) > 9 and viceCityMode then
-								buyRowItem.price = ffi.string(buyPriceBuffer)
-								timers[1] = os.time() - 3
-							end
-
-							if tonumber(ffi.string(buyPriceBuffer)) > 9 and not viceCityMode then
-								buyRowItem.price_vc = ffi.string(buyPriceBuffer)
-								timers[1] = os.time() - 3
-							end
-						end
-
-						if not imgui.IsItemHovered() and imgui.IsMouseDown(0) then
-							buyPriceState.active = false
-							buyPriceState.click = false
-							resetIO()
-						elseif buyPriceState.click == false then
-							resetIO()
-							imgui.SetKeyboardFocusHere(-1)
-							buyPriceState.active = true
-							buyPriceState.click = true
-						end
-					else
-						imgui.PushFont(fonts[17])
-						imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-						if imgui.Button(moneySeparator(buyCurrentPrice) .. "##buy_price_button_" .. buyRowUiKey, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-							marketItemEditorBegin("buy", buyRowItem, "price", buyCurrentPrice)
-						end
-
-						imgui.SameLine()
-						imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-						imgui.PopFont()
-						imgui.Text(viceCityMode and " SA$" or " VC$")
-						imgui.GetStyle().FrameBorderSize = 0
-					end
-					imgui.PopItemWidth()
-
-					imgui.SameLine()
-
-					if not viceCityMode then
-						imgui.SetCursorPosX(imgui.GetCursorPos().x - 1)
-					end
-
-					if var_210_13[visibleItemIndex + 1].maximum then
-						imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-
-						if imgui.CustomOnlyBorderButton(fa("SQUARE_A") .. "##buy_max_" .. buyRowUiKey, imgui.ImVec2(25)) then
-							buyRowItem.maximum = false
-						end
-
-						imgui.SameLine()
-						imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-						imgui.SetCursorPosX(imgui.GetCursorPos().x - 2)
-						imgui.TextColoredRGB("{808080} " .. buyRowItem.count_maximum)
-						imgui.SameLine()
-						imgui.SetCursorPosX(imgui.GetWindowWidth() / 1.234)
-						imgui.Text("шт.")
-					else
-						imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-
-						if imgui.CustomOnlyBorderButton(fa("SQUARE_C") .. "##buy_count_mode_" .. buyRowUiKey, imgui.ImVec2(25)) then
-							buyRowItem.maximum = true
-						end
-
-						imgui.SameLine()
-						imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-						imgui.SetCursorPosX(imgui.GetCursorPos().x - 2.4)
-						imgui.PushItemWidth(90)
-
-						local buyCountBuffer = marketItemEditorBuffer("buy", buyRowItem, "count", buyRowItem.count)
-
-						if buyCountBuffer and imgui.InputTextD("    шт.##buy_count_" .. buyRowUiKey, buyCountBuffer, 32, imgui.InputTextFlags.CharsDecimal) then
-							local countText = ffi.string(buyCountBuffer)
-							if countText:match("^%d+$") then
-								marketCommitItemCount("buy", buyRowItem, countText)
-							end
-						end
-
-						imgui.PopItemWidth()
-					end
-
-					imgui.SameLine()
-					imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-
-					if imgui.CustomOnlyBorderButton(fa("trash") .. "##buy_trash_" .. buyRowUiKey, imgui.ImVec2(50)) then
-						deleteListItemObjectWithUndo("buy", buyList, buyRowItem)
-					end
-
-					if var_210_13[visibleItemIndex + 1] then
-						imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-						imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-
-						if imgui.Button(buyContinueMode and fa("PAUSE") .. "##buy_continue_" .. buyRowUiKey or fa("PLAY") .. "##buy_continue_" .. buyRowUiKey, imgui.ImVec2(35, 27)) then
-							buyContinueMode = not buyContinueMode
-
-							deAFKMessage(debug.getinfo(1, "l"), "" .. tostring(buyContinueMode))
-						end
-
-						imgui.SameLine()
-						imgui.TextColoredRGB(buyContinueMode and u8:decode("{FFFFFF} Продолжаю скупку: ") .. var_210_13[visibleItemIndex + 1].continue .. u8:decode(" шт.") or u8:decode("{808080} Продолжить скупку? ") .. var_210_13[visibleItemIndex + 1].continue .. u8:decode(" шт."))
-					end
-
-					imgui.GetStyle().FrameBorderSize = 0
-				end
-				imgui.PopFont()
-					end
-				end
-
-				groupClipper:End()
-			end
-		end
-
-		if buyCategoryJumpRequest and TRADE_FILTER_CATEGORY_JUMP_REQUEST.buy == buyCategoryJumpRequest then
-			tradeFilterClearCategoryJump("buy")
-		end
-
-		imgui.EndCustomInvisibleChild()
-
-		if next(buyList) ~= nil then
-			local buyFooterHeight = math.ceil(96 * getMenuUiScale())
-			imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 2 - 29, math.max(0, imgui.GetWindowHeight() - buyFooterHeight)))
-			imgui.CustomInvisibleChild("buyMenuStat", imgui.ImVec2(-1, buyFooterHeight))
-
-			imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-			local var_210_16 = var_210_5 < 100000000 and "(-" .. moneySeparator(var_210_5) .. u8(")") or "(-......)"
-
-			imgui.CenterText("Остаток: " .. moneySeparator(getPlayerMoney() - var_210_5) .. " " .. var_210_16 .. " | Предметов: " .. #buyList)
-
-			if var_210_5 > 100000000 and imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-				imgui.Text("    (-" .. moneySeparator(var_210_5) .. ")    ")
-				imgui.EndTooltip()
-			end
-
-			if imgui.Button(tradeAutomation.buy and "Отмена" or "Выставить на скуп", imgui.ImVec2(imgui.GetWindowWidth() / 2 - 7, 27)) then
-				if not tradeAutomation.buy then
-					marketFinishAllItemEditors()
-					if lowPriceGuardPreflight(buyList, "buy", "/crbuy") then
-					local serverAddress, serverPort = sampGetCurrentServerAddress()
-
-					if serverIdByAddress[serverAddress] == 0 and viceCityMode or serverIdByAddress[serverAddress] ~= 0 and not viceCityMode then
-						AFKMessage(u8:decode("ВНИМАНИЕ! У вас установлен не тот режим продажи. Зайдите в скупку и проверьте валюту в которой выставляете."))
-					else
-						local var_210_19 = math.floor(getPlayerMoney() - var_210_5)
-
-						tradeFilterApplyExecutionOrder(buyList, "buy")
-
-						sellStatusMessages = {}
-						tradeAutomationVisible[0] = true
-						tradeAutomation = {
-							sell = false,
-							buy = true,
-							score = 1,
-							score_from = 1
-						}
-
-						AFKMessage(u8:decode("Начинаем выставлять товары."))
-
-						for itemIndex, itemData in ipairs(buyList) do
-							if tostring(itemData.continue) == "nil" or buyContinueMode == false then
-								itemData.continue = itemData.count
-
-								deAFKMessage(debug.getinfo(1, "l"), "[con dbug start func] nil in cfg OR continue_buy == false")
-							end
-
-							saveLog("[" .. tostring(itemData.enabled) .. u8:decode("] [buy] Товар: [") .. itemIndex .. "|" .. #buyList .. "] [" .. itemData.name .. "] [" .. itemData.count .. "] [" .. itemData.price .. "|" .. itemData.price_vc .. "] [" .. tostring(viceCityMode) .. "] ")
-						end
-						tradeAutomation.score_from = #buyList
-
-						setGameKeyState(21, 255)
-						sampForceOnfootSync()
-					end
-					end
-				else
-					tradeAutomationVisible[0] = false
-					tradeAutomation = {
-						sell = false,
-						buy = false,
-						score = 1,
-						score_from = 1
-					}
-
-					AFKMessage(u8:decode("Выставление товаров было отменено."))
-				end
-			end
-
-			imgui.SameLine()
-
-			if imgui.Button("Распределить вирты##0", imgui.ImVec2(imgui.GetWindowWidth() / 2 - 7, 27)) then
-				buyBudgetInput.page = 0
-				buyBudgetWindowVisible[0] = not buyBudgetWindowVisible[0]
-			end
-
-			if loadedBuyConfig == "" then
-				if itemPanelState[2] == true then
-					if imgui.Button("Отменить создание", imgui.ImVec2(imgui.GetWindowWidth() / 2 - 10, 27)) then
-						itemPanelState[2] = false
-					end
-
-					imgui.SameLine()
-					imgui.PushItemWidth(98)
-					imgui.PushFont(fonts[222])
-					imgui.PushStyleVarVec2(imgui.StyleVar.FramePadding, imgui.ImVec2(6, 6.5))
-					imgui.InputTextWithHintD("##search_cfg_sell", " Имя конфига", buyConfigNameBuffer, ffi.sizeof(buyConfigNameBuffer), imgui.InputTextFlags.EnterReturnsTrue)
-					imgui.PopItemWidth()
-					imgui.PopFont()
-					imgui.PopStyleVar()
-					imgui.SameLine()
-
-					if imgui.Button("Создать", imgui.ImVec2(imgui.GetWindowWidth() / 3.99 - 15, 27)) then
-						configFileNames.buy = u8:decode(ffi.string(buyConfigNameBuffer)):gsub("[\"<|:>]", "")
-
-						if configFileNames.buy == "" or configFileNames.buy == nil or configFileNames.buy:match("^%s*$") ~= nil then
-							AFKMessage(u8:decode("{ff3535}[Error]:{ffffff} Вы не можете создать {505050}безымянный {ffffff}конфиг."))
-						else
-							itemPanelState[2] = false
-
-							createConfig("buy-cfg/" .. configFileNames.buy .. ".json", {}, "buy-cfg", configFileNames.buy)
-							AFKMessage(u8:decode("[Скупка] Конфиг {505050}") .. tostring(configFileNames.buy) .. u8:decode("{ffffff} создан."))
-
-							loadedBuyConfig = configFileNames.buy .. ".json"
-							ini.cfg.load_config_buy = loadedBuyConfig
-
-							save_all()
-						end
-					end
-				elseif imgui.Button("Создать конфиг", imgui.ImVec2(imgui.GetWindowWidth() - 9, 27)) then
-					itemPanelState[2] = true
-				end
-			elseif imgui.Button("Сохранить конфиг", imgui.ImVec2(imgui.GetWindowWidth() - 9, 27)) then
-				configFileNames.buy = loadedBuyConfig:match("(.+)%.json") and loadedBuyConfig or loadedBuyConfig .. ".json"
-
-				createConfig("buy-cfg/" .. configFileNames.buy, buyList, "buy-cfg", configFileNames.buy)
-				AFKMessage(u8:decode("Конфиг ") .. tostring(configFileNames.buy) .. u8:decode(" сохранен."))
-			end
-
-			imgui.GetStyle().FrameBorderSize = 0
-
-			imgui.EndCustomInvisibleChild()
-		end
-	else
-		imgui.PushFont(fonts[18])
-		imgui.SetCursorPosY(imgui.GetWindowHeight() * 0.45)
-		imgui.CenterText("Для продолжения отсканируйте все предметы у СЕБЯ В ЛАВКЕ")
-		imgui.CenterText("Нажмите кнопку " .. fa("magnifying_glass"))
-		local buyHelpLabel = "[Инструкция] Как это сделать?"
-		imgui.SetCursorPosX(math.max(5, (imgui.GetWindowWidth() - imgui.CalcTextSize(buyHelpLabel).x) / 2))
-		imgui.Link("https://youtu.be/l9HWWrG-XWQ", "https://rutube.ru/video/private/6d8efd091fdfde747476c2a512e8fb00/?p=aL4DTMmBxDPOsYMcl9tSpw", buyHelpLabel, nil, frame, u8:decode("Ютуб"), u8:decode("Рутуб"))
-		imgui.PopFont()
-	end
-end
 
 function containsItem(items, itemName, itemEnchant)
 	if itemEnchant then
@@ -27257,336 +17072,7 @@ function updateList()
 	end
 end
 
-function window_marketAuth(frame)
-	imgui.PushFont(fonts[18])
 
-	if imgui.CustomOnlyBorderButton(fa("ARROWS_ROTATE"), imgui.ImVec2(30, 27)) then
-		timers[38][2] = 0
-		timers[39][2] = 0
-		timers[30] = os.time() - 25
-		download_marketplace = nil
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
-
-		AFKMessage(u8:decode("Обновление лавок..."))
-	end
-
-	imgui.PopFont()
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_213_1 = imgui.ImVec2(cursorScreenPos.x + 130, cursorScreenPos.y + sizeY / 1.65 + 40)
-
-	imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 650) / 2, sizeY / 1.38))
-	imgui.PushStyleVarFloat(imgui.StyleVar.FrameRounding, 10)
-	imgui.PushStyleVarFloat(imgui.StyleVar.FrameBorderSize, 0)
-	imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.055, 0.5, 0.58, 0.7))
-	imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.09, 0.58, 0.66, 1))
-	imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.035, 0.4, 0.47, 1))
-	imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1, 1, 1, 1))
-	imgui.PushFont(fonts[24])
-
-	if imgui.Button("Привязать Telegram", imgui.ImVec2(320, 61)) then
-		deAFKMessage("click auth")
-		imgui.OpenPopup("Авторизация в маркетплейсе.")
-		openUrl("https://t.me/ArzMarketManager_bot")
-	end
-
-	imgui.PopFont()
-	imgui.PopStyleColor(4)
-	imgui.PopStyleVar(2)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-	imgui.PushStyleVarFloat(imgui.StyleVar.FrameRounding, 10)
-	imgui.PushStyleVarFloat(imgui.StyleVar.FrameBorderSize, 0)
-	imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0, 0.345, 0.62, 0.85))
-	imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.04, 0.42, 0.69, 1))
-	imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0, 0.29, 0.53, 1))
-	imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1, 1, 1, 1))
-	imgui.PushFont(fonts[24])
-
-	if imgui.Button("Привязать Вконтакте", imgui.ImVec2(320, 61)) then
-		deAFKMessage("click vk auth")
-		imgui.OpenPopup("Авторизация в маркетплейсе.")
-		openUrl("https://vk.com/im/convo/-237814015")
-	end
-
-	imgui.PopFont()
-	imgui.PopStyleColor(4)
-	imgui.PopStyleVar(2)
-	marketplaceAuthPage()
-	imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 90) / 2, sizeY / 2 - 90))
-	imgui.Spinner("##spinner2", 45, 2, imgui.GetColorU32Vec4(imgui.ImVec4(frame[1], frame[2], frame[3], frame[4])))
-	imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 470) / 2, sizeY / 1.65))
-	imgui.PushFont(fonts[18])
-	imgui.TextDisabled("На данный момент включен режим маркетплейса по авторизации. \n        Вам нужно авторизоваться через Telegram или Вконтакте.")
-	imgui.PopFont()
-end
-
-function window_marketPlace_lavka()
-	local imguiCol = imgui.Col
-
-	imgui.PushStyleColor(imguiCol.Button, imgui.ImVec4(0, 0, 0, 0))
-	imgui.PushStyleColor(imguiCol.ButtonHovered, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4]))
-	imgui.PushStyleColor(imguiCol.ButtonActive, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4]))
-	imgui.PushStyleColor(imguiCol.Border, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4]))
-	imgui.SetCursorPos(imgui.ImVec2(5, 5))
-	imgui.PushFont(fonts[18])
-
-	if imgui.CustomOnlyBorderButton(fa("ARROW_LEFT"), imgui.ImVec2(30, 27)) then
-		timers[38][2] = 0
-		timers[39][2] = 0
-		marketplaceView[2] = nil
-	end
-
-	if download_marketplace == nil or marketplaceView[2] == nil then
-		imgui.PopFont()
-		imgui.PopStyleColor(4)
-		return
-	end
-
-	imgui.Hint("ARROW_LEFTdownload_marketplace", "Нажмите сюда что бы вернуться в главное меню маркет-плейса.", false)
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 40, 5))
-
-	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(35, 27)) then
-		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
-		OnClose = true
-	end
-
-	imgui.PopFont()
-	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	imgui.SetCursorPos(imgui.ImVec2(0, 40))
-	local marketplaceLavkaAvail = imgui.GetContentRegionAvail()
-	local var_214_1 = 280
-	local var_214_2 = 140
-
-	imgui.CustomInvisibleChild("window_marketPlace_lavka", imgui.ImVec2(marketplaceLavkaAvail.x, marketplaceLavkaAvail.y), false)
-	imgui.CustomInvisibleChild("marketplaceNUMBE2R##", imgui.ImVec2((var_214_1 + 1) / 2, var_214_2), false)
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_214_4 = imgui.ImVec2(cursorScreenPos.x + 4, cursorScreenPos.y + 6)
-
-	if marketplaceView then
-		imgui.GetWindowDrawList():AddImage(marketplaceView[2].userStatus > 1 and marketplaceView[3] or marketplaceView[1], var_214_4, imgui.ImVec2(var_214_4.x + 130, var_214_4.y + 130), imgui.ImVec2(0, 0), imgui.ImVec2(1, 1), 4294967295, 60)
-		imgui.SameLine()
-	end
-
-	imgui.GetWindowDrawList():AddRect(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + var_214_1 / 2, cursorScreenPos.y + var_214_2), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 1.8)
-	imgui.EndCustomInvisibleChild()
-	imgui.SameLine()
-
-	local var_214_5 = math.max(280, (imgui.GetContentRegionAvail().x - 5) * 2)
-	local var_214_6 = 140
-
-	imgui.PushFont(fonts[24])
-	imgui.CustomInvisibleChild("marketplaceN2UMBE2R##", imgui.ImVec2((var_214_5 + 1) / 2, var_214_6), false)
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_214_8 = imgui.ImVec2(cursorScreenPos.x + 5, cursorScreenPos.y + 6)
-
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 10, imgui.GetCursorPos().y + 5))
-	imgui.TextColoredRGB(u8:decode("{cccccc} Вы открыли лавку игрока: ") .. changeExtraSim(marketplaceView[2].username, 23))
-
-	if imgui.IsItemHovered() then
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-
-		if #marketplaceView[2].username > 22 then
-			imgui.BeginTooltip()
-			imgui.PushFont(fonts[18])
-			imgui.Text(marketplaceView[2].username)
-			imgui.PopFont()
-			imgui.EndTooltip()
-		end
-
-		imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-	end
-
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 4, imgui.GetCursorPos().y))
-	imgui.TextColoredRGB(u8:decode("{cccccc}Предметов в лавке: ") .. #marketplaceView[2].items_sell + #marketplaceView[2].items_buy .. u8:decode(" шт."))
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 3, imgui.GetCursorPos().y))
-	imgui.TextColoredRGB(u8:decode("{cccccc}Номер лавки: ") .. marketplaceView[2].LavkaUid)
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 2)
-	imgui.CustomSeparator(imgui.GetWindowWidth())
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 45, imgui.GetCursorPos().y + 5))
-	imgui.TextColoredRGB(u8:decode("{cccccc}Предметов на скупке: ") .. #marketplaceView[2].items_buy)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-	imgui.TextColoredRGB(u8:decode("{cccccc}Предметов на Продаже: ") .. #marketplaceView[2].items_sell)
-	imgui.GetWindowDrawList():AddRect(imgui.ImVec2(cursorScreenPos.x + 1, cursorScreenPos.y), imgui.ImVec2(cursorScreenPos.x + var_214_5 / 2, cursorScreenPos.y + var_214_6), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 1.8)
-	imgui.EndCustomInvisibleChild()
-	imgui.PopFont()
-
-	local lavkaListAvail = imgui.GetContentRegionAvail()
-	local var_214_9 = lavkaListAvail.x * 2
-	local var_214_10 = lavkaListAvail.y
-
-	imgui.SetCursorPosX(imgui.GetCursorPos().x - 0.3)
-	imgui.CustomInvisibleChild("window_marketPlace_lavkas", imgui.ImVec2((var_214_9 + 1) / 2, var_214_10), false, imgui.WindowFlags.NoScrollWithMouse)
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_214_12 = imgui.ImVec2(cursorScreenPos.x + 4, cursorScreenPos.y + 6)
-	local var_214_13 = 0
-
-	local lavkaColumnWidth = (imgui.GetContentRegionAvail().x - 5) / 2
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 1.5)
-	imgui.CustomInvisibleChild("LEFTLAVKA", imgui.ImVec2(lavkaColumnWidth, var_214_10), true, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-	imgui.Scroller("buyRightLis2t", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-
-	local var_214_14 = {}
-	local var_214_15 = marketplaceView[2].items_buy
-	local listClipper = imgui.ImGuiListClipper(#var_214_15)
-
-	listClipper:Begin(#var_214_15)
-
-	while listClipper:Step() do
-		for visibleBuyItemIndex = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-			imgui.PushFont(fonts[24])
-
-			index = visibleBuyItemIndex
-
-			if tostring(var_214_15[visibleBuyItemIndex + 1]) == "nil" then
-			else
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 3)
-				imgui.CustomSeparator(imgui.GetWindowWidth())
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(index + 1 .. ". " .. u8:decode(var_214_15[visibleBuyItemIndex + 1]), 28))
-
-				if #(visibleBuyItemIndex + 1 .. ". " .. var_214_15[visibleBuyItemIndex + 1]) > 1 and imgui.IsItemHovered() then
-					imgui.BeginTooltip()
-					imgui.PushFont(uiFonts[17])
-					imgui.Text(var_214_15[visibleBuyItemIndex + 1]:gsub("%(%+%d+%)", ""))
-					show_prices(u8:decode(var_214_15[visibleBuyItemIndex + 1]):gsub("%(%+%d+%)", ""), visibleBuyItemIndex)
-					imgui.PopFont()
-					imgui.EndTooltip()
-				end
-
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.PushItemWidth(110)
-				imgui.PushFont(fonts[18])
-
-				imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(marketplaceView[2].price_buy[visibleBuyItemIndex + 1]))) .. "##" .. visibleBuyItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text((marketplaceView[2].serverId == 0 and " VC" or " SA") .. "$")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-				imgui.SameLine()
-				imgui.PushFont(fonts[18])
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(marketplaceView[2].count_buy[visibleBuyItemIndex + 1]))) .. "##" .. visibleBuyItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text(" шт.")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-				imgui.GetStyle().FrameBorderSize = 0
-				imgui.PopItemWidth()
-			end
-
-			imgui.PopFont()
-		end
-	end
-
-	listClipper:End()
-	imgui.EndCustomInvisibleChild()
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x - 5)
-	imgui.CustomInvisibleChild("LEFTLAVKA2", imgui.ImVec2(lavkaColumnWidth, var_214_10), true, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-	imgui.Scroller("RIGHTLAVO4ka", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem + imgui.WindowFlags.NoScrollbar)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-
-	local var_214_17 = marketplaceView[2].items_sell
-	local listClipper = imgui.ImGuiListClipper(#var_214_17)
-
-	listClipper:Begin(#var_214_17)
-
-	while listClipper:Step() do
-		for visibleSellItemIndex = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-			imgui.PushFont(fonts[24])
-
-			index = visibleSellItemIndex
-
-			if tostring(var_214_17[visibleSellItemIndex + 1]) == "nil" then
-			else
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 3)
-				imgui.CustomSeparator(imgui.GetWindowWidth())
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(index + 1 .. ". " .. u8:decode(var_214_17[visibleSellItemIndex + 1]), 28))
-
-				if #(visibleSellItemIndex + 1 .. ". " .. var_214_17[visibleSellItemIndex + 1]) > 1 and imgui.IsItemHovered() then
-					imgui.BeginTooltip()
-					imgui.PushFont(uiFonts[17])
-					imgui.Text(var_214_17[visibleSellItemIndex + 1]:gsub("%(%+%d+%)", ""))
-					show_prices(u8:decode(var_214_17[visibleSellItemIndex + 1]):gsub("%(%+%d+%)", ""), visibleSellItemIndex)
-					imgui.PopFont()
-					imgui.EndTooltip()
-				end
-
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.PushItemWidth(110)
-				imgui.PushFont(fonts[18])
-
-				imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(marketplaceView[2].price_sell[visibleSellItemIndex + 1]))) .. "##" .. visibleSellItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text((marketplaceView[2].serverId == 0 and " VC" or " SA") .. "$")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-				imgui.SameLine()
-				imgui.PushFont(fonts[18])
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(marketplaceView[2].count_sell[visibleSellItemIndex + 1]))) .. "##" .. visibleSellItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text(" шт.")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-				imgui.GetStyle().FrameBorderSize = 0
-				imgui.PopItemWidth()
-			end
-
-			imgui.PopFont()
-		end
-	end
-
-	listClipper:End()
-	imgui.EndCustomInvisibleChild()
-	imgui.GetWindowDrawList():AddRect(imgui.ImVec2(cursorScreenPos.x + 1, cursorScreenPos.y), imgui.ImVec2(cursorScreenPos.x + var_214_9 / 2, cursorScreenPos.y + var_214_10), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 1.8)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetWindowWidth() / 2)
-	imgui.CustomVerticalSeparator(var_214_10)
-	imgui.EndCustomInvisibleChild()
-	imgui.EndCustomInvisibleChild()
-	imgui.PopStyleColor(4)
-
-	imgui.GetStyle().FrameBorderSize = 0
-end
 
 function sampGetPlayerIdByNickname(playerName)
 	local localPlayerId = select(2, sampGetPlayerIdByCharHandle(PLAYER_PED))
@@ -27604,373 +17090,8 @@ function sampGetPlayerIdByNickname(playerName)
 	return -1
 end
 
-function none_market()
-	imgui.PushFont(fonts[18])
 
-	if imgui.CustomOnlyBorderButton(fa("ARROWS_ROTATE"), imgui.ImVec2(30, 27)) then
-		timers[38][2] = 0
-		timers[39][2] = 0
-		timers[30] = os.time() - 25
-		download_marketplace = nil
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
 
-		AFKMessage(u8:decode("Обновление лавок..."))
-	end
-
-	if download_marketplace == nil then
-		imgui.PopFont()
-		return
-	end
-
-	imgui.Hint("ARROWS_ROTATE", "Нажмите сюда что бы обновить список лавок сейчас.", false)
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 230, 5))
-	imgui.PushItemWidth(185)
-
-	imgui.GetStyle().PopupBorderSize = 2
-
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 7))
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	if imgui.Combo(u8("##menu_settings_marketplaceserver"), marketState.marketplace_serversSelected, marketState.ImMarketplace_servers, #marketState.marketplace_servers, imgui.ComboFlags.NoArrowButton) then
-		ini.cfg.marketplaceSelectedItem = marketState.marketplace_serversSelected[0]
-		timers[38][2] = 0
-		timers[39][2] = 0
-		timers[30] = os.time() - 25
-
-		save_all()
-
-		download_marketplace = nil
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
-
-		AFKMessage(u8:decode("Обновление лавок..."))
-	end
-
-	imgui.PopStyleVar(1)
-	imgui.PopItemWidth()
-
-	if download_marketplace == nil then
-		imgui.PopFont()
-		return
-	end
-
-	imgui.Hint("menu_settings_marketplaceserver", "Вы можете просматривать лавки игроков на всех серверах, а так же выбрать конкретно какой-то.\nНажмите ЛКМ для того что бы открыть список, затем выберите сервер.", false)
-
-	imgui.GetStyle().FrameBorderSize = 0
-	imgui.GetStyle().PopupBorderSize = 1
-
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 40, 5))
-
-	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(35, 30)) then
-		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
-		OnClose = true
-	end
-
-	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
-	imgui.SetCursorPos(imgui.ImVec2(math.max(15, imgui.GetWindowWidth() * 0.14), imgui.GetWindowHeight() * 0.49))
-	imgui.TextDisabled("На данный момент отсутствуют лавки на сервере " .. marketState.marketplace_servers[ini.cfg.marketplaceSelectedItem + 1] .. ".")
-	imgui.PopFont()
-end
-
-function block_access_market()
-	imgui.PushFont(fonts[18])
-
-	if imgui.CustomOnlyBorderButton(fa("ARROWS_ROTATE"), imgui.ImVec2(30, 27)) then
-		timers[38][2] = 0
-		timers[39][2] = 0
-		timers[30] = os.time() - 25
-		download_marketplace = nil
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
-
-		AFKMessage(u8:decode("Обновление лавок..."))
-	end
-
-	imgui.Hint("ARROWS_ROTATE", "Нажмите сюда что бы обновить список лавок сейчас.", false)
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 230, 5))
-	imgui.PushItemWidth(185)
-
-	imgui.GetStyle().PopupBorderSize = 2
-
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 7))
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	if imgui.Combo(u8("##menu_settings_marketplaceserver2"), marketState.marketplace_serversSelected, marketState.ImMarketplace_servers, #marketState.marketplace_servers, imgui.ComboFlags.NoArrowButton) then
-		ini.cfg.marketplaceSelectedItem = marketState.marketplace_serversSelected[0]
-		timers[38][2] = 0
-		timers[39][2] = 0
-		timers[30] = os.time() - 25
-
-		save_all()
-
-		download_marketplace = nil
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
-
-		AFKMessage(u8:decode("Обновление лавок..."))
-	end
-
-	imgui.PopStyleVar(1)
-	imgui.PopItemWidth()
-
-	imgui.Hint("menu_settings_marketplaceserver", "Вы можете просматривать лавки игроков на всех серверах, а так же выбрать конкретно какой-то.\nНажмите ЛКМ для того что бы открыть список, затем выберите сервер.", false)
-
-	imgui.GetStyle().FrameBorderSize = 0
-	imgui.GetStyle().PopupBorderSize = 1
-
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 40, 5))
-
-	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(35, 30)) then
-		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
-		OnClose = true
-	end
-
-	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
-	local blockedLine1 = "На данный момент просмотр лавок на сервере " .. marketState.marketplace_servers[ini.cfg.marketplaceSelectedItem + 1] .. " недоступен для вас."
-	local blockedLine2 = "Причиной может быть маленький игровой уровень или блокировка от разработчика."
-	local blockedLine3 = "Также необходимо быть на сервере во время просмотра Маркет-Плейса."
-	local blockedLine4 = "Возможно ваш игровой уровень меньше 15 лвл!"
-	local blockedWidth = imgui.GetWindowWidth()
-	imgui.SetCursorPos(imgui.ImVec2(math.max(5, (blockedWidth - imgui.CalcTextSize(blockedLine1).x) * 0.5), imgui.GetWindowHeight() * 0.49))
-	imgui.TextDisabled(blockedLine1)
-	imgui.SetCursorPos(imgui.ImVec2(math.max(5, (blockedWidth - imgui.CalcTextSize(blockedLine2).x) * 0.5), imgui.GetWindowHeight() * 0.54))
-	imgui.TextDisabled(blockedLine2)
-	imgui.SetCursorPos(imgui.ImVec2(math.max(5, (blockedWidth - imgui.CalcTextSize(blockedLine3).x) * 0.5), imgui.GetWindowHeight() - 45))
-	imgui.TextDisabled(blockedLine3)
-	imgui.SetCursorPos(imgui.ImVec2(math.max(5, (blockedWidth - imgui.CalcTextSize(blockedLine4).x) * 0.5), imgui.GetWindowHeight() - 25))
-	imgui.TextDisabled(blockedLine4)
-	imgui.PopFont()
-end
-
-function window_marketPlace(frame)
-	local imguiCol = imgui.Col
-
-	imgui.PushStyleColor(imguiCol.Button, imgui.ImVec4(0, 0, 0, 0))
-	imgui.PushStyleColor(imguiCol.ButtonHovered, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4]))
-	imgui.PushStyleColor(imguiCol.ButtonActive, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4]))
-	imgui.PushStyleColor(imguiCol.Border, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4]))
-	local headerWindowWidth = imgui.GetWindowWidth()
-	local closeButtonWidth = 35
-	local headerRightPadding = 5
-	local headerGap = 5
-	local serverComboWidth = 185
-	local closeButtonX = headerWindowWidth - closeButtonWidth - headerRightPadding
-	local serverComboX = closeButtonX - headerGap - serverComboWidth
-	local searchStartX = math.min(215, math.max(150, serverComboX - 145))
-	local searchWidth = math.max(140, serverComboX - headerGap - searchStartX)
-
-	imgui.SetCursorPos(imgui.ImVec2(5, 5))
-	imgui.PushFont(fonts[18])
-
-	if imgui.CustomOnlyBorderButton(fa("ARROWS_ROTATE"), imgui.ImVec2(30, 27)) then
-		timers[38][2] = 0
-		timers[39][2] = 0
-		timers[30] = os.time() - 25
-		download_marketplace = nil
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
-
-		AFKMessage(u8:decode("Обновление лавок..."))
-	end
-
-	if download_marketplace == nil then
-		imgui.PopFont()
-		imgui.PopStyleColor(4)
-		return
-	end
-
-	imgui.Hint("ARROWS_ROTATE", "Нажмите сюда что бы обновить список лавок сейчас.", false)
-	if timers[34][1] + 1 <= os.time() then
-		timers[34][1] = os.time()
-		timers[34][2] = timers[34][2] + 1
-
-		if timers[34][2] > 10 then
-			timers[34][2] = 0
-		end
-
-		deAFKMessage("+ " .. timers[34][2])
-	end
-
-	local var_218_1 = timers[34][2] < 6 and u8:decode("{cccccc} Лавок сейчас: ") .. marketState.lavka_summ or u8:decode("{cccccc} Очередь Vice: ") .. tostring(marketState.marketplaceQueue)
-
-	imgui.SameLine()
-	imgui.TextColoredRGB(var_218_1)
-	imgui.Hint("ARROWS_ROTATEsssssssd", u8(u8:decode("Лавок сейчас: ") .. marketState.lavka_summ) .. "\n" .. u8(u8:decode("Очередь Vice: ") .. tostring(marketState.marketplaceQueue)), false)
-	imgui.SetCursorPos(imgui.ImVec2(searchStartX, 5))
-	imgui.PushItemWidth(searchWidth)
-	imgui.PopFont()
-
-	imgui.GetStyle().FramePadding = imgui.ImVec2(5, 7)
-
-	imgui.NewInput(" Поиск предметов", marketState.SearchMarket, 255, "SearchMarket", {
-		x = 0,
-		y = 2
-	})
-	imgui.PopItemWidth()
-
-	imgui.GetStyle().FramePadding = imgui.ImVec2(5 * getMenuUiScale(), 5 * getMenuUiScale())
-
-	imgui.PushFont(fonts[18])
-	imgui.Hint("window_marketPlaceSearch", "Данная функция ищет предметы во всех доступных лавках.\nЧто бы начать поиск впишите товар который хотите найти.", false)
-	imgui.SetCursorPos(imgui.ImVec2(serverComboX, 5))
-	imgui.PushItemWidth(185)
-
-	imgui.GetStyle().PopupBorderSize = 2
-
-	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 7))
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	if imgui.Combo(u8("##menu_settings_marketplaceserver"), marketState.marketplace_serversSelected, marketState.ImMarketplace_servers, #marketState.marketplace_servers, imgui.ComboFlags.NoArrowButton) then
-		ini.cfg.marketplaceSelectedItem = marketState.marketplace_serversSelected[0]
-		timers[38][2] = 0
-		timers[39][2] = 0
-		timers[30] = os.time() - 25
-
-		save_all()
-
-		download_marketplace = nil
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
-
-		AFKMessage(u8:decode("Обновление лавок..."))
-	end
-
-	imgui.PopStyleVar(1)
-	imgui.PopItemWidth()
-
-	if download_marketplace == nil then
-		imgui.PopFont()
-		imgui.PopStyleColor(4)
-		return
-	end
-
-	imgui.Hint("menu_settings_marketplaceserver", "Вы можете просматривать лавки игроков на всех серверах, а так же выбрать конкретно какой-то.\nНажмите ЛКМ для того что бы открыть список, затем выберите сервер.", false)
-
-	imgui.GetStyle().FrameBorderSize = 0
-	imgui.GetStyle().PopupBorderSize = 1
-
-	imgui.SetCursorPos(imgui.ImVec2(closeButtonX, 5))
-
-	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##02", imgui.ImVec2(35, 30)) then
-		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
-		OnClose = true
-	end
-
-	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
-	imgui.PopFont()
-
-	imgui.GetStyle().FrameBorderSize = 1
-
-	imgui.SetCursorPos(imgui.ImVec2(0, 40))
-	local marketplaceAvail = imgui.GetContentRegionAvail()
-	imgui.CustomInvisibleChild("marketplace", imgui.ImVec2(marketplaceAvail.x, marketplaceAvail.y), false)
-
-	if #ffi.string(marketState.SearchMarket) == 0 then
-		local var_218_3 = download_marketplace
-		local uiScale = getMenuUiScale()
-		local marketplaceContentWidth = math.max(1, imgui.GetContentRegionAvail().x)
-		local marketplaceGap = imgui.GetStyle().ItemSpacing.x
-		local minTwoColumnCardWidth = 360 * uiScale
-		local marketplaceColumns = marketplaceContentWidth >= (minTwoColumnCardWidth * 2 + marketplaceGap) and 2 or 1
-		local marketplaceCardWidth = (marketplaceContentWidth - marketplaceGap * (marketplaceColumns - 1)) / marketplaceColumns
-		local marketplaceCardHeight = 140 * uiScale
-		local marketplaceRowHeight = marketplaceCardHeight + imgui.GetStyle().ItemSpacing.y
-		local marketplaceRowCount = math.floor((#var_218_3 + marketplaceColumns - 1) / marketplaceColumns)
-		local listClipper = imgui.ImGuiListClipper(marketplaceRowCount)
-
-		-- Responsive rows: scale the whole card and switch to one column before
-		-- two cards become too narrow for the current text/UI scale.
-		listClipper:Begin(marketplaceRowCount, marketplaceRowHeight)
-
-		while listClipper:Step() do
-			for visibleMarketRow = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-				for marketColumn = 0, marketplaceColumns - 1 do
-					local visibleMarketIndex = visibleMarketRow * marketplaceColumns + marketColumn
-					if visibleMarketIndex < #var_218_3 then
-						if marketColumn > 0 then
-							imgui.SameLine()
-						end
-
-						local cardWidth = marketplaceCardWidth
-				imgui.CustomInvisibleChild("marketplaceNUMBER##" .. visibleMarketIndex, imgui.ImVec2(cardWidth, marketplaceCardHeight), true)
-
-				local cursorScreenPos = imgui.GetCursorScreenPos()
-				local cardPadding = 6 * uiScale
-				local imageSize = marketplaceView and math.min(130 * uiScale, marketplaceCardHeight - cardPadding * 2) or 0
-				local imagePos = imgui.ImVec2(cursorScreenPos.x + cardPadding, cursorScreenPos.y + cardPadding)
-				local textX = cardPadding + imageSize + (marketplaceView and 12 * uiScale or 0)
-				local textRightPadding = 10 * uiScale
-				local textWidth = math.max(120 * uiScale, cardWidth - textX - textRightPadding)
-
-				if marketplaceView then
-					imgui.GetWindowDrawList():AddImage(var_218_3[visibleMarketIndex + 1].userStatus > 1 and marketplaceView[3] or marketplaceView[1], imagePos, imgui.ImVec2(imagePos.x + imageSize, imagePos.y + imageSize), imgui.ImVec2(0, 0), imgui.ImVec2(1, 1), 4294967295, 60)
-				end
-
-				imgui.PushFont(fonts[24])
-				imgui.SetCursorPos(imgui.ImVec2(textX, 20 * uiScale))
-
-				local var_218_9 = false
-
-				if var_218_3[visibleMarketIndex + 1].userStatus > 1 then
-					var_218_9 = imgui.TextColoredRGB(rainbowText(tostring(u8:decode("  Лавка номер: ") .. var_218_3[visibleMarketIndex + 1].LavkaUid), 1))
-				else
-					imgui.TextColoredRGB(u8:decode("{cccccc} Лавка номер: ") .. var_218_3[visibleMarketIndex + 1].LavkaUid)
-				end
-
-				imgui.Hint("LavkaUid" .. visibleMarketIndex, serverIdByAddress[ip] == var_218_3[visibleMarketIndex + 1].serverId and "Если вы нажмете ЛКМ\nВы поставите чекпоинт на лавку номер: " .. var_218_3[visibleMarketIndex + 1].LavkaUid .. "\nВсего товаров в лавке: [Скупка: " .. #var_218_3[visibleMarketIndex + 1].items_buy .. " | Продажа: " .. #var_218_3[visibleMarketIndex + 1].items_sell .. "]\nБыла обновлена в: [" .. os.date("%H:%M:%S", var_218_3[visibleMarketIndex + 1].ostime) .. " | " .. os.time() - var_218_3[visibleMarketIndex + 1].ostime .. " секунд назад]\nСервер: " .. var_218_3[visibleMarketIndex + 1].serverId or "Всего товаров в лавке: [Скупка: " .. #var_218_3[visibleMarketIndex + 1].items_buy .. " | Продажа: " .. #var_218_3[visibleMarketIndex + 1].items_sell .. "]\nБыла обновлена в: [" .. os.date("%H:%M:%S", var_218_3[visibleMarketIndex + 1].ostime) .. " | " .. os.time() - var_218_3[visibleMarketIndex + 1].ostime .. " секунд назад]\nСервер: " .. var_218_3[visibleMarketIndex + 1].serverId, false, nil, var_218_9)
-
-				if (var_218_9 or imgui.IsItemHovered()) and imgui.IsMouseClicked(0) and serverIdByAddress[ip] == var_218_3[visibleMarketIndex + 1].serverId then
-					deAFKMessage(debug.getinfo(1, "l"), "+ " .. visibleMarketIndex)
-					SendToServer("/findilavka " .. var_218_3[visibleMarketIndex + 1].LavkaUid)
-				end
-
-				imgui.SetCursorPos(imgui.ImVec2(textX, 52 * uiScale))
-				imgui.CustomSeparator(math.max(40 * uiScale, textWidth))
-				imgui.PopFont()
-				imgui.SetCursorPos(imgui.ImVec2(textX, 58 * uiScale))
-				imgui.PushFont(fonts[17])
-				imgui.PushTextWrapPos(textX + textWidth)
-				imgui.TextDisabled(u8(u8:decode("Владелец лавки: \n") .. var_218_3[visibleMarketIndex + 1].username))
-				imgui.PopTextWrapPos()
-				imgui.SetCursorPos(imgui.ImVec2(textX, marketplaceCardHeight - 35 * uiScale))
-
-				if imgui.Button("Просмотреть лавку игрока.", imgui.ImVec2(textWidth, 27)) then
-					deAFKMessage(debug.getinfo(1, "l"), "select lavka slot=" .. visibleMarketIndex .. "|username=" .. var_218_3[visibleMarketIndex + 1].username)
-
-					marketplaceView[2] = var_218_3[visibleMarketIndex + 1]
-				end
-
-				imgui.PopFont()
-						imgui.GetWindowDrawList():AddRect(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + cardWidth, cursorScreenPos.y + marketplaceCardHeight), imgui.GetColorU32Vec4(var_218_3[visibleMarketIndex + 1].userStatus > 1 and imgui.ImVec4(0.97, 0.95, 0.82, 0.35) or imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 1.8)
-						imgui.EndCustomInvisibleChild()
-					end
-				end
-			end
-		end
-
-		listClipper:End()
-	elseif #ffi.string(marketState.SearchMarket) > 0 then
-		marketplace_search(frame)
-	end
-
-	imgui.EndCustomInvisibleChild()
-	imgui.PopStyleColor(4)
-
-	imgui.GetStyle().FrameBorderSize = 0
-end
 
 function script_Page()
 	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
@@ -28187,57 +17308,111 @@ function script_Page()
 	imgui.GetStyle().FrameBorderSize = 0
 end
 
-function get_buyList()
-	asyncHttpRequest("GET", "https://raw.githubusercontent.com/FREYM1337/forumnick/refs/heads/main/buy.json", {}, function(buyListResponse)
-		if buyListResponse.status_code == 200 or buyListResponse.status_code == 304 then
-			local buyListData = decodeJson(buyListResponse.text)
+marketState.catalogRequests = {
+	buy = { name = "buy", attempts = 0, generation = 0 },
+	items = { name = "items", attempts = 0, generation = 0 }
+}
 
-			if buyListData ~= nil then
-				json_vlad = buyListData
-
-				writeJsonFile(buyListData, buyJsonPath)
-				updateList()
-
-				whiteList = {}
-
-				writeJsonFile(whiteList, "moonloader/ArzMarket/white_list.json")
-				sendNotify(u8:decode("Установка товаров прошла успешна! Список обновлен!"))
-			else
-				sendNotify(u8:decode("[1] Ошибка обновления списка скупки!"))
-			end
-		else
-			sendNotify(u8:decode("[2] Ошибка обновления списка скупки!"))
+function arzCatalogResetFailures()
+	for _, state in pairs(marketState.catalogRequests) do
+		if not state.inFlight then
+			state.attempts = 0
+			state.retryScheduled = false
+			state.failed = false
+			state.error = nil
+			state.generation = state.generation + 1
 		end
-	end, function(buyListError)
-		return
-	end)
+	end
+	marketState.catalogError = nil
+end
+
+marketState.catalogRequest = function(state, url, installData, retryFunction)
+	if state.inFlight or state.retryScheduled or state.failed then return false end
+	state.attempts = state.attempts + 1
+	state.inFlight = true
+	if state.name == "items" then marketState.catalogItemsPending = true end
+	local generation = state.generation
+	local function fail(reason)
+		if not state.inFlight or state.generation ~= generation then return end
+		state.inFlight = false
+		print("[ArzMarket][Catalog] " .. state.name .. " attempt " .. tostring(state.attempts) .. " failed: " .. tostring(reason))
+		if state.attempts < 3 then
+			state.retryScheduled = true
+			local delay = state.attempts == 1 and 1000 or 3000
+			lua_thread.create(function()
+				wait(delay)
+				if state.generation == generation and state.retryScheduled then
+					state.retryScheduled = false
+					retryFunction()
+				end
+			end)
+		else
+			state.failed = true
+			if state.name == "items" then marketState.catalogItemsPending = false end
+			if state.name == "items" or type(json_vlad) ~= "table" or #json_vlad == 0 then
+				state.error = state.name .. ":" .. tostring(reason)
+				marketState.catalogError = state.error
+				download_marketplace = "error"
+			end
+		end
+	end
+	local requestId, requestError = asyncHttpRequest("GET", url, {}, function(response)
+		if type(response) ~= "table" or (response.status_code ~= 200 and response.status_code ~= 304) then
+			fail("http_" .. tostring(response and response.status_code))
+			return
+		end
+		local ok, result = pcall(function()
+			local data = decodeJson(response.text)
+			if type(data) ~= "table" then error("invalid_json") end
+			installData(data, response)
+		end)
+		if not ok then fail(result); return end
+		if state.generation ~= generation then return end
+		state.inFlight = false
+		state.attempts = 0
+		state.failed = false
+		state.error = nil
+		state.generation = state.generation + 1
+		if state.name == "items" then marketState.catalogItemsPending = false end
+		marketState.catalogError = marketState.catalogRequests.items.error or marketState.catalogRequests.buy.error
+	end, fail)
+	if not requestId then fail(requestError or "request_not_started") end
+	return requestId ~= nil
+end
+
+function get_buyList()
+	return marketState.catalogRequest(
+		marketState.catalogRequests.buy,
+		"https://raw.githubusercontent.com/FREYM1337/forumnick/refs/heads/main/buy.json",
+		function(buyListData)
+			json_vlad = buyListData
+			writeJsonFile(buyListData, buyJsonPath)
+			updateList()
+			whiteList = {}
+			writeJsonFile(whiteList, "moonloader/ArzMarket/white_list.json")
+			sendNotify(u8:decode("Установка товаров прошла успешна! Список обновлен!"))
+		end,
+		function() get_buyList() end
+	)
 end
 
 function getItemList()
-	asyncHttpRequest("GET", "https://raw.githubusercontent.com/FREYM1337/forumnick/main/ArzMarketV3/items.json", {}, function(itemListResponse)
-		if itemListResponse.status_code == 200 or itemListResponse.status_code == 304 then
-			if decodeJson(itemListResponse.text) ~= nil then
-				print("items_data.json check")
-
-				local itemsFile, openError = io.open(getWorkingDirectory() .. "/ArzMarket/items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json", "w")
-
-				if itemsFile then
-					itemsFile:write(itemListResponse.text)
-					itemsFile:flush()
-					itemsFile:close()
-					print("items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json loaded")
-
-					download_marketplace = nil
-				end
-			else
-				print(u8:decode("[1] Ошибка обновления списка предметов!"))
-			end
-		else
-			print(u8:decode("[2] Ошибка обновления списка предметов!"))
-		end
-	end, function(itemListError)
-		print(u8:decode("[3] Ошибка обновления списка предметов!"))
-	end)
+	return marketState.catalogRequest(
+		marketState.catalogRequests.items,
+		"https://raw.githubusercontent.com/FREYM1337/forumnick/main/ArzMarketV3/items.json",
+		function(_, response)
+			local path = getWorkingDirectory() .. "/ArzMarket/items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json"
+			local itemsFile, openError = io.open(path, "w")
+			if not itemsFile then error("file_open_failed:" .. tostring(openError)) end
+			itemsFile:write(response.text)
+			itemsFile:flush()
+			itemsFile:close()
+			download_marketplace = nil
+			marketState.catalogJustLoaded = true
+			print("items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json loaded")
+		end,
+		function() getItemList() end
+	)
 end
 
 priceDownloadInProgress = priceDownloadInProgress or false
@@ -28389,7 +17564,8 @@ function get_prices()
 		return
 	end
 
-	if serverIdByAddress[ip] ~= 0 then
+	local _, currentServerAddress = arzWatchdogCurrentIdentity()
+	if serverIdByAddress[currentServerAddress] ~= 0 then
 		serverSlug = string.lower(serverSlug):gsub(" ", "-")
 	end
 
@@ -28533,10 +17709,12 @@ function GetMyItems()
 end
 
 function marketplace_Manager()
+	if marketState.marketplaceInFlight then return end
 	if next(marketState.itemsMarketData) == nil then
 		print("try to load itemsMarketData items_data")
 
-		marketState.itemsMarketData = readJsonFile(getWorkingDirectory() .. "/ArzMarket/items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json")
+		local itemsReadOk, itemsData = pcall(readJsonFile, getWorkingDirectory() .. "/ArzMarket/items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json")
+		marketState.itemsMarketData = itemsReadOk and type(itemsData) == "table" and itemsData or {}
 
 		if next(marketState.itemsMarketData) == nil or marketState.scriptVersion[3].itemsUpdate and ini.cfg.lastItemsUpdate < marketState.scriptVersion[3].itemsUpdate then
 			if marketState.scriptVersion[3].itemsUpdate then
@@ -28547,6 +17725,7 @@ function marketplace_Manager()
 			end
 
 			print("getItemList()")
+			download_marketplace = true
 			get_buyList()
 			getItemList()
 
@@ -28568,16 +17747,25 @@ function marketplace_Manager()
 				authToken = arzSavedCfgString("myServerToken"),
 				scriptVersion = tostring(marketState.scriptVersion[1]),
 				serverId = arzSavedCfgString("myServerId"),
-				authClient = arzSavedCfgString("authPremiumTokenAuth")
+				authClient = arzNetworkActivePremiumAuth()
 			})
 
-			asyncHttpRequest("GET", marketState.marketplaceTimeOut == nil and marketState.marketplaceUrl[1] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceTimeOut == true and marketState.marketplaceUrl[2] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceUrl[3], {
+			marketState.marketplaceInFlight = true
+			marketState.marketplaceRequestStartedAt = os.time()
+			local marketplaceRequestId, marketplaceRequestError = asyncHttpRequest("GET", marketState.marketplaceTimeOut == nil and marketState.marketplaceUrl[1] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceTimeOut == true and marketState.marketplaceUrl[2] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceUrl[3], {
 				headers = {
 					["content-type"] = "application/json"
 				},
 				data = u8(marketplaceRequestBody)
 			}, function(marketplaceResponse)
-				if marketplaceResponse.status_code == 200 or marketplaceResponse.status_code == 304 or marketplaceResponse.status_code == 400 or marketplaceResponse.status_code == 401 then
+				marketState.marketplaceInFlight = false
+				if type(marketplaceResponse) ~= "table" then
+					marketState.marketplaceError = "invalid_response"
+					download_marketplace = nil
+					return
+				end
+				marketState.marketplaceUnbanAvailable = marketplaceResponse.status_code == 412
+				if marketplaceResponse.status_code == 200 or marketplaceResponse.status_code == 304 or marketplaceResponse.status_code == 400 or marketplaceResponse.status_code == 401 or marketplaceResponse.status_code == 412 then
 					print("marketplace loaded")
 
 					if marketplaceView[1] == nil then
@@ -28599,7 +17787,7 @@ function marketplace_Manager()
 						json_vlad = readJsonFile(buyJsonPath)
 					end
 
-					if marketplaceResponse.status_code == 400 then
+					if marketplaceResponse.status_code == 400 or marketplaceResponse.status_code == 412 then
 						download_marketplace = "blocked"
 
 						local gameState = sampGetGamestate()
@@ -28611,18 +17799,28 @@ function marketplace_Manager()
 						download_marketplace = "auth"
 					end
 
-					if marketplaceResponse.status_code ~= 400 and marketplaceResponse.status_code ~= 401 then
+					if marketplaceResponse.status_code ~= 400 and marketplaceResponse.status_code ~= 401 and marketplaceResponse.status_code ~= 412 then
 						if json_vlad ~= nil and #json_vlad ~= 0 then
 							ip = sampGetCurrentServerAddress()
 
 							local marketplaceDecodeOk, marketplaceData = pcall(decodeJson, marketplaceResponse.text)
+							if marketplaceDecodeOk and type(marketplaceData) == "table" and type(marketplaceData.list) == "table" then
+								for _, shop in ipairs(marketplaceData.list) do
+									if type(shop) ~= "table" or type(shop.items_buy) ~= "table" or type(shop.items_sell) ~= "table" then
+										marketplaceDecodeOk = false
+										break
+									end
+								end
+							end
 							if not marketplaceDecodeOk or type(marketplaceData) ~= "table" or type(marketplaceData.list) ~= "table" then
 								print("marketplace invalid response")
-								download_marketplace = true
+								marketState.marketplaceError = "invalid_json"
+								download_marketplace = nil
 								return
 							end
 
 							download_marketplace = marketplaceData.list
+							marketState.marketplaceError = nil
 							marketState.marketplaceQueue = marketplaceData.queue
 
 							if not download_marketplace or download_marketplace.marketPlaceAuthState then
@@ -28706,6 +17904,8 @@ function marketplace_Manager()
 						else
 							print("json cant loaded. error " .. tostring(marketplaceResponse.status_code))
 
+							marketState.marketplaceError = "buy_catalog_missing"
+							get_buyList()
 							download_marketplace = true
 						end
 					end
@@ -28718,14 +17918,22 @@ function marketplace_Manager()
 						timers[38][2] = 0
 					end
 
-					download_marketplace = nil
+						marketState.marketplaceError = "http_" .. tostring(marketplaceResponse.status_code)
+						download_marketplace = nil
 				end
 			end, function(marketplaceError)
+				marketState.marketplaceInFlight = false
+				marketState.marketplaceError = tostring(marketplaceError or "request_failed")
 				deAFKMessage(debug.getinfo(1, "l"), "error ")
 				print("timer error " .. tostring(marketplaceError))
 
 				download_marketplace = nil
 			end)
+			if not marketplaceRequestId then
+				marketState.marketplaceInFlight = false
+				marketState.marketplaceError = tostring(marketplaceRequestError or "request_not_started")
+				download_marketplace = nil
+			end
 		else
 			print("timer limit")
 
@@ -28909,799 +18117,6 @@ function sputnik_Manager()
 	end
 end
 
-function sell(frame)
-	if timers[2] + 2 <= os.time() or json_vlads == nil then
-		timers[2] = os.time()
-		json_vlads = readJsonFile(sellJsonPath)
-
-		if #sellList > 0 and json_vlads ~= nil then
-			if loadedSellConfig ~= "" then
-				configFileNames.sell = loadedSellConfig:match("(.+)%.json") and loadedSellConfig or loadedSellConfig .. ".json"
-
-				createConfig("sell-cfg/" .. configFileNames.sell, sellList, "sell-cfg", configFileNames.sell)
-			end
-
-			for itemIndex, itemData in pairs(sellList) do
-				sellList[itemIndex].all_count = Get_AllCountByName(itemData.name)
-			end
-		end
-	end
-
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-	imgui.PushFont(fonts[18])
-
-	local baronSellScanClicked = imgui.CustomOnlyBorderButton(sellScanMode and fa("MAGNIFYING_GLASS_LOCATION") or fa("magnifying_glass"), imgui.ImVec2(30, 27))
-	arzBaronAnchorRecordItem("sell_scan")
-	if baronSellScanClicked then
-		sellScanMode = not sellScanMode
-
-		if sellScanMode then
-			sellScanResults = {}
-
-			SendToServer("/stats")
-			AFKMessage(u8:decode("Проходит сканирование инвентаря. Подождите..."))
-		else
-			AFKMessage(u8:decode("Сканирование было {505050}отменено{ffffff}."))
-		end
-	end
-
-	imgui.Hint("MAGNIFYING_GLASS_LOCATION", "Данная функция используется для сканирования инвентаря!", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(sortMode and fa("ARROW_UP_SHORT_WIDE") or fa("ARROW_DOWN_WIDE_SHORT"), imgui.ImVec2(30, 27)) then
-		sortMode = not sortMode
-		ini.cfg.sort_mode = sortMode
-
-		save_all()
-	end
-
-	imgui.Hint("ARROW_UP_SHORT_WIDE", "Функция заполнения предметов в правый столбец.\n Если стрелка кнопки смотрит вниз то при добавлении предмета, он будет добавлен вниз.", false)
-	imgui.SameLine()
-
-	if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.isActive and ARZ_BARON_ASSISTANT.isActive() then
-		local baronFilterSnapshot = arzBaronAssistantSnapshot("sell", "lua")
-		if baronFilterSnapshot then
-			local baronFilterStep = tostring(baronFilterSnapshot.step or "")
-			if baronFilterStep == "sell_filter_prompt" or baronFilterStep == "sell_currency" or baronFilterStep == "sell_config" or baronFilterStep == "go_buy" then
-				ARZ_BARON_TRADE_FILTER_OPEN.sell = false
-			end
-		end
-	end
-
-	local baronSellFilterClicked = imgui.CustomOnlyBorderButton(u8(u8:decode("Фильтр")) .. "##baron_sell_filter", imgui.ImVec2(72, 27))
-	arzBaronAnchorRecordItem("sell_filter_button")
-	if baronSellFilterClicked then
-		ARZ_BARON_TRADE_FILTER_OPEN.sell = not ARZ_BARON_TRADE_FILTER_OPEN.sell
-		if ARZ_BARON_TRADE_FILTER_OPEN.sell and ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
-			ARZ_BARON_ASSISTANT.event("filter_opened", { side = "sell" })
-		end
-	end
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("PLUS"), imgui.ImVec2(30, 27)) then
-		sellFilterWindowVisible[0] = false
-		marketState.search_sell_Custom = imguiNew.char[256]()
-		marketState.selected_custom_item = ""
-		marketState.selected_item[0] = 0
-		marketState.custom_add_item[0] = not marketState.custom_add_item[0]
-
-		resetIO()
-	end
-
-	imgui.Hint("PLUS", "Раздел для добавления товара которого у вас еще нет в инвентаре.\nДобавьте товар на будущее.", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("FACE_SMILE_HEARTS"), imgui.ImVec2(30, 27)) then
-		imgui.OpenPopup("Личный кабинет.")
-	end
-
-	premiumPage(frame)
-	imgui.Hint("FACE_SMILE_HEARTS", "Личный кабинет.\nЗдесь вы можете авторизоваться в вашем кабинете если вы купили ключ.\nЕсли нет - мы можем рассказать о плюсах подписки, нажав сюда.", false)
-	imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 355) / 2, 5))
-
-	if #ffi.string(sellItemSearchBuffer) ~= 0 then
-		if imgui.CustomOnlyBorderButton(fa("TRASH_CAN_UNDO") .. "##", imgui.ImVec2(25, 27)) then
-			sellItemSearchBuffer = imguiNew.char[256]()
-		end
-
-		imgui.Hint("TRASH_CAN_UNDO", "Очищает поле ввода (Поиск)", false)
-		imgui.SameLine()
-	end
-
-	imgui.SetCursorPos(imgui.ImVec2((imgui.GetWindowWidth() - 300) / 2, 5))
-	imgui.PushItemWidth(255)
-	imgui.PopFont()
-	imgui.NewInput(" Поиск предметов", sellItemSearchBuffer, 255, "sell_function")
-	imgui.PopItemWidth()
-	imgui.PushFont(fonts[18])
-	imgui.Hint("search_sell", "Данная функция ведет поиск в двух столбцах, в правом и левом.\nВы можете найти какой-то товар, добавить.\nТак же не забывайте что вы можете найти товар, затем выбрать для переноса, очистить поиск и перетащить куда вам нужно.", false)
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() - 285, 4))
-
-	local baronSellCurrencyClicked = imgui.CustomOnlyBorderButton(viceCityMode and "SA$" or "VC$", imgui.ImVec2(35, 27))
-	arzBaronAnchorRecordItem("sell_currency")
-	if baronSellCurrencyClicked then
-		viceCityMode = not viceCityMode
-		ini.cfg.vice_city_mode = viceCityMode
-
-		save_all()
-		vc_converter()
-	end
-
-	imgui.Hint("vice_city_mode", "Нажав кнопку Вы смените режим цен на [ViceCity].\nТак же во вкладке \"Настройки\" Вы можете изменить функцию конвертации. Внимательно изучите ее!", false)
-	imgui.SameLine()
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetCursorPos().x, imgui.GetCursorPos().y + 1))
-
-	if imgui.CustomOnlyBorderButton(fa("COPY"), imgui.ImVec2(35, 27)) then
-		imgui.OpenPopup("Конфиг менеджер.")
-	end
-
-	configManager(sellList, 1)
-	imgui.Hint("COPY_MODE", "Новая функция которая позволит быстро копировать что либо из конфига.\nПосле нажатия у вас откроется настройки функции.", false)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x - 5)
-
-	if imgui.CustomOnlyBorderButton(fa("download") .. "##", imgui.ImVec2(35, 27)) then
-		get_prices()
-		sendNotify(u8:decode("Вы начали скачку средних цен."))
-	end
-
-	imgui.Hint("download", "Нажав кнопку Вы скачаете средние цены.\nОни будут доступны при выборе товара в самом меню скрипта или же на центральном рынке при выборе товара!\nТак же не забывайте вы можете добавить товар, затем навести на название товара курсор и вам откроется список средних цен!\nЕсли вы зажмете ЛКМ и будете листать вниз колесиком мыши - вы сможете прокрутить вниз.", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("trash") .. "##", imgui.ImVec2(35, 27)) then
-		clearTradeListAndPersist("sell")
-	end
-
-	imgui.Hint("trash", "Нажав кнопку Вы удалите все добавленные товары в списке ниже. (В правой колонке)", false)
-	imgui.SameLine()
-
-	if imgui.CustomOnlyBorderButton(fa("FOLDER") .. "##", imgui.ImVec2(35, 27)) then
-		imgui.SelectMenu(mainMenu, 3)
-	end
-
-	imgui.Hint("FOLDER", "Нажав кнопку Вы быстро переместитесь во вкладку \"Настройки\".\nТам вы сможете изменить настройки скрипта, а так же загрузить конфиг.\nП-сссс. Открою секрет, у нас работает конфиг от палатки! Только никому не говори!", false)
-	imgui.SameLine()
-	if imgui.CustomOnlyBorderButton("HTML##arz_html_sell", imgui.ImVec2(48, 27)) then
-		arzUiExtensionsOpenHtml("sell")
-	end
-	imgui.Hint("arz_html_sell", "Открыть HTML интерфейс без перезапуска скрипта.", false)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetWindowWidth() - 40)
-
-	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(35, 27)) then
-		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
-		OnClose = true
-	end
-
-	imgui.Hint("xmark", "Нажав кнопку Вы закроете меню скрипта.", false)
-	imgui.PopFont()
-	baronRenderTradeConfigSelector("sell")
-
-	if json_vlads ~= nil and #json_vlads ~= 0 then
-		local sellListsAvail = imgui.GetContentRegionAvail()
-		local sellColumnGap = 8
-		local sellLeftWidth = math.max(260, (sellListsAvail.x - sellColumnGap) * 0.45)
-		local sellRightWidth = math.max(260, sellListsAvail.x - sellLeftWidth - sellColumnGap)
-		local sellFooterHeight = math.ceil(96 * getMenuUiScale())
-		local sellListsHeight = math.max(120, sellListsAvail.y - sellFooterHeight)
-		local sellLeftListHeight = math.max(120, sellListsAvail.y)
-		imgui.CustomInvisibleChild("sellLeftList", imgui.ImVec2(sellLeftWidth, sellLeftListHeight), true, imgui.WindowFlags.NoScrollWithMouse)
-		arzBaronAnchorRecordWindow("sell_inventory")
-
-		if json_vlads ~= nil then
-			imgui.Scroller("sellLeftList", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-
-			for itemIndex, itemData in pairs(json_vlads) do
-				if u8:decode(ffi.string(itemData.item)) ~= 0 and string.find(string.nlower(itemData.item), string.nlower(u8:decode(ffi.string(sellItemSearchBuffer))), nil, true) then
-					imgui.PushFont(fonts[18])
-					imgui.SetCursorPosX(imgui.GetCursorPos().x + 2)
-
-					if containsItem(sellList, itemData.item) then
-						imgui.TextColoredRGB("{808080}" .. changeExtraSim(itemIndex .. ". " .. itemData.item .. " - " .. tostring(itemData.all_count) .. u8:decode(" шт. "), 35))
-
-						if imgui.IsItemHovered() then
-							imgui.SameLine()
-							imgui.SetCursorPosY(imgui.GetCursorPos().y + 2)
-							imgui.TextDisabled(fa("CIRCLE_XMARK"))
-
-							if #(itemIndex .. ". " .. itemData.item .. " - " .. itemData.all_count .. u8:decode(" шт.")) > 1 then
-								imgui.BeginTooltip()
-								imgui.PushFont(fonts[18])
-								imgui.Text(u8(itemIndex .. ". " .. itemData.item .. " - " .. itemData.all_count .. u8:decode(" шт. ")))
-								imgui.PopFont()
-								imgui.EndTooltip()
-							end
-
-							imgui.SetCursorPosY(imgui.GetCursorPos().y - 2)
-						end
-					else
-						imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(itemIndex .. ". " .. itemData.item .. " - " .. tostring(itemData.all_count) .. u8:decode(" шт. "), 35))
-
-						if imgui.IsItemClicked() then
-							local var_269_0 = false
-							marketFinishAllItemEditors()
-
-							if not tradeAutomation.sell and var_269_0 == false and tonumber(sellDefaults.count) <= tonumber(itemData.all_count) then
-								local var_269_1 = {
-									enabled = true,
-									price_vc = 9,
-									maximum = true,
-									name = itemData.item,
-									price = sellDefaults.price,
-									count = sellDefaults.count,
-									slot_count = itemData.count,
-									slot_id = itemData.slot_id,
-									all_count = tonumber(itemData.all_count)
-								}
-
-								addToData(var_269_1, sellList, sortMode and 1 or nil)
-								tradeFilterMarkNewItem("sell", var_269_1)
-								ARZ_BARON_LAST_SELL_ITEM_NAME = tostring(itemData.item or "")
-								if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
-									ARZ_BARON_ASSISTANT.event("sell_item_selected", { name = itemData.item })
-								end
-
-								if marketState.filter_five[0] then
-									marketState.applyScrollMax = true
-								end
-							end
-						end
-
-						if imgui.IsItemHovered() then
-							imgui.SameLine()
-							imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-							imgui.TextDisabled(fa("CART_ARROW_UP"))
-
-							if #(itemIndex .. ". " .. itemData.item .. " - " .. itemData.all_count .. u8:decode(" шт.")) > 1 then
-								imgui.BeginTooltip()
-								imgui.PushFont(fonts[18])
-								imgui.Text(u8(itemIndex .. ". " .. itemData.item .. " - " .. itemData.all_count .. u8:decode(" шт.")))
-								imgui.PopFont()
-								imgui.EndTooltip()
-							end
-
-							imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-						end
-
-					end
-					imgui.PopFont()
-				end
-			end
-		end
-
-		imgui.EndCustomInvisibleChild()
-		imgui.SameLine()
-		imgui.SetCursorPosX(imgui.GetCursorPos().x - 8)
-
-		local var_269_2 = 0
-
-		imgui.CustomInvisibleChild("sellRightList", imgui.ImVec2(sellRightWidth, sellListsHeight), true, imgui.WindowFlags.NoScrollWithMouse)
-		arzBaronAnchorRecordWindow("sell_selected_items")
-
-		local var_269_3 = {}
-		local var_269_4 = {}
-
-		if sellList then
-			for itemIndex, itemData in pairs(sellList) do
-				if filterThree[0] and tonumber(sellList[itemIndex].all_count) > 0 then
-					itemData.position_tab = itemIndex
-
-					table.insert(var_269_3, itemData)
-				end
-
-				if sellList[itemIndex].enabled then
-					var_269_2 = var_269_2 + (viceCityMode and sellList[itemIndex].price or sellList[itemIndex].price_vc) * (sellList[itemIndex].maximum and sellList[itemIndex].all_count or sellList[itemIndex].count)
-				end
-
-				if #u8:decode(ffi.string(sellItemSearchBuffer)) ~= 0 and string.nlower(itemData.name):find(string.nlower(u8:decode(ffi.string(sellItemSearchBuffer))), nil, true) then
-					itemData.position_tab = itemIndex
-
-					table.insert(var_269_4, itemData)
-				end
-			end
-		end
-
-		imgui.Scroller("sellRightList", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-
-		if marketState.applyScrollMax then
-			marketState.applyScrollMax = false
-
-			imgui.SetScrollY(sortMode and 1 or imgui.GetScrollMaxY() + 150)
-		end
-
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-
-		local var_269_5 = tradeFilterBuildView(sellList, "sell", u8:decode(ffi.string(sellItemSearchBuffer)))
-
-		-- Split the sell list into category groups. Headers are rendered outside each clipper.
-		-- This keeps item height uniform inside the clipper and prevents blank space at the bottom.
-		tradeFilterEnsureLoaded()
-		local sellFilterSideState = tradeFilterState and tradeFilterState.sell or tradeFilterDefaultSide("sell")
-		local sellFilterGroups = {}
-		local sellFilterGroupByCategory = {}
-		local sellNewOnly = tradeFilterIsNewOnly("sell")
-
-		if sellNewOnly then
-			local newGroup = {
-				number = 0,
-				category = "__new_items__",
-				is_new_items = true,
-				indices = {}
-			}
-			for viewIndex = 1, #var_269_5 do
-				newGroup.indices[#newGroup.indices + 1] = viewIndex
-			end
-			sellFilterGroups[1] = newGroup
-		else
-			for categoryNumber, category in ipairs(sellFilterSideState.category_order or TRADE_FILTER_CATEGORY_ORDER_DEFAULT) do
-				local group = {
-					number = categoryNumber,
-					category = category,
-					indices = {}
-				}
-				sellFilterGroups[#sellFilterGroups + 1] = group
-				sellFilterGroupByCategory[category] = group
-			end
-
-			for viewIndex, item in ipairs(var_269_5) do
-				local category = tradeFilterItemCategory(item)
-				local group = sellFilterGroupByCategory[category]
-				if group then
-					group.indices[#group.indices + 1] = viewIndex
-				end
-			end
-		end
-
-		local sellCategoryJumpRequest = TRADE_FILTER_CATEGORY_JUMP_REQUEST.sell
-
-		if sellNewOnly and #var_269_5 == 0 then
-			imgui.SetCursorPosX(imgui.GetCursorPos().x + 8)
-			imgui.TextDisabled(u8(u8:decode("Новых товаров пока нет.")))
-		end
-
-		for _, sellFilterGroup in ipairs(sellFilterGroups) do
-			if #sellFilterGroup.indices > 0 then
-				local categoryLabel = sellFilterGroup.is_new_items
-					and u8:decode("Новые товары")
-					or (TRADE_FILTER_CATEGORY_LABELS[sellFilterGroup.category] or sellFilterGroup.category)
-				local headerText = sellFilterGroup.is_new_items
-					and tostring(categoryLabel)
-					or (tostring(sellFilterGroup.number) .. ". " .. tostring(categoryLabel))
-				local headerStart = imgui.GetCursorScreenPos()
-				local headerWidth = math.max(1, imgui.GetContentRegionAvail().x)
-				local redColor = imgui.GetColorU32Vec4(imgui.ImVec4(0.92, 0.16, 0.18, 1.0))
-
-				imgui.GetWindowDrawList():AddRectFilled(
-					imgui.ImVec2(headerStart.x, headerStart.y),
-					imgui.ImVec2(headerStart.x + headerWidth, headerStart.y + 2),
-					redColor
-				)
-				imgui.Dummy(imgui.ImVec2(1, 5))
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 8)
-				imgui.TextColored(imgui.ImVec4(0.95, 0.28, 0.30, 1.0), u8(headerText))
-				if not sellFilterGroup.is_new_items and tradeFilterConsumeCategoryJump("sell", sellFilterGroup.category) then
-					imgui.SetScrollHereY(0.0)
-				end
-				imgui.Spacing()
-
-				local groupClipper = imgui.ImGuiListClipper(#sellFilterGroup.indices)
-				groupClipper:Begin(#sellFilterGroup.indices)
-
-				while groupClipper:Step() do
-					for groupVisibleIndex = groupClipper.DisplayStart, groupClipper.DisplayEnd - 1 do
-						local visibleItemIndex = sellFilterGroup.indices[groupVisibleIndex + 1] - 1
-						local var_269_7 = 1
-
-						imgui.PushFont(fonts[18])
-
-						index = (var_269_5[visibleItemIndex + 1].position_tab or (visibleItemIndex + 1)) - 1
-
-						if tostring(var_269_5[visibleItemIndex + 1]) == "nil" then
-						elseif var_269_7 == 1 then
-							local sellRowItem = var_269_5[visibleItemIndex + 1]
-							local sellRowUiKey = marketItemStableUiKey("sell", sellRowItem)
-
-							imgui.CustomSeparator(imgui.GetWindowWidth())
-
-							if var_269_5[visibleItemIndex + 1].enabled == true then
-								if imgui.CustomOnlyBorderButton(fa("TOGGLE_ON") .. "##sell_toggle_" .. sellRowUiKey, imgui.ImVec2(50)) then
-									sellRowItem.enabled = false
-									if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
-										ARZ_BARON_ASSISTANT.event("sell_status_toggled", { name = sellRowItem.name, enabled = false })
-									end
-								end
-							elseif imgui.CustomOnlyBorderButton(fa("TOGGLE_OFF") .. "##sell_toggle_" .. sellRowUiKey, imgui.ImVec2(50)) then
-								sellRowItem.enabled = true
-								if ARZ_BARON_ASSISTANT and ARZ_BARON_ASSISTANT.event then
-									ARZ_BARON_ASSISTANT.event("sell_status_toggled", { name = sellRowItem.name, enabled = true })
-								end
-							end
-
-							if tostring(sellRowItem.name or "") == tostring(ARZ_BARON_LAST_SELL_ITEM_NAME or "") then
-								arzBaronAnchorRecordItem("sell_status_toggle")
-							end
-
-							imgui.SameLine()
-							imgui.SetCursorPosY(imgui.GetCursorPos().y - 2)
-							imgui.SetCursorPosX(imgui.GetCursorPos().x - 10)
-
-							imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-							if imgui.RadioButtonIntPtr("##sell_reorder_" .. sellRowUiKey, selectedListItem[1], index + 1) then
-								selectedListItem[3] = false
-
-								if selectedListItem[2] ~= 333 then
-									local var_269_8 = sellList[selectedListItem[2]]
-
-									table.remove(sellList, selectedListItem[2])
-									table.insert(sellList, index + 1, var_269_8)
-
-									selectedListItem[2] = 333
-									selectedListItem[1][0] = 333
-									selectedListItem[3] = true
-								end
-
-								if selectedListItem[3] == false then
-									selectedListItem[2] = index + 1
-								end
-							end
-
-							imgui.GetStyle().FrameBorderSize = 0
-
-							imgui.SameLine()
-
-							local var_269_9 = tonumber(var_269_5[visibleItemIndex + 1].all_count) > 0 and ImVec3ToHEX(menuThemeConfig.color_text_market) or "{ff6666}"
-
-							imgui.TextColoredRGB(var_269_5[visibleItemIndex + 1].enabled and var_269_9 .. changeExtraSim(index + 1 .. ". " .. var_269_5[visibleItemIndex + 1].name, 35) or "{808080}" .. changeExtraSim(index + 1 .. ". " .. var_269_5[visibleItemIndex + 1].name, 35))
-
-							if #(visibleItemIndex + 1 .. ". " .. var_269_5[visibleItemIndex + 1].name) > 1 and imgui.IsItemHovered() then
-								if timers[24][1] + 1 <= os.time() then
-									timers[24][1] = os.time()
-									timers[24][2] = 0
-
-									deAFKMessage(debug.getinfo(1, "l"), "reload SelectMenu [set 0]")
-								end
-
-								if imgui.IsItemClicked() then
-									timers[24][2] = timers[24][2] + 1
-
-									if timers[24][2] > 1 then
-										imgui.SelectMenu(mainMenu, 5)
-
-										marketState.SearchMarket = imguiNew.char[256](tostring(u8((var_269_5[visibleItemIndex + 1].name:gsub("%(%+%d+%)", "")))))
-										marketState.searchStorage.marketPlaceBuy[2] = ""
-										marketState.searchStorage.marketPlaceSell[2] = ""
-
-										deAFKMessage(debug.getinfo(1, "l"), "imgui.SelectMenu(buttons, 5)")
-									end
-								end
-
-								imgui.BeginTooltip()
-								imgui.PushFont(uiFonts[17])
-								imgui.Text(u8((var_269_5[visibleItemIndex + 1].name:gsub("%(%+%d+%)", ""))) .. u8(" (") .. var_269_5[visibleItemIndex + 1].all_count .. " шт.)")
-								show_prices(var_269_5[visibleItemIndex + 1].name:gsub("%(%+%d+%)", ""), visibleItemIndex)
-								imgui.PopFont()
-								imgui.EndTooltip()
-							end
-
-							-- Per-item sell filter assignment. Auto restores automatic category detection.
-							local sellFilterItem = sellRowItem
-							if type(sellFilterItem) == "table" then
-								local assignedCategory = sellFilterItem.trade_filter_category
-								local previewLabel = assignedCategory and TRADE_FILTER_CATEGORY_LABELS[assignedCategory] or u8:decode("Авто")
-								local comboWidth = math.max(125, 145 * getMenuUiScale())
-
-								imgui.SameLine()
-								imgui.SetCursorPosX(math.max(imgui.GetCursorPos().x + 6, imgui.GetWindowWidth() - comboWidth - 12))
-								imgui.PushItemWidth(comboWidth)
-
-								if imgui.BeginCombo("##sell_item_filter_" .. sellRowUiKey, u8(previewLabel)) then
-									local autoSelected = assignedCategory == nil or TRADE_FILTER_CATEGORY_LABELS[assignedCategory] == nil
-									if imgui.Selectable(u8(u8:decode("Авто")), autoSelected) then
-										tradeFilterSetItemCategory("sell", sellFilterItem, "auto")
-									end
-
-									for _, category in ipairs(TRADE_FILTER_CATEGORY_ORDER_DEFAULT) do
-										local categoryLabel = TRADE_FILTER_CATEGORY_LABELS[category] or category
-										local isSelected = assignedCategory == category
-										if imgui.Selectable(u8(categoryLabel), isSelected) then
-											tradeFilterSetItemCategory("sell", sellFilterItem, category)
-										end
-									end
-
-									imgui.EndCombo()
-								end
-
-								if imgui.IsItemHovered() then
-									imgui.SetTooltip(u8(u8:decode("Привязать предмет к фильтру. Авто - определять категорию автоматически.")))
-								end
-
-								imgui.PopItemWidth()
-							end
-
-							imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-							imgui.PushItemWidth(viceCityMode and 110 or 110)
-
-							local sellPriceField = viceCityMode and "price" or "price_vc"
-							local sellCurrentPrice = tonumber(sellRowItem[sellPriceField]) or 9
-							if sellCurrentPrice < 9 then
-								sellCurrentPrice = 9
-								sellRowItem[sellPriceField] = 9
-							end
-
-							local sellPriceBuffer, sellPriceState = marketItemEditorBuffer("sell", sellRowItem, "price", sellCurrentPrice)
-							if sellPriceState and sellPriceState.active and sellPriceBuffer then
-								if imgui.InputTextD(
-									viceCityMode and " SA$##sell_price_" .. sellRowUiKey or " VC$##sell_price_" .. sellRowUiKey,
-									sellPriceBuffer,
-									32,
-									imgui.InputTextFlags.CharsDecimal
-								) and ffi.string(sellPriceBuffer):match("^%d+$") then
-									if tonumber(ffi.string(sellPriceBuffer)) > 8 and viceCityMode then
-										sellRowItem.price = ffi.string(sellPriceBuffer)
-										timers[2] = os.time() - 3
-									end
-
-									if tonumber(ffi.string(sellPriceBuffer)) > 8 and not viceCityMode then
-										sellRowItem.price_vc = ffi.string(sellPriceBuffer)
-										timers[2] = os.time() - 3
-									end
-								end
-
-								if not imgui.IsItemHovered() and imgui.IsMouseDown(0) then
-									sellPriceState.active = false
-									sellPriceState.click = false
-									resetIO()
-								elseif sellPriceState.click == false then
-									resetIO()
-									imgui.SetKeyboardFocusHere(-1)
-									sellPriceState.active = true
-									sellPriceState.click = true
-								end
-							else
-								imgui.PushFont(fonts[17])
-								imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-								if imgui.Button(moneySeparator(sellCurrentPrice) .. "##sell_price_button_" .. sellRowUiKey, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-									marketItemEditorBegin("sell", sellRowItem, "price", sellCurrentPrice)
-								end
-
-								imgui.SameLine()
-								imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-								imgui.PopFont()
-								imgui.Text(viceCityMode and " SA$" or " VC$")
-								imgui.GetStyle().FrameBorderSize = 0
-							end
-
-							imgui.PopItemWidth()
-							imgui.SameLine()
-
-							if not viceCityMode then
-								imgui.SetCursorPosX(imgui.GetCursorPos().x - 1)
-							end
-
-							if var_269_5[visibleItemIndex + 1].maximum then
-								imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-
-								if imgui.CustomOnlyBorderButton(fa("SQUARE_M") .. "##sell_max_" .. sellRowUiKey, imgui.ImVec2(25)) then
-									sellRowItem.maximum = false
-								end
-
-								imgui.SameLine()
-								imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-								imgui.SetCursorPosX(imgui.GetCursorPos().x - 2)
-								imgui.TextColoredRGB(u8:decode("{808080} Максимум"))
-								imgui.SameLine()
-								imgui.SetCursorPosX(imgui.GetCursorPos().x + 14)
-								imgui.Text("шт.")
-							else
-								imgui.SetCursorPosY(imgui.GetCursorPos().y + 1)
-
-								if imgui.CustomOnlyBorderButton(fa("SQUARE_C") .. "##sell_count_mode_" .. sellRowUiKey, imgui.ImVec2(25)) then
-									sellRowItem.maximum = true
-								end
-
-								imgui.SameLine()
-								imgui.SetCursorPosY(imgui.GetCursorPos().y - 1)
-								imgui.SetCursorPosX(imgui.GetCursorPos().x - 2.4)
-								imgui.PushItemWidth(90)
-
-								local sellCountBuffer = marketItemEditorBuffer("sell", sellRowItem, "count", sellRowItem.count)
-
-								if sellCountBuffer and imgui.InputTextD(" шт.##sell_count_" .. sellRowUiKey, sellCountBuffer, 32, imgui.InputTextFlags.CharsDecimal) then
-									local countText = ffi.string(sellCountBuffer)
-									if countText:match("^%d+$") then
-										marketCommitItemCount("sell", sellRowItem, countText)
-									end
-								end
-
-								imgui.PopItemWidth()
-							end
-
-							imgui.SameLine()
-
-							if imgui.CustomOnlyBorderButton(fa("trash") .. "##sell_trash_" .. sellRowUiKey, imgui.ImVec2(50)) then
-								deleteListItemObjectWithUndo("sell", sellList, sellRowItem)
-							end
-						end
-						imgui.PopFont()
-					end
-				end
-
-				groupClipper:End()
-			end
-		end
-
-		if sellCategoryJumpRequest and TRADE_FILTER_CATEGORY_JUMP_REQUEST.sell == sellCategoryJumpRequest then
-			tradeFilterClearCategoryJump("sell")
-		end
-
-		imgui.EndCustomInvisibleChild()
-
-		if next(sellList) ~= nil then
-			imgui.PushFont(fonts[18])
-			local sellFooterHeight = math.ceil(96 * getMenuUiScale())
-			imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 2 - 29, math.max(0, imgui.GetWindowHeight() - sellFooterHeight)))
-			imgui.CustomInvisibleChild("sellBlockStat", imgui.ImVec2(-1, sellFooterHeight))
-
-			imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-			local var_269_10 = Percent(var_269_2, ini.cfg.sell_percent)
-			local var_269_11 = var_269_10 < 100000000 and "(+" .. moneySeparator(var_269_10) .. u8(")") or "(+......)"
-
-			imgui.CenterText("Остаток: " .. moneySeparator(getPlayerMoney() + var_269_10) .. " " .. var_269_11 .. " | Предметов: " .. (filterThree[0] and #var_269_3 or #sellList))
-
-			if var_269_10 > 99999999 and imgui.IsItemHovered() then
-				imgui.BeginTooltip()
-				imgui.Text("    (+" .. moneySeparator(var_269_10) .. ")    ")
-				imgui.EndTooltip()
-			end
-
-			if imgui.Button(tradeAutomation.sell and "Отмена" or "Выставить на продажу", imgui.ImVec2(imgui.GetWindowWidth() - 9, 27)) then
-				if not tradeAutomation.sell then
-					marketFinishAllItemEditors()
-					if not lowPriceGuardPreflight(sellList, "sell", "/crsell") then
-						-- blocked by low price guard
-					elseif is_invent_open ~= nil or marketState.custom_is_invent_open[1] ~= nil then
-						sampSendClickTextdraw(65535)
-						AFKMessage(u8:decode("С открытым инвентарем не работает. Нужно переоткрыть. Запустите повторно."))
-					else
-						local serverAddress, serverPort = sampGetCurrentServerAddress()
-
-						if serverIdByAddress[serverAddress] == 0 and viceCityMode or serverIdByAddress[serverAddress] ~= 0 and not viceCityMode then
-							AFKMessage(u8:decode("ВНИМАНИЕ! У вас установлен не тот режим продажи. Зайдите в продажу и проверьте валюту в которой выставляете."))
-						else
-							marketState.available_items_custom = {}
-							marketState.custom_is_invent_open = {
-								marketState.custom_is_invent_open[1],
-								os.clock(),
-								false,
-								-1,
-								1
-							}
-							tradeFilterApplyExecutionOrder(sellList, "sell")
-
-							sellStatusMessages = {}
-							sellScanMode = true
-							sellScanResults = {}
-
-							SendToServer("/stats")
-							AFKMessage(u8:decode("Подготовка к выставке товара..."))
-
-							sell_check = true
-							tradeAutomationVisible[0] = true
-							tradeAutomation = {
-								sell = true,
-								buy = false,
-								score = 0,
-								score_from = 1
-							}
-
-							for itemIndex, itemData in ipairs(sellList) do
-								if itemData.slot_count == nil then
-									itemData.slot_count = {
-										"999"
-									}
-
-									deAFKMessage(debug.getinfo(1, "l"), "nil slot_count.")
-								end
-
-								saveLog("[" .. tostring(itemData.enabled) .. u8:decode("] Товар: [") .. itemIndex .. "|" .. #sellList .. "] [" .. itemData.name .. "] [" .. itemData.count .. "] [" .. itemData.price .. "|" .. itemData.price_vc .. "] [" .. tostring(viceCityMode) .. "] [" .. tostring(strictItemNameMatch[0]) .. "]")
-
-							end
-							tradeAutomation.score_from = #sellList
-						end
-					end
-				else
-					sell_check = false
-					sellScanMode = false
-					tradeAutomationVisible[0] = false
-					inventoryPage = 1
-					tradeAutomation = {
-						sell = false,
-						buy = false,
-						score = 0,
-						score_from = 1
-					}
-
-					AFKMessage(u8:decode("Выставление товаров было отменено."))
-
-					if sell_alitems_d ~= nil then
-						lets_gooo = false
-					end
-
-					if buttons_id ~= nil then
-						sampSendClickTextdraw(buttons_id + 2)
-					end
-				end
-			end
-
-			if loadedSellConfig == "" then
-				if itemPanelState[1] == true then
-					if imgui.Button("Отменить создание", imgui.ImVec2(imgui.GetWindowWidth() / 2 - 10, 27)) then
-						itemPanelState[1] = false
-					end
-
-					imgui.SameLine()
-					imgui.PushItemWidth(98)
-					imgui.PushFont(fonts[222])
-					imgui.PushStyleVarVec2(imgui.StyleVar.FramePadding, imgui.ImVec2(6, 6.5))
-					imgui.InputTextWithHintD("##search_cfg_sell", " Имя конфига", sellConfigNameBuffer, ffi.sizeof(sellConfigNameBuffer), imgui.InputTextFlags.EnterReturnsTrue)
-					imgui.PopItemWidth()
-					imgui.PopFont()
-					imgui.PopStyleVar()
-					imgui.SameLine()
-
-					if imgui.Button("Создать", imgui.ImVec2(imgui.GetWindowWidth() / 3.99 - 15, 27)) then
-						configFileNames.sell = u8:decode(ffi.string(sellConfigNameBuffer)):gsub("[\"<|:>]", "")
-
-						if configFileNames.sell == "" or configFileNames.sell == nil or configFileNames.sell:match("^%s*$") ~= nil then
-							AFKMessage(u8:decode("{ff3535}[Error]:{ffffff} Вы не можете создать {505050}безымянный {ffffff}конфиг."))
-						else
-							itemPanelState[1] = false
-
-							createConfig("sell-cfg/" .. configFileNames.sell .. ".json", {}, "sell-cfg", configFileNames.sell)
-							AFKMessage(u8:decode("[Продажа] Конфиг {505050}") .. tostring(configFileNames.sell) .. u8:decode("{ffffff} создан."))
-
-							loadedSellConfig = configFileNames.sell .. ".json"
-							ini.cfg.load_config_sell = loadedSellConfig
-
-							save_all()
-						end
-					end
-				elseif imgui.Button("Создать конфиг", imgui.ImVec2(imgui.GetWindowWidth() - 9, 27)) then
-					itemPanelState[1] = true
-				end
-			elseif imgui.Button("Сохранить конфиг", imgui.ImVec2(imgui.GetWindowWidth() - 9, 27)) then
-				if loadedSellConfig ~= "" then
-					configFileNames.sell = loadedSellConfig:match("(.+)%.json") and loadedSellConfig or loadedSellConfig .. ".json"
-
-					createConfig("sell-cfg/" .. configFileNames.sell, sellList, "sell-cfg", configFileNames.sell)
-					AFKMessage(u8:decode("Конфиг ") .. tostring(configFileNames.sell) .. u8:decode(" сохранен."))
-				else
-					AFKMessage(u8:decode("К сожалению вы не загрузили не один конфиг. Создайте и загрузите конфиг для его сохранения."))
-				end
-			end
-
-			imgui.GetStyle().FrameBorderSize = 0
-
-			imgui.PopFont()
-			imgui.EndCustomInvisibleChild()
-		end
-	else
-		local baronEmptyInventoryPos = imgui.GetCursorScreenPos()
-		local baronEmptyInventoryAvail = imgui.GetContentRegionAvail()
-		arzBaronAnchorRecordRect("sell_inventory", baronEmptyInventoryPos.x, baronEmptyInventoryPos.y, math.max(120, baronEmptyInventoryAvail.x), math.max(100, baronEmptyInventoryAvail.y))
-		imgui.PushFont(fonts[18])
-		imgui.SetCursorPosY(imgui.GetWindowHeight() * 0.45)
-		imgui.CenterText("Для продолжения отсканируйте инвентарь")
-		imgui.CenterText("Нажмите кнопку " .. fa("magnifying_glass"))
-		imgui.PopFont()
-	end
-end
 
 function show_pricesz(itemName, itemEnchant)
 	if timers[5] == nil then
@@ -30024,6 +18439,8 @@ function vrSelected(frame)
 
 	if imgui.CustomOnlyBorderButton(fa("ARROW_LEFT"), imgui.ImVec2(30, 27)) then
 		marketState.vr_helper.isClicked = false
+  ARZ_SPECIAL_UI.visible[0] = false
+  arzUiExtensionsOpenHtml("settings")
 	end
 
 	imgui.Hint("vrSelected", "Нажмите сюда что бы вернуться в настройки скрипта.", false)
@@ -30035,9 +18452,8 @@ function vrSelected(frame)
 
 	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(35, 27)) then
 		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
+  ARZ_SPECIAL_UI.visible[0] = false
+		menuVisible[0] = false
 		OnClose = true
 	end
 
@@ -30409,6 +18825,8 @@ function sputnikSelection(frame)
 
 	if imgui.CustomOnlyBorderButton(fa("ARROW_LEFT"), imgui.ImVec2(30, 27)) then
 		marketState.isActiveChooseSputnik = false
+  ARZ_SPECIAL_UI.visible[0] = false
+  arzUiExtensionsOpenHtml("settings")
 	end
 
 	imgui.Hint("sputnikSelection", "Нажмите сюда что бы вернуться в главное меню.", false)
@@ -30420,9 +18838,8 @@ function sputnikSelection(frame)
 
 	if imgui.CustomOnlyBorderButton(fa("xmark") .. "##0", imgui.ImVec2(35, 27)) then
 		menuOpen = false
-
-
-		menuVisible[0] = menuOpen
+  ARZ_SPECIAL_UI.visible[0] = false
+		menuVisible[0] = false
 		OnClose = true
 	end
 
@@ -30735,232 +19152,7 @@ function sputnikSelection(frame)
 end
 
 
-function renderArzPaletteSettings()
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-	imgui.CenterText("Оформление")
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-	imgui.CustomSeparator(imgui.GetWindowWidth() - 20)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-	imgui.TextDisabled("Палитра цветов")
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
 
-	local available = imgui.GetContentRegionAvail().x
-	local gap = imgui.GetStyle().ItemSpacing.x
-	local buttonWidth = math.max(120, (available - gap) / 2)
-	local currentKey = tostring(menuThemeConfig.palette_key or "arzmarket_default")
-
-	local globalPalette = arzGlobalPaletteEnsureStorage()
-	ARZ_GLOBAL_GLOW_UI = ARZ_GLOBAL_GLOW_UI or imguiNew.int(tonumber(globalPalette.glow) or 80)
-	ARZ_GLOBAL_GLOW_UI[0] = tonumber(globalPalette.glow) or 80
-	imgui.Text("Свечение")
-	imgui.PushItemWidth(math.max(180, math.min(360, available * 0.72)))
-	if imgui.SliderInt("##arz_global_glow", ARZ_GLOBAL_GLOW_UI, 0, 100, "%d%%") then
-		arzGlobalPaletteSet({ glow = tonumber(ARZ_GLOBAL_GLOW_UI[0]) or 100 })
-	end
-	imgui.PopItemWidth()
-	if ARZ_BARON_ASSISTANT then arzBaronAnchorRecordItem("settings_glow") end
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 7)
-
-	local themesAnchorStart = imgui.GetCursorScreenPos()
-	for index, themeKey in ipairs(ARZ_THEME_ORDER) do
-		local preset = ARZ_THEME_PRESETS[themeKey]
-		local selected = currentKey == themeKey
-		if selected then
-			imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(menuThemeConfig.active_selector_color[1], menuThemeConfig.active_selector_color[2], menuThemeConfig.active_selector_color[3], 0.85))
-			imgui.PushStyleColor(imgui.Col.Border, imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], 1))
-			imgui.GetStyle().FrameBorderSize = 1
-		end
-
-		if imgui.Button(u8(preset.label) .. "##arz_palette_" .. themeKey, imgui.ImVec2(buttonWidth, 34)) then
-			currentKey = arzPaletteSelect(themeKey)
-		end
-
-		if selected then
-			imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-			imgui.PopStyleColor(2)
-		end
-
-		if index % 2 == 1 and index < #ARZ_THEME_ORDER then
-			imgui.SameLine()
-		end
-	end
-
-	local themesAnchorEnd = imgui.GetCursorScreenPos()
-	if ARZ_BARON_ASSISTANT then
-		arzBaronAnchorRecordRect("settings_themes", themesAnchorStart.x, themesAnchorStart.y, math.max(120, available), math.max(40, themesAnchorEnd.y - themesAnchorStart.y))
-	end
-
-	local activePreset = ARZ_THEME_PRESETS[currentKey] or ARZ_THEME_PRESETS.arzmarket_default
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-	imgui.TextDisabled(u8(activePreset.hint))
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-	imgui.CustomSeparator(imgui.GetWindowWidth() - 20)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-	renderArzCustomPaletteSettings()
-	imgui.CustomSeparator(imgui.GetWindowWidth() - 20)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 5)
-end
-
-function menu_settings()
-	imgui.CustomInvisibleChild("menu_settings", imgui.ImVec2(-1, -1), true, imgui.WindowFlags.NoScrollWithMouse)
-	if ARZ_BARON_ASSISTANT and type(arzBaronAnchorRecordWindow) == "function" then
-		arzBaronAnchorRecordWindow("settings_appearance_panel")
-	end
-	imgui.Scroller("menu_settings1", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	imgui.PushFont(fonts[18])
-
-	if modificationState.settingsInterfaceOpen then
-		if imgui.Button("<  Основные настройки", imgui.ImVec2(math.min(250 * getMenuUiScale(), imgui.GetContentRegionAvail().x), 30)) then
-			modificationState.settingsInterfaceOpen = false
-			imgui.PopFont()
-			imgui.EndCustomInvisibleChild()
-			return
-		end
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-		imgui.CustomSeparator(imgui.GetContentRegionAvail().x)
-		imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-	end
-
-	renderArzPaletteSettings()
-
-
-	if imgui.ToggleButton("Размытие фона за меню", backgroundBlurEnabled) then
-		-- One blur mode only: blur the game scene behind the menu.
-		-- Legacy left/right flags are kept in sync for config compatibility,
-		-- but no window/child draw list is blurred anymore.
-		leftMenuBlurEnabled[0] = backgroundBlurEnabled[0]
-		rightMenuBlurEnabled[0] = backgroundBlurEnabled[0]
-		ini.cfg.background_blure = backgroundBlurEnabled[0]
-		ini.cfg.left_menu_blur = backgroundBlurEnabled[0]
-		ini.cfg.right_menu_blur = backgroundBlurEnabled[0]
-		modificationState.requestBackgroundBlurReset()
-
-		save_all()
-	end
-
-
-	if imgui.ToggleButton("Стиль переключателей", buttonStyleEnabled) then
-		ini.cfg.button_style = buttonStyleEnabled[0]
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Включить обводку элементов", borderSideEnabled) then
-		ini.cfg.border_side = borderSideEnabled[0]
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Тип обводки экрана", rgbWindowEnabled) then
-		ini.cfg.rgb_window = rgbWindowEnabled[0]
-
-		save_all()
-	end
-
-	if imgui.ToggleButton("Плавные открытия в меню", alphaMenuEnabled) then
-		ini.cfg.alpha_menuS = alphaMenuEnabled[0]
-
-		save_all()
-	end
-
-
-	imgui.Text("Размер интерфейса")
-	imgui.TextDisabled("Текст, кнопки и элементы. Размер окна - мышью за правый нижний угол.")
-	local appliedMenuScalePercent = math.max(100, math.min(150, math.floor(tonumber(ini.cfg.menu_scale_percent) or 120)))
-	local menuScaleApplyWidth = 115
-	local menuScaleGap = imgui.GetStyle().ItemSpacing.x
-	local menuScaleAvailable = imgui.GetContentRegionAvail().x
-	imgui.PushItemWidth(math.max(220 * getMenuUiScale(), menuScaleAvailable - menuScaleApplyWidth - menuScaleGap))
-	imgui.SliderInt("##menu_scale_percent", menuScalePercent, 100, 150, "%d%%")
-	imgui.PopItemWidth()
-
-	if menuScalePercent[0] ~= appliedMenuScalePercent then
-		imgui.SameLine()
-		if imgui.Button("Применить", imgui.ImVec2(menuScaleApplyWidth, 0)) then
-			local currentScrollY = math.max(0, tonumber(imgui.GetScrollY()) or 0)
-			local currentScrollMax = math.max(0, tonumber(imgui.GetScrollMaxY()) or 0)
-			local currentScrollRatio = currentScrollMax > 0 and math.max(0, math.min(1, currentScrollY / currentScrollMax)) or nil
-
-			windowThemeConfig.pendingAppearanceRestore = {
-				active = true,
-				scrollY = currentScrollY,
-				scrollRatio = currentScrollRatio,
-				createdAt = os.time(),
-				processId = type(arzWatchdogGetPid) == "function" and arzWatchdogGetPid() or 0
-			}
-			pcall(writeJsonFile, windowThemeConfig, windowThemePath)
-
-			ini.cfg.lastCrrSelect = 3
-			ini.cfg.menu_scale_percent = math.max(100, math.min(150, math.floor(tonumber(menuScalePercent[0]) or 120)))
-			if modificationState and modificationState.persistMainWindowSize then
-				pcall(modificationState.persistMainWindowSize, true)
-			end
-			save_all()
-			-- Do not reload the whole script from inside an ImGui frame callback.
-			-- Schedule it on a normal MoonLoader thread after the frame returns.
-			if lua_thread and type(lua_thread.create) == "function" then
-				lua_thread.create(function()
-					wait(220)
-					thisScript():reload()
-				end)
-			end
-			return
-		end
-	end
-
-	imgui.Text("Общая прозрачность интерфейса")
-	imgui.TextDisabled("20% - почти прозрачный, 100% - полностью непрозрачный.")
-	imgui.PushItemWidth(math.max(220 * getMenuUiScale(), imgui.GetContentRegionAvail().x * 0.55))
-	if imgui.SliderInt("##menu_opacity_percent", menuOpacityPercent, 20, 100, "%d%%") then
-		ini.cfg.menu_opacity_percent = math.max(20, math.min(100, math.floor(tonumber(menuOpacityPercent[0]) or 100)))
-		save_all()
-	end
-	imgui.PopItemWidth()
-
-	imgui.SliderFloat(" Скорость смена цвета [Контур]", rainbowSpeed, 0, 5)
-	if imgui.SliderFloat(" Сила размытия", blurStrength, 0.5, 4.0) then
-		local newBlurStrength = math.max(0.5, math.min(4.0, tonumber(blurStrength[0]) or 2.0))
-		local previousBlurStrength = tonumber(ini.cfg.blur_strength) or 2.0
-		ini.cfg.blur_strength = newBlurStrength
-
-		if newBlurStrength < previousBlurStrength - 0.001 then
-			modificationState.requestBackgroundBlurReset()
-		end
-
-		save_all()
-	end
-
-	imgui.PopFont()
-	imgui.GetStyle().FrameBorderSize = 0
-
-	if (tonumber(modificationState.appearanceRestoreFrames) or 0) > 0
-		and modificationState.appearanceRestoreScrollY ~= nil then
-		local maxScroll = math.max(0, tonumber(imgui.GetScrollMaxY()) or 0)
-		local targetScroll = math.max(0, tonumber(modificationState.appearanceRestoreScrollY) or 0)
-		local ratio = tonumber(modificationState.appearanceRestoreScrollRatio)
-
-		-- UI scaling changes content height, so restore the relative scroll point.
-		if ratio and maxScroll > 0 then
-			targetScroll = maxScroll * math.max(0, math.min(1, ratio))
-		elseif maxScroll > 0 then
-			targetScroll = math.min(targetScroll, maxScroll)
-		else
-			targetScroll = 0
-		end
-
-		imgui.SetScrollY(targetScroll)
-		modificationState.appearanceRestoreFrames = modificationState.appearanceRestoreFrames - 1
-		if modificationState.appearanceRestoreFrames <= 0 then
-			modificationState.appearanceRestoreScrollY = nil
-			modificationState.appearanceRestoreScrollRatio = nil
-		end
-	end
-
-	imgui.EndCustomInvisibleChild()
-end
 
 function openUrl(primaryUrl, alternativeUrl, primaryTitle, alternativeTitle, preferAlternative)
 	if primaryUrl == nil then
@@ -31030,7 +19222,7 @@ function sampev.onSendDialogResponse(dialogId, button, listIndex, inputText)
 	if marketState.openAfterCloseMenu then
 		marketState.openAfterCloseMenu = false
 
-		openCrr()
+  arzUiExtensionsOpenHtml(arzInterfaceCurrentPageForModeSwitch())
 	end
 
 	if ini.cfg.active_lavka_number ~= -1 and inputText == u8:decode("- [ArzMarket] Найти свою лавку. [") .. ini.cfg.active_lavka_number .. "]" and activeLavkaId ~= -1 and button == 1 then
@@ -31053,7 +19245,7 @@ function sampev.onSendDialogResponse(dialogId, button, listIndex, inputText)
 	end
 
 	if inputText:find(u8:decode("Открыть меню ArzMarket")) and button == 1 then
-		openCrr()
+  arzUiExtensionsOpenHtml(arzInterfaceCurrentPageForModeSwitch())
 	end
 
 	if selectedItemInfo[1] ~= nil then
@@ -31069,18 +19261,39 @@ function sampev.onSendDialogResponse(dialogId, button, listIndex, inputText)
 end
 
 function openCrr()
-	kifir = 1
-	menuOpen = not menuOpen
-	menuVisible[0] = menuOpen
+ menuOpen = false
+ menuVisible[0] = false
+ if type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() then
+  arzUiExtensionsCloseHtml()
+ else
+  arzUiExtensionsOpenHtml(arzInterfaceCurrentPageForModeSwitch())
+ end
+end
 
-	if menuOpen then
-		zzztime = os.clock()
-	else
-		if modificationState and modificationState.persistMainWindowSize then
-			pcall(modificationState.persistMainWindowSize, true)
-		end
-		resetIO()
-	end
+function arzOpenSpecialPage(page, fromHtmlBridge)
+ page = tostring(page or ""):lower()
+ local aliases = { mods = "addons", auto = "piar", telegram = "tg" }
+ page = aliases[page] or page
+ local standalone = { addons = true, auth = true, height = true, piar = true, sputnik = true }
+ local modal = { key = true, premium = true, tg = true, tgad = true }
+ if not standalone[page] and not modal[page] then return false end
+ if not fromHtmlBridge and type(arzUiExtensionsIsHtmlOpen) == "function" and arzUiExtensionsIsHtmlOpen() then arzUiExtensionsCloseHtml() end
+ menuOpen = false
+ menuVisible[0] = false
+ if imgui and imgui.DisableInput ~= nil then imgui.DisableInput = false end
+ if modal[page] then
+  ARZ_SPECIAL_UI.visible[0] = false
+  ARZ_SPECIAL_UI.popup = page
+  ARZ_SPECIAL_UI.pending = true
+ else
+  ARZ_SPECIAL_UI.popup = nil
+  ARZ_SPECIAL_UI.pending = false
+  ARZ_SPECIAL_UI.page = page
+  ARZ_SPECIAL_UI.visible[0] = true
+  if page == "addons" and download_scripts == nil then script_Manager() end
+  if page == "sputnik" and marketState.download_sputnik == nil then sputnik_Manager() end
+ end
+ return true
 end
 
 function sampev.onSendClickTextDraw(textdrawId)
@@ -31428,383 +19641,7 @@ function checkMessageTime(message)
 	return false
 end
 
-function marketplace_search(frame)
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
 
-	if download_marketplace == nil then
-		return
-	end
-
-	imgui.SetCursorPosX(imgui.GetCursorPos().x - 5)
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	local searchRootAvail = imgui.GetContentRegionAvail()
-	local var_293_1 = 280
-	local var_293_2 = 140
-
-	imgui.CustomInvisibleChild("search_items", imgui.ImVec2(searchRootAvail.x, searchRootAvail.y), false)
-	imgui.CustomInvisibleChild("search_items2##", imgui.ImVec2((var_293_1 + 1) / 2, var_293_2), false)
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_293_4 = imgui.ImVec2(cursorScreenPos.x + 4, cursorScreenPos.y + 6)
-
-	if marketplaceView then
-		imgui.GetWindowDrawList():AddImage(marketState.isPremiumAuthedStatus == true and marketplaceView[3] or marketplaceView[1], var_293_4, imgui.ImVec2(var_293_4.x + 130, var_293_4.y + 130), imgui.ImVec2(0, 0), imgui.ImVec2(1, 1), 4294967295, 60)
-		imgui.SameLine()
-	end
-
-	imgui.GetWindowDrawList():AddRect(cursorScreenPos, imgui.ImVec2(cursorScreenPos.x + var_293_1 / 2, cursorScreenPos.y + var_293_2), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 1.8)
-	imgui.EndCustomInvisibleChild()
-	imgui.SameLine()
-
-	local var_293_5 = math.max(280, (imgui.GetContentRegionAvail().x - 5) * 2)
-	local var_293_6 = 140
-
-	imgui.PushFont(fonts[24])
-	imgui.CustomInvisibleChild("search_items3##", imgui.ImVec2((var_293_5 + 1) / 2, var_293_6), false)
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_293_8 = imgui.ImVec2(cursorScreenPos.x + 5, cursorScreenPos.y + 6)
-
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 80, imgui.GetCursorPos().y + 5))
-	imgui.TextColoredRGB(u8:decode("{cccccc} Последний раз обновляли список лавок: ") .. os.time() - timers[16] .. u8:decode(" сек назад."))
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 8, imgui.GetCursorPos().y))
-	imgui.TextColoredRGB(u8:decode("{cccccc}Всего товаров найдено в лавках: ") .. marketState.Market_ForBuy + marketState.Market_ForSell .. u8:decode(" шт."))
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 3)
-	imgui.CustomSeparator(imgui.GetWindowWidth())
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 8, imgui.GetCursorPos().y))
-	imgui.TextColoredRGB(u8:decode("{cccccc}Сортировка отображения предметов: "))
-	imgui.SameLine()
-	imgui.PushFont(fonts[18])
-
-	imgui.GetStyle().FrameBorderSize = 0
-
-	if imgui.CustomOnlyBorderButton(marketState.sort_mode_Marketplace == 1 and fa("ARROW_UP_SHORT_WIDE") or marketState.sort_mode_Marketplace == 2 and fa("ARROW_DOWN_WIDE_SHORT") or fa("EQUALS"), imgui.ImVec2(30, 27)) then
-		marketState.sort_mode_Marketplace = marketState.sort_mode_Marketplace == 0 and 1 or marketState.sort_mode_Marketplace == 1 and 2 or 0
-		ini.cfg.sort_mode_Marketplace = marketState.sort_mode_Marketplace
-
-		deAFKMessage(tostring(ini.cfg.sort_mode_Marketplace))
-		save_all()
-
-		marketState.searchStorage.marketPlaceBuy[2] = ""
-		marketState.searchStorage.marketPlaceSell[2] = ""
-	end
-
-	imgui.Hint("sort_mode_Marketplace", marketState.sort_mode_Marketplace == 0 and "Сейчас включена сортировка по умолчанию.\nЭто означает что товары разбросаны в хаотично." or marketState.sort_mode_Marketplace == 1 and "Сейчас включена сортировка по цене. (По возрастанию)\nВ вверху списка будет отображаться наименьшая цена в лавках." or "Сейчас включен режим от большей цены к меньшему. (По убыванию)\nЭто означает что в самом верху самые дорогие товары.", false)
-
-	imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-	imgui.PopFont()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 2)
-	imgui.CustomSeparator(imgui.GetWindowWidth())
-	imgui.SetCursorPos(imgui.ImVec2(imgui.GetWindowWidth() / 45 + 1, imgui.GetCursorPos().y - 25))
-	imgui.TextColoredRGB(u8:decode("{cccccc}Предметов на скупке: ") .. marketState.Market_ForBuy)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-	imgui.TextColoredRGB(u8:decode("{cccccc}Предметов на Продаже: ") .. marketState.Market_ForSell)
-	imgui.GetWindowDrawList():AddRect(imgui.ImVec2(cursorScreenPos.x + 1, cursorScreenPos.y), imgui.ImVec2(cursorScreenPos.x + var_293_5 / 2, cursorScreenPos.y + var_293_6), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 1.8)
-	imgui.EndCustomInvisibleChild()
-	imgui.PopFont()
-
-	if json_vlad ~= nil and #json_vlad ~= 0 then
-		searchFunc(frame)
-	end
-	imgui.EndCustomInvisibleChild()
-end
-
-function searchFunc(query)
-	local searchListAvail = imgui.GetContentRegionAvail()
-	local var_294_0 = searchListAvail.x * 2
-	local var_294_1 = searchListAvail.y
-
-	imgui.SetCursorPosX(imgui.GetCursorPos().x - 0.3)
-	imgui.CustomInvisibleChild("window_marketPlace_lavkas", imgui.ImVec2((var_294_0 + 1) / 2, var_294_1), false, imgui.WindowFlags.NoScrollWithMouse)
-
-	local cursorScreenPos = imgui.GetCursorScreenPos()
-	local var_294_3 = imgui.ImVec2(cursorScreenPos.x + 4, cursorScreenPos.y + 6)
-	local var_294_4 = 0
-
-	local searchColumnWidth = (imgui.GetContentRegionAvail().x - 5) / 2
-	imgui.SetCursorPosX(imgui.GetCursorPos().x + 1.5)
-	imgui.CustomInvisibleChild("LEFTLAVKA", imgui.ImVec2(searchColumnWidth, var_294_1), true, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-
-	local var_294_5 = string.nlower(u8:decode(ffi.string(marketState.SearchMarket)))
-	local var_294_6 = #ffi.string(marketState.SearchMarket)
-
-	if timers[42][1] ~= var_294_6 then
-		timers[42][1] = var_294_6
-		timers[42][2] = os.clock()
-	end
-
-	local var_294_7 = os.clock() - timers[42][2] >= 0.2
-
-	if var_294_7 and marketState.searchStorage.marketPlaceBuy[2] ~= #ffi.string(marketState.SearchMarket) then
-		marketState.searchStorage.marketPlaceBuy = {
-			{},
-			#ffi.string(marketState.SearchMarket)
-		}
-
-		for marketIndex, marketData in pairs(download_marketplace) do
-			for itemIndex, itemName in pairs(marketData.items_buy) do
-				local var_294_8 = u8:decode(itemName)
-
-				if string.nlower(var_294_8):find(var_294_5, 1, true) then
-					table.insert(marketState.searchStorage.marketPlaceBuy[1], {
-						name = var_294_8,
-						count_buy = marketData.count_buy[itemIndex],
-						price_buy = marketData.price_buy[itemIndex],
-						LavkaUid = marketData.LavkaUid,
-						username = marketData.username,
-						serverId = marketData.serverId,
-						userStatus = marketData.userStatus
-					})
-				end
-			end
-		end
-
-		marketState.Market_ForBuy = #marketState.searchStorage.marketPlaceBuy[1]
-
-		if marketState.sort_mode_Marketplace ~= 0 then
-			deAFKMessage("sort buy")
-			table.sort(marketState.searchStorage.marketPlaceBuy[1], function(leftItem, rightItem)
-				if marketState.sort_mode_Marketplace == 1 then
-					return leftItem.price_buy < rightItem.price_buy
-				else
-					return leftItem.price_buy > rightItem.price_buy
-				end
-			end)
-		end
-	end
-
-	imgui.Scroller("buyRightLis2t", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-
-	local var_294_9 = marketState.searchStorage.marketPlaceBuy[1]
-	local listClipper = imgui.ImGuiListClipper(#var_294_9)
-
-	listClipper:Begin(#var_294_9)
-
-	while listClipper:Step() do
-		for visibleItemIndex = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-			imgui.PushFont(fonts[24])
-
-			if tostring(var_294_9[visibleItemIndex + 1]) == "nil" then
-			else
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 3)
-				imgui.CustomSeparator(imgui.GetWindowWidth())
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim("[" .. var_294_9[visibleItemIndex + 1].LavkaUid .. "] ", 35))
-				imgui.Hint("helps" .. visibleItemIndex, serverIdByAddress[ip] == var_294_9[visibleItemIndex + 1].serverId and "Товар: " .. u8(var_294_9[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_9[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_9[visibleItemIndex + 1].username) .. "\nНажмите ЛКМ что бы отметить на карте.\nСервер: " .. var_294_9[visibleItemIndex + 1].serverId or "Товар: " .. u8(var_294_9[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_9[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_9[visibleItemIndex + 1].username) .. "\nСервер: " .. var_294_9[visibleItemIndex + 1].serverId, false)
-				imgui.SameLine()
-
-				if imgui.IsItemClicked() and serverIdByAddress[ip] == var_294_9[visibleItemIndex + 1].serverId then
-					deAFKMessage(debug.getinfo(1, "l"), "+ " .. visibleItemIndex)
-					SendToServer("/findilavka " .. var_294_9[visibleItemIndex + 1].LavkaUid)
-				end
-
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 5)
-
-				local var_294_11 = false
-
-				if var_294_9[visibleItemIndex + 1].userStatus > 1 then
-					var_294_11 = imgui.TextColoredRGB(rainbowText(changeExtraSim(var_294_9[visibleItemIndex + 1].name, 35), 1))
-				else
-					imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(var_294_9[visibleItemIndex + 1].name, 35))
-				end
-
-				imgui.Hint("helps" .. visibleItemIndex + 1000, serverIdByAddress[ip] == var_294_9[visibleItemIndex + 1].serverId and "Товар: " .. u8(var_294_9[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_9[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_9[visibleItemIndex + 1].username) .. "\nНажмите ЛКМ что бы отметить на карте.\nСервер: " .. var_294_9[visibleItemIndex + 1].serverId or "Товар: " .. u8(var_294_9[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_9[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_9[visibleItemIndex + 1].username) .. "\nСервер: " .. var_294_9[visibleItemIndex + 1].serverId, false, nil, var_294_11)
-
-				if (var_294_11 or imgui.IsItemHovered()) and imgui.IsMouseClicked(0) and serverIdByAddress[ip] == var_294_9[visibleItemIndex + 1].serverId then
-					deAFKMessage(debug.getinfo(1, "l"), "+ " .. visibleItemIndex)
-					SendToServer("/findilavka " .. var_294_9[visibleItemIndex + 1].LavkaUid)
-				end
-
-				if var_294_11 or imgui.IsItemHovered() then
-					imgui.BeginTooltip()
-					imgui.PushFont(uiFonts[17])
-					imgui.Text(u8(var_294_9[visibleItemIndex + 1].name):gsub("%(%+%d+%)", ""))
-					show_prices(var_294_9[visibleItemIndex + 1].name:gsub("%(%+%d+%)", ""), visibleItemIndex)
-					imgui.PopFont()
-					imgui.EndTooltip()
-				end
-
-				imgui.PopFont()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.SetNextItemWidth(110)
-				imgui.PushFont(fonts[18])
-
-				imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(var_294_9[visibleItemIndex + 1].price_buy))) .. "##" .. visibleItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text((var_294_9[visibleItemIndex + 1].serverId == 0 and " VC" or " SA") .. "$")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-				imgui.SameLine()
-				imgui.PushFont(fonts[18])
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(var_294_9[visibleItemIndex + 1].count_buy))) .. "##" .. visibleItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text(" шт.")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-					imgui.GetStyle().FrameBorderSize = 0
-				end
-			end
-	end
-
-	listClipper:End()
-	imgui.EndCustomInvisibleChild()
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetCursorPos().x - 5)
-	imgui.CustomInvisibleChild("LEFTLAVKA2", imgui.ImVec2(searchColumnWidth, var_294_1), true, imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoScrollbar)
-
-	local var_294_12 = {}
-
-	if var_294_7 and marketState.searchStorage.marketPlaceSell[2] ~= #ffi.string(marketState.SearchMarket) then
-		marketState.searchStorage.marketPlaceSell = {
-			{},
-			#ffi.string(marketState.SearchMarket)
-		}
-
-		for marketIndex, marketData in pairs(download_marketplace) do
-			for itemIndex, itemName in pairs(marketData.items_sell) do
-				local var_294_13 = u8:decode(itemName)
-
-				if string.nlower(var_294_13):find(var_294_5, 1, true) then
-					table.insert(marketState.searchStorage.marketPlaceSell[1], {
-						name = var_294_13,
-						count_sell = marketData.count_sell[itemIndex],
-						price_sell = marketData.price_sell[itemIndex],
-						LavkaUid = marketData.LavkaUid,
-						username = marketData.username,
-						serverId = marketData.serverId,
-						userStatus = marketData.userStatus
-					})
-				end
-			end
-		end
-
-		marketState.Market_ForSell = #marketState.searchStorage.marketPlaceSell[1]
-
-		if marketState.sort_mode_Marketplace ~= 0 then
-			table.sort(marketState.searchStorage.marketPlaceSell[1], function(leftItem, rightItem)
-				if marketState.sort_mode_Marketplace == 1 then
-					return leftItem.price_sell < rightItem.price_sell
-				else
-					return leftItem.price_sell > rightItem.price_sell
-				end
-			end)
-		end
-	end
-
-	imgui.Scroller("RIGHTLAVO4ka", 100, 600, imgui.HoveredFlags.AllowWhenBlockedByActiveItem + imgui.WindowFlags.NoScrollbar)
-	imgui.SetCursorPosY(imgui.GetCursorPos().y + 3)
-
-	local var_294_14 = marketState.searchStorage.marketPlaceSell[1]
-	local listClipper = imgui.ImGuiListClipper(#var_294_14)
-
-	listClipper:Begin(#var_294_14)
-
-	while listClipper:Step() do
-		for visibleItemIndex = listClipper.DisplayStart, listClipper.DisplayEnd - 1 do
-			imgui.PushFont(fonts[24])
-
-			if tostring(var_294_14[visibleItemIndex + 1]) == "nil" then
-			else
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 3)
-				imgui.CustomSeparator(imgui.GetWindowWidth())
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim("[" .. var_294_14[visibleItemIndex + 1].LavkaUid .. "] ", 35))
-				imgui.Hint("help" .. visibleItemIndex, serverIdByAddress[ip] == var_294_14[visibleItemIndex + 1].serverId and "Товар: " .. u8(var_294_14[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_14[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_14[visibleItemIndex + 1].username) .. "\nНажмите ЛКМ что бы отметить на карте.\nСервер: " .. var_294_14[visibleItemIndex + 1].serverId or "Товар: " .. u8(var_294_14[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_14[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_14[visibleItemIndex + 1].username) .. "\nСервер: " .. var_294_14[visibleItemIndex + 1].serverId, false)
-				imgui.SameLine()
-
-				if imgui.IsItemClicked() and serverIdByAddress[ip] == var_294_14[visibleItemIndex + 1].serverId then
-					deAFKMessage(debug.getinfo(1, "l"), "+ " .. visibleItemIndex)
-					SendToServer("/findilavka " .. var_294_14[visibleItemIndex + 1].LavkaUid)
-				end
-
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 5)
-
-				local var_294_16 = #var_294_14[visibleItemIndex + 1].name > 23 and u8(var_294_14[visibleItemIndex + 1].name):match("%(%+%d+%)") or ""
-				local var_294_17 = false
-
-				if var_294_14[visibleItemIndex + 1].userStatus > 1 then
-					var_294_17 = imgui.TextColoredRGB(rainbowText(tostring(changeExtraSim(var_294_14[visibleItemIndex + 1].name, var_294_16 == "" and 35 or 23) .. (var_294_16 or "")), 1))
-				else
-					imgui.TextColoredRGB(ImVec3ToHEX(menuThemeConfig.color_text_market) .. changeExtraSim(var_294_14[visibleItemIndex + 1].name, var_294_16 == "" and 35 or 23) .. (var_294_16 or ""))
-				end
-
-				imgui.Hint("help" .. visibleItemIndex + 1000, serverIdByAddress[ip] == var_294_14[visibleItemIndex + 1].serverId and "Товар: " .. u8(var_294_14[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_14[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_14[visibleItemIndex + 1].username) .. "\nНажмите ЛКМ что бы отметить на карте.\nСервер: " .. var_294_14[visibleItemIndex + 1].serverId or "Товар: " .. u8(var_294_14[visibleItemIndex + 1].name) .. "\nЛавка номер " .. var_294_14[visibleItemIndex + 1].LavkaUid .. "\nВладелец: " .. u8(var_294_14[visibleItemIndex + 1].username) .. "\nСервер: " .. var_294_14[visibleItemIndex + 1].serverId, false, nil, var_294_17)
-
-				if (var_294_17 or imgui.IsItemHovered()) and imgui.IsMouseClicked(0) and serverIdByAddress[ip] == var_294_14[visibleItemIndex + 1].serverId then
-					deAFKMessage(debug.getinfo(1, "l"), "+ " .. visibleItemIndex)
-					SendToServer("/findilavka " .. var_294_14[visibleItemIndex + 1].LavkaUid)
-				end
-
-				if var_294_17 or imgui.IsItemHovered() then
-					imgui.BeginTooltip()
-					imgui.PushFont(uiFonts[17])
-					imgui.Text(u8(var_294_14[visibleItemIndex + 1].name):gsub("%(%+%d+%)", ""))
-					show_prices(var_294_14[visibleItemIndex + 1].name:gsub("%(%+%d+%)", ""), visibleItemIndex)
-					imgui.PopFont()
-					imgui.EndTooltip()
-				end
-
-				imgui.PopFont()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x + 10)
-				imgui.SetNextItemWidth(110)
-				imgui.PushFont(fonts[18])
-
-				imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(var_294_14[visibleItemIndex + 1].price_sell))) .. "##" .. visibleItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text((var_294_14[visibleItemIndex + 1].serverId == 0 and " VC" or " SA") .. "$")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-				imgui.SameLine()
-				imgui.PushFont(fonts[18])
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-				if imgui.Button(moneySeparator(ffi.string(tostring(var_294_14[visibleItemIndex + 1].count_sell))) .. "##" .. visibleItemIndex, imgui.ImVec2(viceCityMode and 110 or 110, 28)) then
-				end
-
-				imgui.SameLine()
-				imgui.SetCursorPosX(imgui.GetCursorPos().x - 3)
-				imgui.PopFont()
-				imgui.SetCursorPosY(imgui.GetCursorPos().y - 4)
-				imgui.Text(" шт.")
-				imgui.SetCursorPosY(imgui.GetCursorPos().y + 4)
-
-				imgui.GetStyle().FrameBorderSize = 0
-			end
-		end
-	end
-
-	listClipper:End()
-	imgui.EndCustomInvisibleChild()
-	imgui.GetWindowDrawList():AddRect(imgui.ImVec2(cursorScreenPos.x + 1, cursorScreenPos.y), imgui.ImVec2(cursorScreenPos.x + var_294_0 / 2, cursorScreenPos.y + var_294_1), imgui.GetColorU32Vec4(imgui.ImVec4(menuThemeConfig.Border[1], menuThemeConfig.Border[2], menuThemeConfig.Border[3], menuThemeConfig.Border[4])), 5, 0, 1.8)
-	imgui.SameLine()
-	imgui.SetCursorPosX(imgui.GetWindowWidth() / 2)
-	imgui.CustomVerticalSeparator(var_294_1)
-	imgui.EndCustomInvisibleChild()
-end
 
 function magiclines(text)
 	if text:sub(-1) ~= "\n" then
@@ -33623,6 +21460,9 @@ function sampev.onServerMessage(color, message)
 
 	if not ARZ_INI_WRITE_LOCKED and marketState.myUidCheck[1] == true and message:match("UID: (%d+)") then
 		local incomingUid = message:match("UID: (%d+)")
+		ARZ_NETWORK_AUTH_RUNTIME.liveUid = incomingUid
+		local _, _, liveName = arzNetworkNameAndUid()
+		ARZ_NETWORK_AUTH_RUNTIME.liveUidIdentity = liveName
 		local savedUid = arzAuthFreezeUid(incomingUid)
 		marketState.myUidCheck = { false, savedUid or incomingUid, os.time() }
 		save_all()
@@ -35029,15 +22869,15 @@ addEventHandler("onSendPacket", function(packetId, bitStream, priority, reliabil
 							deAFKMessage("actionId: " .. type(var_340_8) .. " | " .. tostring(var_340_8))
 
 							if var_340_8 == -2 then
-								openCrr()
-								imgui.SelectMenu(mainMenu, 5, 1)
+        selectedMenuPage = 5
+        arzUiExtensionsOpenHtml("marketplace")
 							elseif var_340_8 == -1 then
 								setLavkaHelperEnabled(not lavkaHelperEnabled[0], "radial", true)
 							elseif var_340_8 == -3 then
 								SendToServer("/trunk -")
 							elseif var_340_8 == -4 then
-								openCrr()
-								imgui.SelectMenu(mainMenu, 3, 1)
+        selectedMenuPage = 3
+        arzOpenSpecialPage("piar")
 
 								marketState.vr_helper.isClicked = true
 
@@ -35757,495 +23597,7 @@ function resetIO()
 	return inputWasReset
 end
 
-TELEGRAM_LAST_ERROR_NOTICE_AT = 0
-TELEGRAM_ORIGINAL_THREADS = {}
-TELEGRAM_SEND_QUEUE = {}
-TELEGRAM_SEND_ACTIVE = false
-TELEGRAM_SHUTTING_DOWN = false
-TELEGRAM_REQUEST_SERIAL = 0
-TELEGRAM_MAX_QUEUE = 50
-TELEGRAM_LAST_RESULT = {
-	ok = nil,
-	host = "",
-	error = "",
-	status = 0,
-	at = 0
-}
-TELEGRAM_OFFICIAL_TIMEOUT = 25
-TELEGRAM_RESERVE_TIMEOUT = 10
 
-function telegramOriginalCleanup()
-	TELEGRAM_SHUTTING_DOWN = true
-	TELEGRAM_SEND_ACTIVE = false
-	TELEGRAM_SEND_QUEUE = {}
-
-	for requestId, requestThread in pairs(TELEGRAM_ORIGINAL_THREADS or {}) do
-		if requestThread ~= nil then
-			-- Never block MoonLoader/AutoReboot while a network worker is stuck in C code.
-			pcall(function()
-				if requestThread.cancel then requestThread:cancel(0) end
-			end)
-		end
-		TELEGRAM_ORIGINAL_THREADS[requestId] = nil
-	end
-end
-
-function telegramOriginalAsyncHttpRequest(method, url, requestOptions, onSuccess, onError, timeoutSeconds)
-	if ARZ_FIRST_BOOTSTRAP_ACTIVE then
-		if type(onError) == "function" then pcall(onError, "first_bootstrap_offline") end
-		return nil, "first_bootstrap_offline"
-	end
-	requestOptions = requestOptions or {}
-	requestOptions.headers = requestOptions.headers or {}
-	requestOptions.headers["Accept-Encoding"] = ini.cfg.bannedByRkn == true and zzlibLoaded == true and "gzip, deflate" or nil
-
-	onSuccess = onSuccess or function() end
-	onError = onError or function() end
-	timeoutSeconds = math.max(3, tonumber(timeoutSeconds) or 25)
-
-	if TELEGRAM_SHUTTING_DOWN then
-		return nil, "script_terminating"
-	end
-
-	if not effilLoaded or effil == nil or type(effil.thread) ~= "function" then
-		return nil, "effil_unavailable"
-	end
-
-	local createOk, requestThread = pcall(function()
-		return effil.thread(function(method, url, requestOptions)
-			local requests = require("requests")
-			local workerEffil = require("effil")
-			local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
-			local requestSucceeded, response = workerPcall(requests.request, method, url, requestOptions)
-
-			if not requestSucceeded then
-				return false, response
-			end
-
-			if type(response) ~= "table" then
-				return false, "invalid_response_object"
-			end
-
-			local isGzipEncoded = response.headers and response.headers["content-encoding"] and response.headers["content-encoding"]:find("gzip")
-			local zzlibAvailable
-			local zzlib
-
-			if isGzipEncoded then
-				zzlibAvailable, zzlib = pcall(require, "zzlib")
-			end
-
-			if not zzlibAvailable and isGzipEncoded then
-				return false, "gzip_without_zzlib"
-			end
-
-			if isGzipEncoded and response.text and type(response.text) == "string" and #response.text > 2 then
-				local decompressedText = response.text
-				local wasDecompressed = false
-
-				if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
-					local unzipOk, unzipResult = pcall(zzlib.gunzip, response.text)
-					if not unzipOk then return false, tostring(unzipResult) end
-					decompressedText = unzipResult
-					wasDecompressed = true
-				end
-
-				if wasDecompressed and decompressedText then
-					response.text = decompressedText
-					response.original_size = #response.text
-					response.decompressed = true
-				end
-			end
-
-			response.json, response.xml = nil
-			return true, response
-		end)(method, url, requestOptions)
-	end)
-	if not createOk or not requestThread then
-		pcall(onError, "effil_start_failed: " .. tostring(requestThread))
-		return nil, tostring(requestThread)
-	end
-
-	TELEGRAM_REQUEST_SERIAL = (tonumber(TELEGRAM_REQUEST_SERIAL) or 0) + 1
-	local requestId = tostring(os.clock()) .. ":tg:" .. tostring(TELEGRAM_REQUEST_SERIAL)
-	TELEGRAM_ORIGINAL_THREADS[requestId] = requestThread
-
-	local function cleanupRequest()
-		TELEGRAM_ORIGINAL_THREADS[requestId] = nil
-	end
-
-	lua_thread.create(function()
-		local startedAt = os.time()
-
-		while true do
-			if TELEGRAM_SHUTTING_DOWN then
-				pcall(function()
-					if requestThread.cancel then requestThread:cancel(0) end
-				end)
-				cleanupRequest()
-				return
-			end
-
-			if startedAt + timeoutSeconds < os.time() then
-				pcall(function()
-					if requestThread.cancel then requestThread:cancel(0) end
-				end)
-				cleanupRequest()
-				pcall(onError, "timeout")
-				return
-			end
-
-			local statusOk, threadStatus, threadError = pcall(function()
-				return requestThread:status()
-			end)
-
-			if not statusOk then
-				cleanupRequest()
-				pcall(onError, tostring(threadStatus))
-				return
-			end
-
-			if threadError then
-				cleanupRequest()
-				pcall(onError, tostring(threadError))
-				return
-			end
-
-			if threadStatus == "completed" then
-				local getOk, requestSucceeded, response = pcall(function()
-					return requestThread:get(0)
-				end)
-				cleanupRequest()
-
-				if getOk and requestSucceeded then
-					pcall(onSuccess, response)
-				else
-					pcall(onError, tostring(getOk and response or requestSucceeded))
-				end
-				return
-			elseif threadStatus == "cancelled" then
-				cleanupRequest()
-				pcall(onError, "cancelled")
-				return
-			elseif threadStatus == "failed" then
-				cleanupRequest()
-				pcall(onError, tostring(threadError or "thread_failed"))
-				return
-			end
-
-			wait(0)
-		end
-	end)
-
-	return requestThread
-end
-
-function telegramUrlEncode(value)
-	value = tostring(value or "")
-	local encoded = string.gsub(value, "([^%w-_ %.~=])", function(character)
-		return string.format("%%%02X", string.byte(character))
-	end)
-	return string.gsub(encoded, " ", "+")
-end
-
-function telegramResponseSucceeded(response)
-	if type(response) ~= "table" then
-		return false, "invalid_response", 0
-	end
-
-	local status = tonumber(response.status_code or response.status or 0) or 0
-	local body = type(response.text) == "string" and response.text or ""
-	local decoded = nil
-
-	if body ~= "" then
-		local decodeOk, decodeResult = pcall(decodeJsonSafe, body)
-		if decodeOk and type(decodeResult) == "table" then
-			decoded = decodeResult
-		end
-	end
-
-	if decoded and decoded.ok == true and (status == 0 or (status >= 200 and status < 300)) then
-		return true, "", status
-	end
-
-	if decoded and decoded.ok == false then
-		return false, tostring(decoded.description or ("telegram_api_error_" .. tostring(status))), status
-	end
-
-	if status < 200 or status >= 300 then
-		return false, "http_" .. tostring(status), status
-	end
-
-	-- Telegram Bot API always returns a JSON object with the boolean field "ok".
-	return false, "invalid_telegram_json", status
-end
-
-function telegramBuildTargets()
-	local targets = {}
-
-	if ini.cfg.telegram_reserve == true then
-		targets[#targets + 1] = {
-			host = "api-telegram.arz.market",
-			timeout = TELEGRAM_RESERVE_TIMEOUT
-		}
-	end
-
-	targets[#targets + 1] = {
-		host = "api.telegram.org",
-		timeout = TELEGRAM_OFFICIAL_TIMEOUT
-	}
-
-	return targets
-end
-
-function telegramCompleteJob(job, ok, host, errorMessage, status)
-	TELEGRAM_SEND_ACTIVE = false
-
-	TELEGRAM_LAST_RESULT.ok = ok == true
-	TELEGRAM_LAST_RESULT.host = tostring(host or "")
-	TELEGRAM_LAST_RESULT.error = tostring(errorMessage or "")
-	TELEGRAM_LAST_RESULT.status = tonumber(status) or 0
-	TELEGRAM_LAST_RESULT.at = os.time()
-
-	if ok then
-		print("[ArzMarket][Telegram] sent via " .. tostring(host))
-		if job and job.diagnostic then
-			sendNotify("Telegram: OK (" .. tostring(host) .. ")")
-		end
-	else
-		local message = "[ArzMarket][Telegram] send failed: " .. tostring(errorMessage)
-		print(message)
-
-		if job and job.diagnostic then
-			sendNotify("Telegram error: " .. tostring(errorMessage))
-		end
-	end
-
-	if not TELEGRAM_SHUTTING_DOWN then
-		telegramProcessSendQueue()
-	end
-end
-
-function telegramHandleJobFailure(job, target, errorMessage, status)
-	job.targetIndex = (tonumber(job.targetIndex) or 1) + 1
-
-	if job.targets and job.targets[job.targetIndex] then
-		print(
-			"[ArzMarket][Telegram] " .. tostring(target and target.host or "?")
-			.. " failed (" .. tostring(errorMessage) .. "), fallback -> "
-			.. tostring(job.targets[job.targetIndex].host)
-		)
-		return telegramStartJob(job)
-	end
-
-	return telegramCompleteJob(
-		job,
-		false,
-		target and target.host or "",
-		errorMessage or "request_failed",
-		status or 0
-	)
-end
-
-function telegramStartJob(job)
-	if TELEGRAM_SHUTTING_DOWN then
-		TELEGRAM_SEND_ACTIVE = false
-		return
-	end
-
-	if type(job) ~= "table" or type(job.targets) ~= "table" then
-		return telegramCompleteJob(job, false, "", "invalid_job", 0)
-	end
-
-	job.targetIndex = tonumber(job.targetIndex) or 1
-	local target = job.targets[job.targetIndex]
-	if type(target) ~= "table" or type(target.host) ~= "string" or target.host == "" then
-		return telegramCompleteJob(job, false, "", "invalid_target", 0)
-	end
-
-	-- Keep Telegram request shape identical to the original ArzMarket.
-	-- The original script sends chat_id/text in the query string and uses an empty request body.
-	local url = "https://" .. target.host
-		.. "/bot" .. tostring(job.token)
-		.. "/sendMessage?chat_id=" .. telegramUrlEncode(job.chatId)
-		.. "&text=" .. telegramUrlEncode(job.message)
-
-	local requestThread, requestError = telegramOriginalAsyncHttpRequest(
-		"POST",
-		url,
-		{},
-		function(response)
-			local ok, errorMessage, status = telegramResponseSucceeded(response)
-			if ok then
-				return telegramCompleteJob(job, true, target.host, "", status)
-			end
-			return telegramHandleJobFailure(job, target, errorMessage, status)
-		end,
-		function(errorMessage)
-			return telegramHandleJobFailure(job, target, tostring(errorMessage or "request_failed"), 0)
-		end,
-		target.timeout
-	)
-
-	if requestThread == nil then
-		return telegramHandleJobFailure(job, target, requestError or "request_not_started", 0)
-	end
-
-	return requestThread
-end
-
-function telegramProcessSendQueue()
-	if TELEGRAM_SHUTTING_DOWN or TELEGRAM_SEND_ACTIVE then
-		return
-	end
-
-	if type(TELEGRAM_SEND_QUEUE) ~= "table" or #TELEGRAM_SEND_QUEUE == 0 then
-		return
-	end
-
-	local job = table.remove(TELEGRAM_SEND_QUEUE, 1)
-	if type(job) ~= "table" then
-		return telegramProcessSendQueue()
-	end
-
-	TELEGRAM_SEND_ACTIVE = true
-	return telegramStartJob(job)
-end
-
-function telegramWorkingOriginalAsyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveSelfInfo)
-	if ARZ_FIRST_BOOTSTRAP_ACTIVE then
-		if type(onError) == "function" then pcall(onError, "first_bootstrap_offline") end
-		return nil, "first_bootstrap_offline"
-	end
-	marketState.asyncRequestSerial = (tonumber(marketState.asyncRequestSerial) or 0) + 1
-	local requestId = tostring(os.clock()) .. ":tg:" .. tostring(marketState.asyncRequestSerial)
-	marketState.asyncData[requestId] = os.time()
-	requestOptions = requestOptions or {}
-	requestOptions.headers = requestOptions.headers or {}
-	requestOptions.headers["Accept-Encoding"] = ini.cfg.bannedByRkn == true and zzlibLoaded == true and "gzip, deflate" or nil
-	onSuccess = type(onSuccess) == "function" and onSuccess or function() end
-	onError = type(onError) == "function" and onError or function() end
-
-	local createOk, requestThread = pcall(function()
-		return effil.thread(function(method, url, requestOptions)
-			local requests = require("requests")
-			local workerEffil = require("effil")
-			local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
-			local requestSucceeded, response = workerPcall(requests.request, method, url, requestOptions)
-			if not requestSucceeded then return false, response end
-			if type(response) ~= "table" then return false, "invalid_response" end
-
-			local isGzipEncoded = response.headers
-				and response.headers["content-encoding"]
-				and response.headers["content-encoding"]:find("gzip")
-			local zzlibAvailable, zzlib
-			if isGzipEncoded then zzlibAvailable, zzlib = pcall(require, "zzlib") end
-			if not zzlibAvailable and isGzipEncoded then return false, response end
-			if isGzipEncoded and type(response.text) == "string" and #response.text > 2 then
-				local decompressedText, wasDecompressed
-				if response.text:byte(1) == 31 and response.text:byte(2) == 139 then
-					local unzipOk, unzipResult = pcall(zzlib.gunzip, response.text)
-					decompressedText, wasDecompressed = unzipOk and unzipResult or nil, unzipOk
-				else
-					decompressedText, wasDecompressed = response.text, false
-				end
-				if wasDecompressed and decompressedText then
-					response.text = decompressedText
-					response.original_size = #decompressedText
-					response.decompressed = true
-				end
-			end
-			response.json, response.xml = nil, nil
-			return true, response
-		end)(method, url, requestOptions)
-	end)
-
-	if not createOk or not requestThread then
-		marketState.asyncData[requestId] = nil
-		lua_thread.create(function()
-			wait(0)
-			pcall(onError, "effil_start_failed: " .. tostring(requestThread))
-		end)
-		return nil, tostring(requestThread)
-	end
-
-	lua_thread.create(function(currentRequestId)
-		while marketState.asyncData[currentRequestId] ~= nil do
-			local statusOk, threadStatus, threadError = pcall(function() return requestThread:status() end)
-			if not statusOk then
-				marketState.asyncData[currentRequestId] = nil
-				pcall(onError, "effil_status_failed: " .. tostring(threadStatus))
-				return
-			end
-
-			local requestStartedAt = marketState.asyncData[currentRequestId]
-			if requestStartedAt == nil then return end
-			if requestStartedAt + 45 < os.time() then
-				pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
-				marketState.asyncData[currentRequestId] = nil
-				pcall(onError, "timeout")
-				return
-			end
-
-			if threadStatus == "completed" then
-				local getOk, requestSucceeded, response = pcall(function() return requestThread:get(0) end)
-				marketState.asyncData[currentRequestId] = nil
-				if not getOk then pcall(onError, "effil_get_failed: " .. tostring(requestSucceeded)); return end
-				if requestSucceeded then
-					if saveSelfInfo == 1 and type(response) == "table" and type(response.text) == "string"
-						and response.text:find("username") and response.text:find("exp") and response.text:find("osTime") then
-						pcall(function()
-							local selfInfoFile = io.open("moonloader/ArzMarket/UsersInfo/info_users_SelfInfo.json", "w")
-							if selfInfoFile then selfInfoFile:write(response.text); selfInfoFile:close() end
-						end)
-					end
-					pcall(onSuccess, response)
-				else
-					pcall(onError, response)
-				end
-				return
-			elseif threadStatus == "cancelled" then
-				marketState.asyncData[currentRequestId] = nil
-				pcall(onError, "cancelled")
-				return
-			elseif threadStatus == "failed" or threadError then
-				marketState.asyncData[currentRequestId] = nil
-				pcall(onError, threadError or "effil_failed")
-				return
-			end
-			wait(0)
-		end
-	end, requestId)
-	return requestId
-end
-
-function sendTelegramNotification(message)
-	local utf8Message = u8(message)
-
-	if telegramNotifyEnabled[0] == false then
-		return
-	end
-
-	local plainMessage = utf8Message:gsub("{......}", "")
-	local urlEncodedMessage = string.gsub(plainMessage, "([^%w-_ %.~=])", function(character)
-		return string.format("%%%02X", string.byte(character))
-	end)
-	local telegramMessage = string.gsub(urlEncodedMessage, " ", "+")
-
-	telegramWorkingOriginalAsyncHttpRequest(
-		"POST",
-		"https://"
-			.. (ini.cfg.telegram_reserve and "api-telegram.arz.market" or "api.telegram.org")
-			.. "/bot"
-			.. ffi.string(telegramUi.token)
-			.. "/sendMessage?chat_id="
-			.. ffi.string(telegramUi.chat_id)
-			.. "&text="
-			.. telegramMessage
-	)
-end
-
-
--- ============================================================
 -- ArzMarket first-run component bootstrap.
 -- The loader downloads only the main ArzMarket Lua file.
 -- This bootstrap installs every required runtime component before
@@ -36257,12 +23609,14 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
-ARZ_COMPONENTS.bootstrap.expected_bundle_version = 287
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 301
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"
 ARZ_COMPONENTS.bootstrap.backup_root = getWorkingDirectory() .. "\\ArzMarket\\.component_backup"
 ARZ_COMPONENTS.bootstrap.manifest_download_path = getWorkingDirectory() .. "\\ArzMarket\\.components_manifest.download"
+ARZ_COMPONENTS.bootstrap.packaged_manifest_path = getWorkingDirectory() .. "\\components_manifest.json"
+ARZ_COMPONENTS.bootstrap.trusted_manifest_path = getWorkingDirectory() .. "\\ArzMarket\\component_manifest_trusted.json"
 ARZ_COMPONENTS.bootstrap.required_local = {
 	"ArzMarket/html/assets/arizona-cactus.webp",
 	"ArzMarket/html/assets/arizona-logo.webp",
@@ -36310,6 +23664,7 @@ ARZ_COMPONENTS.bootstrap.required_local = {
 	"ArzMarket/html/css/logs-v37-buy-parity.css",
 	"ArzMarket/html/css/marketplace-v47.css",
 	"ArzMarket/html/css/minimal-mode-v69.css",
+	"ArzMarket/html/css/minimal-layout-fix-v271.css",
 	"ArzMarket/html/css/mods-catalog-v250.css",
 	"ArzMarket/html/css/mods-v55.css",
 	"ArzMarket/html/css/number-input-no-spinners-v201.css",
@@ -36351,9 +23706,14 @@ ARZ_COMPONENTS.bootstrap.required_local = {
 	"modules/ArzMarketQuant/baron_assistant.lua",
 	"modules/ArzMarketQuant/baron_onboarding.lua",
 	"modules/ArzMarketQuant/baron_tutorial_html.lua",
-	"modules/ArzMarketQuant/baron_tutorial_lua.lua",
 	"modules/ArzMarketQuant/buyroute_core.lua",
 	"modules/ArzMarketQuant/storage_core.lua",
+	"modules/ArzMarketQuant/trade_filters.lua",
+	"modules/ArzMarketQuant/mod_runtime.lua",
+	"modules/ArzMarketQuant/trade_automation.lua",
+	"modules/ArzMarketQuant/telegram_runtime.lua",
+	"modules/ArzMarketQuant/theme_palette.lua",
+	"modules/ArzMarketQuant/market_analysis.lua",
 	"modules/arz_html_ui.lua",
 	"modules/modules_manifest.json",
 }
@@ -36451,15 +23811,16 @@ function arzComponentsDownloadFile(url, path, timeoutSeconds)
 		return false, "destination_directory_unavailable"
 	end
 
-	pcall(os.remove, path)
-	if doesFileExist(path) then
-		return false, "stale_download_locked"
-	end
-
-	local finished, failed = false, false
+	local workPath = arzNativeDownloadAttemptPath(path, "component")
+	pcall(os.remove, workPath)
+	local finished, failed, active = false, false, true
 	local downloadStatus = require("moonloader").download_status
 	local downloader = ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD or downloadUrlToFile
-	local startedOk, downloadId = pcall(downloader, arzComponentsCacheBustUrl(url), path, function(_, status)
+	local startedOk, downloadId = pcall(downloader, arzComponentsCacheBustUrl(url), workPath, function(_, status)
+		if not active then
+			if status == downloadStatus.STATUSEX_ENDDOWNLOAD or (tonumber(status) and tonumber(status) < 0) then pcall(os.remove, workPath) end
+			return
+		end
 		if status == downloadStatus.STATUSEX_ENDDOWNLOAD then
 			finished = true
 		elseif tonumber(status) and tonumber(status) < 0 then
@@ -36469,26 +23830,33 @@ function arzComponentsDownloadFile(url, path, timeoutSeconds)
 	end)
 
 	if not startedOk or downloadId == nil or downloadId == -1 then
-		pcall(os.remove, path)
+		active = false
+		pcall(os.remove, workPath)
 		return false, "download_not_started"
 	end
 
 	local startedAt = os.time()
 	local timeout = tonumber(timeoutSeconds) or 30
-	while not finished and os.time() <= startedAt + timeout do
-		wait(25)
-	end
+	while not finished and os.time() <= startedAt + timeout do wait(25) end
 	if not finished then
-		pcall(os.remove, path)
+		active = false
 		return false, "download_timeout"
 	end
 
 	wait(150)
-	if failed or not doesFileExist(path) or arzComponentsFileSize(path) <= 0 then
-		pcall(os.remove, path)
+	if failed or not doesFileExist(workPath) or arzComponentsFileSize(workPath) <= 0 then
+		active = false
+		pcall(os.remove, workPath)
 		return false, "download_failed"
 	end
 
+	active = false
+	pcall(os.remove, path)
+	local renamed, renameError = os.rename(workPath, path)
+	if not renamed then
+		pcall(os.remove, workPath)
+		return false, "download_finalize_failed:" .. tostring(renameError)
+	end
 	return true
 end
 
@@ -36578,20 +23946,83 @@ function arzComponentsValidateFile(path, entry)
 	return true
 end
 
-function arzComponentsValidateLocalRequired()
+function arzComponentsReadManifestFile(path)
+	if not path or not doesFileExist(path) then return nil, "manifest_missing" end
+	local file = io.open(path, "rb")
+	local raw = file and file:read("*a") or nil
+	if file then file:close() end
+	local ok, manifest = pcall(decodeJsonSafe, raw)
+	if not ok or type(manifest) ~= "table" then return nil, "manifest_invalid_json" end
+	if tonumber(manifest.manifest_version) ~= 1 then return nil, "manifest_version_unsupported" end
+	if manifest.bundle_version == nil or type(manifest.files) ~= "table" or #manifest.files == 0 then return nil, "manifest_invalid_structure" end
+
+	local seen = {}
+	for index, entry in ipairs(manifest.files) do
+		if type(entry) ~= "table" then return nil, "manifest_entry_invalid:" .. tostring(index) end
+		local normalized = arzComponentsNormalizeRelativePath(entry.path)
+		if not normalized then return nil, "manifest_path_invalid:" .. tostring(entry.path) end
+		if seen[normalized] then return nil, "manifest_path_duplicate:" .. normalized end
+		seen[normalized] = entry
+		entry.path = normalized
+	end
+	for _, requiredPath in ipairs(ARZ_COMPONENTS.bootstrap.required_local or {}) do
+		if not seen[requiredPath] then return nil, "manifest_required_path_missing:" .. tostring(requiredPath) end
+	end
+	manifest._entry_by_path = seen
+	return manifest
+end
+
+function arzComponentsWriteTrustedManifest(manifest)
+	if type(manifest) ~= "table" then return false end
+	local clean = {
+		manifest_version = manifest.manifest_version,
+		bundle_version = manifest.bundle_version,
+		base_url = manifest.base_url,
+		files = manifest.files,
+		remove = manifest.remove,
+	}
+	if not arzComponentsEnsureParentDirectory(ARZ_COMPONENTS.bootstrap.trusted_manifest_path) then return false end
+	return writeJsonFile(clean, ARZ_COMPONENTS.bootstrap.trusted_manifest_path) == true
+end
+
+function arzComponentsValidateLocalAgainstManifest(manifest)
+	if type(manifest) ~= "table" then return false, "manifest_unavailable" end
+	local entries = manifest._entry_by_path or {}
 	for _, relativePath in ipairs(ARZ_COMPONENTS.bootstrap.required_local or {}) do
 		local targetPath = arzComponentsAbsolutePath(relativePath)
-		if not targetPath or not doesFileExist(targetPath) or arzComponentsFileSize(targetPath) <= 0 then
+		local entry = entries[relativePath]
+		if not targetPath or not entry or not doesFileExist(targetPath) then
 			return false, "missing_local_component:" .. tostring(relativePath)
 		end
-		if tostring(relativePath):lower():match("%.lua$") then
-			local valid, validationError = arzComponentsValidateFile(targetPath, { path = relativePath })
-			if not valid then
-				return false, "invalid_local_component:" .. tostring(relativePath) .. ":" .. tostring(validationError)
-			end
+		local valid, validationError = arzComponentsValidateFile(targetPath, entry)
+		if not valid then
+			return false, "invalid_local_component:" .. tostring(relativePath) .. ":" .. tostring(validationError)
 		end
 	end
 	return true
+end
+
+function arzComponentsValidateLocalRequired()
+	local errors = {}
+	local trusted, trustedError = arzComponentsReadManifestFile(ARZ_COMPONENTS.bootstrap.trusted_manifest_path)
+	if trusted then
+		local valid, validationError = arzComponentsValidateLocalAgainstManifest(trusted)
+		if valid then return true, "trusted_cache" end
+		errors[#errors + 1] = "trusted_cache:" .. tostring(validationError)
+	else
+		errors[#errors + 1] = "trusted_cache:" .. tostring(trustedError or "manifest_missing")
+	end
+
+	local packaged, packagedError = arzComponentsReadManifestFile(ARZ_COMPONENTS.bootstrap.packaged_manifest_path)
+	if packaged then
+		local valid, validationError = arzComponentsValidateLocalAgainstManifest(packaged)
+		if valid then return true, "packaged" end
+		errors[#errors + 1] = "packaged:" .. tostring(validationError)
+	else
+		errors[#errors + 1] = "packaged:" .. tostring(packagedError or "manifest_missing")
+	end
+
+	return false, "trusted_local_validation_failed:" .. table.concat(errors, ";")
 end
 
 function arzComponentsReadState()
@@ -36905,6 +24336,7 @@ function arzComponentsBootstrapAll()
 	end
 	if tostring(localBundleVersion or "") == tostring(manifest.bundle_version)
 		and arzComponentsManifestFilesReady(manifest) then
+		pcall(arzComponentsWriteTrustedManifest, manifest)
 		ARZ_COMPONENTS.bootstrap.last_status = "up_to_date"
 		return true
 	end
@@ -36939,6 +24371,9 @@ function arzComponentsBootstrapAll()
 
 	if not arzComponentsWriteState(manifest.bundle_version) then
 		print("[ArzMarket][Bootstrap] warning: component_state.json could not be saved")
+	end
+	if not arzComponentsWriteTrustedManifest(manifest) then
+		print("[ArzMarket][Bootstrap] warning: trusted component manifest could not be saved")
 	end
 
 	ARZ_COMPONENTS.bootstrap.last_status = "ready"
@@ -36984,15 +24419,17 @@ function arzModulesDownloadFile(url, path, timeoutSeconds)
 	if ARZ_FIRST_BOOTSTRAP_ACTIVE and not arzFirstBootstrapIsAllowedGithubUrl(url) then
 		return false, "first_bootstrap_url_blocked"
 	end
-	pcall(os.remove, path)
-	if doesFileExist(path) then
-		return false, "stale_download_locked"
-	end
+	local workPath = arzNativeDownloadAttemptPath(path, "module")
+	pcall(os.remove, workPath)
 
-	local finished, failed = false, false
+	local finished, failed, active = false, false, true
 	local downloadStatus = require("moonloader").download_status
 	local downloader = ARZ_SCRIPT_OFFLINE_NATIVE_DOWNLOAD or downloadUrlToFile
-	local startedOk, downloadId = pcall(downloader, url, path, function(_, status)
+	local startedOk, downloadId = pcall(downloader, url, workPath, function(_, status)
+		if not active then
+			if status == downloadStatus.STATUSEX_ENDDOWNLOAD or (tonumber(status) and tonumber(status) < 0) then pcall(os.remove, workPath) end
+			return
+		end
 		if status == downloadStatus.STATUSEX_ENDDOWNLOAD then
 			finished = true
 		elseif tonumber(status) and tonumber(status) < 0 then
@@ -37001,26 +24438,30 @@ function arzModulesDownloadFile(url, path, timeoutSeconds)
 		end
 	end)
 	if not startedOk or downloadId == nil or downloadId == -1 then
-		pcall(os.remove, path)
+		active = false
+		pcall(os.remove, workPath)
 		return false, "download_not_started"
 	end
 
 	local startedAt = os.time()
-	while not finished and os.time() <= startedAt + (tonumber(timeoutSeconds) or 30) do
-		wait(25)
-	end
+	while not finished and os.time() <= startedAt + (tonumber(timeoutSeconds) or 30) do wait(25) end
 	if not finished then
-		pcall(os.remove, path)
+		active = false
 		return false, "download_timeout"
 	end
 
-	-- The final callback can arrive before Windows releases the destination file.
-	-- Leave the callback first, then inspect/rename the file.
 	wait(150)
-
-	if failed or not doesFileExist(path) or arzModulesFileSize(path) <= 0 then
-		pcall(os.remove, path)
+	if failed or not doesFileExist(workPath) or arzModulesFileSize(workPath) <= 0 then
+		active = false
+		pcall(os.remove, workPath)
 		return false, "download_failed"
+	end
+	active = false
+	pcall(os.remove, path)
+	local renamed, renameError = os.rename(workPath, path)
+	if not renamed then
+		pcall(os.remove, workPath)
+		return false, "download_finalize_failed:" .. tostring(renameError)
 	end
 	return true
 end

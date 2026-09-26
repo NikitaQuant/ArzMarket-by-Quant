@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "bundle_version": 287,
+  "bundle_version": 301,
   "base_url": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/",
   "files": [
     {
@@ -131,8 +131,8 @@
     },
     {
       "path": "ArzMarket/html/css/assistant-v78.css",
-      "size": 14664,
-      "crc32": "29ADC2FF",
+      "size": 14008,
+      "crc32": "E4028C8F",
       "required": true
     },
     {
@@ -277,6 +277,12 @@
       "path": "ArzMarket/html/css/minimal-mode-v69.css",
       "size": 13614,
       "crc32": "D15FDDCD",
+      "required": true
+    },
+    {
+      "path": "ArzMarket/html/css/minimal-layout-fix-v271.css",
+      "size": 5482,
+      "crc32": "EECDEDED",
       "required": true
     },
     {
@@ -479,20 +485,20 @@
     },
     {
       "path": "ArzMarket/html/index.html",
-      "size": 38297,
-      "crc32": "91B29032",
+      "size": 38095,
+      "crc32": "15B3D7C7",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/app.js",
-      "size": 259341,
-      "crc32": "6B0FFD45",
+      "size": 260042,
+      "crc32": "286AB018",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/assistant-v78.js",
-      "size": 44687,
-      "crc32": "9DF7608F",
+      "size": 43658,
+      "crc32": "73969FD5",
       "required": true
     },
     {
@@ -509,26 +515,20 @@
     },
     {
       "path": "modules/ArzMarketQuant/baron_assistant.lua",
-      "size": 108330,
-      "crc32": "45A2A1B6",
+      "size": 95591,
+      "crc32": "97FF0D98",
       "required": true
     },
     {
       "path": "modules/ArzMarketQuant/baron_onboarding.lua",
-      "size": 5285,
-      "crc32": "0FD9CC1E",
+      "size": 1119,
+      "crc32": "4B74518D",
       "required": true
     },
     {
       "path": "modules/ArzMarketQuant/baron_tutorial_html.lua",
       "size": 34637,
       "crc32": "83E829BE",
-      "required": true
-    },
-    {
-      "path": "modules/ArzMarketQuant/baron_tutorial_lua.lua",
-      "size": 25314,
-      "crc32": "DCA74434",
       "required": true
     },
     {
@@ -544,9 +544,45 @@
       "required": true
     },
     {
+      "path": "modules/ArzMarketQuant/market_analysis.lua",
+      "size": 35518,
+      "crc32": "37DFFA00",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/mod_runtime.lua",
+      "size": 71918,
+      "crc32": "C3468181",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/telegram_runtime.lua",
+      "size": 15745,
+      "crc32": "DFE13633",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/theme_palette.lua",
+      "size": 20060,
+      "crc32": "004AFF6D",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/trade_automation.lua",
+      "size": 26556,
+      "crc32": "3C7DD95D",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/trade_filters.lua",
+      "size": 39894,
+      "crc32": "86B12C68",
+      "required": true
+    },
+    {
       "path": "modules/arz_html_ui.lua",
-      "size": 152518,
-      "crc32": "2D23DCB0",
+      "size": 162508,
+      "crc32": "E6867F6E",
       "required": true
     },
     {
@@ -558,6 +594,7 @@
   ],
   "remove": [
     "modules/storage_core.lua",
-    "modules/buyroute_core.lua"
+    "modules/buyroute_core.lua",
+    "modules/ArzMarketQuant/baron_tutorial_lua.lua"
   ]
 }

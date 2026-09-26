@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 77,
+    module_version = 79,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -12,6 +12,9 @@ M._lastGameUiInputBlocked = false
 
 local ctx, acef, server, port, itemIcons
 local socketApi = nil
+M._socketBackend = "none"
+M._cefBackend = "none"
+M._cefBackendError = nil
 local running, htmlOpen, suppressAutoOpen = false, false, false
 local previewOpen, previewSignature = false, ""
 local htmlTemporaryMode = false
@@ -53,9 +56,11 @@ local lastServiceAt = 0
 
 local function log(v) print("[ArzMarket HTML] " .. tostring(v)) end
 
--- MoonLoader 0.26.5 uses LuaJIT 2.1. LuaJIT has a fully resumable VM, so
--- yielding across pcall/xpcall is supported. Protect bridge callbacks so one
--- malformed HTML request cannot terminate the whole ArzMarket script.
+-- The HTML bridge runs inside a MoonLoader lua_thread. In this runtime an
+-- xpcall frame around a request that later yields can leave the scheduler
+-- trying to resume a coroutine that is no longer suspended. Keep traceback
+-- formatting for ordinary errors, but use pcall on the yield-capable request
+-- path. xpcall is only used below for init-only code that never yields.
 local function bridgeTraceback(err)
     local message=tostring(err or "unknown_error")
     if debug and type(debug.traceback)=="function" then return debug.traceback(message,2) end
@@ -63,7 +68,7 @@ local function bridgeTraceback(err)
 end
 local function callCore(fn, ...)
     if type(fn) ~= "function" then return false, "function_unavailable" end
-    return xpcall(fn,bridgeTraceback,...)
+    return pcall(fn,...)
 end
 local function nowMs()
     if type(getGameTimer) == "function" then
@@ -1217,7 +1222,8 @@ local function marketplaceState()
         selectedIndex=math.floor(saneNumber(raw.selectedIndex,0) or 0),selectedName=marketplaceText(raw.selectedName or "Все сервера"),
         currentServerId=saneNumber(raw.currentServerId,nil),queue=math.floor(saneNumber(raw.queue,0) or 0),
         shopCount=math.floor(saneNumber(raw.shopCount,#shops) or #shops),sortMode=math.floor(saneNumber(raw.sortMode,0) or 0),
-        lastUpdated=math.floor(saneNumber(raw.lastUpdated,0) or 0),publishing=raw.publishing==true,publishedShopId=saneNumber(raw.publishedShopId,nil)
+        lastUpdated=math.floor(saneNumber(raw.lastUpdated,0) or 0),publishing=raw.publishing==true,publishedShopId=saneNumber(raw.publishedShopId,nil),
+        unbanAvailable=raw.unbanAvailable==true
     }
     local fp=encode(data)
     if fp~=fingerprints.marketplace then fingerprints.marketplace=fp; revision.marketplace=revision.marketplace+1 end
@@ -2267,6 +2273,11 @@ local function doAction(req)
             if snapOk and type(snap)=="table" then snapshot=snap end
         end
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and assistantErr or tostring(result)),assistant=snapshot})
+    elseif action=="marketplace.unban" then
+        if not ctx or type(ctx.requestMarketplaceUnban)~="function" then return jsonResponse(400,{ok=false,error="unban_unavailable"}) end
+        local ok,result,coreErr=callCore(ctx.requestMarketplaceUnban)
+        local success=ok and result~=false
+        return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
     elseif action=="marketplace.refresh" then
         if not ctx or type(ctx.refreshMarketplace)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
         local ok,result,coreErr=callCore(ctx.refreshMarketplace,data.serverIndex)
@@ -2730,9 +2741,14 @@ local function requestWorker(generation)
         if job then
             local entry=job.entry
             if entry and clients[entry] then
-                local okHandle,out=xpcall(handle,bridgeTraceback,job.req)
+                -- Do not use xpcall here. Some request callbacks legitimately
+                -- pass through MoonLoader code that may yield; resuming such a
+                -- request through xpcall caused "cannot resume non-suspended
+                -- coroutine" and killed the whole ArzMarket script.
+                local okHandle,out=pcall(handle,job.req)
                 if not okHandle then
-                    log("request handler failed: "..tostring(out))
+                    local detail=bridgeTraceback(out)
+                    log("request handler failed: "..tostring(detail))
                     out=response(500,"internal_error")
                 elseif type(out)~="string" then
                     out=response(500,"invalid_handler_response")
@@ -2828,24 +2844,209 @@ function __arzHtmlSafeService(generation)
     return false,tostring(err)
 end
 
+M._winsockApiCache = nil
+M._winsockInitError = nil
+
+function __arzHtmlBuildWinsockApi()
+    if M._winsockApiCache then return M._winsockApiCache end
+    if M._winsockInitError then return nil,M._winsockInitError end
+
+    local okFfi,ffiLib=pcall(require,"ffi")
+    if not okFfi or type(ffiLib)~="table" then
+        M._winsockInitError="ffi_unavailable"
+        return nil,M._winsockInitError
+    end
+    local ffi=ffiLib
+    local cdefOk,cdefErr=pcall(ffi.cdef,[=[
+        typedef unsigned int ARZ_SOCKET;
+        typedef struct {
+            short sin_family;
+            unsigned short sin_port;
+            unsigned long sin_addr;
+            char sin_zero[8];
+        } ARZ_SOCKADDR_IN;
+        int WSAStartup(unsigned short wVersionRequested, void *lpWSAData);
+        int WSAGetLastError(void);
+        ARZ_SOCKET socket(int af, int type, int protocol);
+        int closesocket(ARZ_SOCKET s);
+        int bind(ARZ_SOCKET s, const void *name, int namelen);
+        int listen(ARZ_SOCKET s, int backlog);
+        ARZ_SOCKET accept(ARZ_SOCKET s, void *addr, int *addrlen);
+        int ioctlsocket(ARZ_SOCKET s, unsigned long cmd, unsigned long *argp);
+        int recv(ARZ_SOCKET s, char *buf, int len, int flags);
+        int send(ARZ_SOCKET s, const char *buf, int len, int flags);
+        int getsockname(ARZ_SOCKET s, void *name, int *namelen);
+        unsigned long inet_addr(const char *cp);
+        unsigned short htons(unsigned short hostshort);
+        unsigned short ntohs(unsigned short netshort);
+    ]=])
+    if not cdefOk then
+        M._winsockInitError="ffi_cdef_failed:"..tostring(cdefErr)
+        return nil,M._winsockInitError
+    end
+
+    local loadOk,ws=pcall(ffi.load,"ws2_32")
+    if not loadOk or not ws then
+        M._winsockInitError="ws2_32_unavailable"
+        return nil,M._winsockInitError
+    end
+
+    local wsaData=ffi.new("unsigned char[512]")
+    if tonumber(ws.WSAStartup(0x0202,wsaData))~=0 then
+        M._winsockInitError="wsa_startup_failed"
+        return nil,M._winsockInitError
+    end
+
+    local INVALID_SOCKET=4294967295
+    local WSAEWOULDBLOCK=10035
+    local FIONBIO=0x8004667E
+    local AF_INET=2
+    local SOCK_STREAM=1
+    local IPPROTO_TCP=6
+
+    local function socketInvalid(handle)
+        return handle==nil or tonumber(handle)==INVALID_SOCKET
+    end
+    local function lastError()
+        local value=tonumber(ws.WSAGetLastError()) or -1
+        if value==WSAEWOULDBLOCK then return "timeout" end
+        return "winsock_"..tostring(value)
+    end
+    local function setNonBlocking(handle)
+        local arg=ffi.new("unsigned long[1]",1)
+        return tonumber(ws.ioctlsocket(handle,FIONBIO,arg))==0
+    end
+
+    local clientMethods={}
+    clientMethods.__index=clientMethods
+    function clientMethods:settimeout(_)
+        return true
+    end
+    function clientMethods:close()
+        if not self.closed and not socketInvalid(self.handle) then pcall(ws.closesocket,self.handle) end
+        self.closed=true
+        return true
+    end
+    function clientMethods:receive(maxBytes)
+        if self.closed or socketInvalid(self.handle) then return nil,"closed","" end
+        local requested=math.max(1,math.min(65536,tonumber(maxBytes) or 4096))
+        local buffer=ffi.new("char[?]",requested)
+        local received=tonumber(ws.recv(self.handle,buffer,requested,0)) or -1
+        if received>0 then return ffi.string(buffer,received) end
+        if received==0 then return nil,"closed","" end
+        local err=lastError()
+        return nil,err,""
+    end
+    function clientMethods:send(data,startPos)
+        if self.closed or socketInvalid(self.handle) then return nil,"closed",(tonumber(startPos) or 1)-1 end
+        data=tostring(data or "")
+        local pos=math.max(1,math.floor(tonumber(startPos) or 1))
+        if pos>#data then return #data end
+        local chunk=data:sub(pos)
+        local sent=tonumber(ws.send(self.handle,chunk,#chunk,0)) or -1
+        if sent>0 then return pos+sent-1 end
+        if sent==0 then return nil,"closed",pos-1 end
+        local err=lastError()
+        return nil,err,pos-1
+    end
+
+    local serverMethods={}
+    serverMethods.__index=serverMethods
+    function serverMethods:settimeout(_)
+        return true
+    end
+    function serverMethods:close()
+        if not self.closed and not socketInvalid(self.handle) then pcall(ws.closesocket,self.handle) end
+        self.closed=true
+        return true
+    end
+    function serverMethods:getsockname()
+        return "127.0.0.1",self.port
+    end
+    function serverMethods:accept()
+        if self.closed or socketInvalid(self.handle) then return nil,"closed" end
+        local accepted=ws.accept(self.handle,nil,nil)
+        if socketInvalid(accepted) then return nil,lastError() end
+        if not setNonBlocking(accepted) then
+            pcall(ws.closesocket,accepted)
+            return nil,"nonblocking_failed"
+        end
+        return setmetatable({handle=accepted,closed=false},clientMethods)
+    end
+
+    local api={}
+    function api.bind(host,requestedPort)
+        if tostring(host)~="127.0.0.1" then return nil,"host_not_allowed" end
+        local handle=ws.socket(AF_INET,SOCK_STREAM,IPPROTO_TCP)
+        if socketInvalid(handle) then return nil,lastError() end
+        local addr=ffi.new("ARZ_SOCKADDR_IN")
+        addr.sin_family=AF_INET
+        addr.sin_port=ws.htons(math.max(0,math.min(65535,tonumber(requestedPort) or 0)))
+        addr.sin_addr=ws.inet_addr("127.0.0.1")
+        local bindResult=tonumber(ws.bind(handle,addr,ffi.sizeof(addr))) or -1
+        if bindResult~=0 then
+            local err=lastError()
+            pcall(ws.closesocket,handle)
+            return nil,err
+        end
+        if tonumber(ws.listen(handle,16))~=0 then
+            local err=lastError()
+            pcall(ws.closesocket,handle)
+            return nil,err
+        end
+        if not setNonBlocking(handle) then
+            pcall(ws.closesocket,handle)
+            return nil,"nonblocking_failed"
+        end
+        local actual=ffi.new("ARZ_SOCKADDR_IN")
+        local actualLen=ffi.new("int[1]",ffi.sizeof(actual))
+        local portValue=tonumber(requestedPort) or 0
+        if tonumber(ws.getsockname(handle,actual,actualLen))==0 then
+            portValue=tonumber(ws.ntohs(actual.sin_port)) or portValue
+        end
+        return setmetatable({handle=handle,port=portValue,closed=false},serverMethods)
+    end
+
+    M._winsockApiCache=api
+    return api
+end
+
 function __arzHtmlStartServer()
     if running then return true end
-    local ok,socket=pcall(require,"socket")
-    if not ok or type(socket)~="table" then return false,"luasocket_missing" end
+
+    local socket=nil
+    local luaSocketOk,luaSocket=pcall(require,"socket")
+    if luaSocketOk and type(luaSocket)=="table" and type(luaSocket.bind)=="function" then
+        socket=luaSocket
+        M._socketBackend="luasocket"
+    else
+        local fallback,fallbackError=__arzHtmlBuildWinsockApi()
+        if not fallback then
+            M._socketBackend="none"
+            return false,"network_backend_unavailable:luasocket="..tostring(luaSocket)..";winsock="..tostring(fallbackError)
+        end
+        socket=fallback
+        M._socketBackend="winsock_ffi"
+    end
+
     local ports={0}; for p=38460,38489 do ports[#ports+1]=p end
+    local lastBindError=nil
     for _,p in ipairs(ports) do
-        local bindOk,srv=pcall(socket.bind,"127.0.0.1",p)
+        local bindOk,srv,bindError=pcall(socket.bind,"127.0.0.1",p)
         if bindOk and srv then
-            local timeoutOk=pcall(function() srv:settimeout(0) end)
+            local timeoutOk=pcall(function() return srv:settimeout(0) end)
             local nameOk,_,actual=pcall(function() return srv:getsockname() end)
             if timeoutOk and nameOk then
                 server,port=srv,tonumber(actual) or p
                 break
             end
             pcall(function() srv:close() end)
+            lastBindError=bindError or "socket_setup_failed"
+        else
+            lastBindError=bindOk and bindError or srv
         end
     end
-    if not server then return false,"port_unavailable" end
+    if not server then return false,"port_unavailable:"..tostring(lastBindError or "unknown") end
     if not ctx or not ctx.lua_thread or type(ctx.lua_thread.create)~="function" or type(ctx.wait)~="function" then
         server:close(); server=nil; return false,"thread_unavailable"
     end
@@ -2870,9 +3071,10 @@ function __arzHtmlStartServer()
         if server then pcall(function() server:close() end) end
         server,port=nil,nil
         socketApi=nil
+        M._socketBackend="none"
         return false,"request_worker_start_failed: "..tostring(workerOrError)
     end
-    log("bridge listening on 127.0.0.1:"..tostring(port))
+    log("bridge listening on 127.0.0.1:"..tostring(port).." backend="..tostring(M._socketBackend))
     return true
 end
 
@@ -2888,17 +3090,18 @@ function __arzHtmlStopServer()
     if server then pcall(function() server:close() end) end
     server,port=nil,nil
     socketApi=nil
+    M._socketBackend="none"
 end
 function __arzHtmlLoadCefAdapter()
     local ok,module=pcall(require,"arizona-events")
     if ok and type(module)=="table" and type(module.eval)=="function" then
-        return module
+        return module,"arizona-events"
     end
     if type(raknetNewBitStream)~="function" or type(raknetBitStreamWriteInt8)~="function"
         or type(raknetBitStreamWriteInt16)~="function" or type(raknetBitStreamWriteInt32)~="function"
         or type(raknetBitStreamWriteString)~="function" or type(raknetEmulPacketReceiveBitStream)~="function"
         or type(raknetDeleteBitStream)~="function" then
-        return nil
+        return nil,"raknet_api_unavailable"
     end
     return {
         eval=function(code,serverId)
@@ -2919,7 +3122,7 @@ function __arzHtmlLoadCefAdapter()
             pcall(raknetDeleteBitStream,bs)
             return callOk and sent
         end
-    }
+    },"raknet_fallback"
 end
 
 function __arzHtmlLoadItemIcons()
@@ -2946,28 +3149,36 @@ function M.open_html(page,settingsSection,options)
     if currentPage=="marketplace" and ctx and type(ctx.ensureMarketplaceLoaded)=="function" then pcall(ctx.ensureMarketplaceLoaded) end
     if not running then
         local ok,err=__arzHtmlStartServer()
-        if not ok then if ctx and ctx.notify then pcall(ctx.notify,"HTML интерфейс недоступен: "..tostring(err)) end; return false end
+        if not ok then
+            M._lastOpenError=tostring(err or "bridge_start_failed")
+            if ctx and ctx.notify then pcall(ctx.notify,"HTML интерфейс недоступен: "..M._lastOpenError) end
+            return false,M._lastOpenError
+        end
     end
     if not acef or type(acef.eval)~="function" then
         if not previewOpen then __arzHtmlStopServer() end
+        M._lastOpenError="cef_unavailable:"..tostring(M._cefBackendError or M._cefBackend or "unknown")
         if ctx and ctx.notify then pcall(ctx.notify,"CEF API недоступен. Lua интерфейс продолжает работать.") end
-        return false
+        return false,M._lastOpenError
     end
     local menuWasVisible=ctx and type(ctx.getCoreMenuVisible)=="function" and ctx.getCoreMenuVisible()==true
     if menuWasVisible then setMenuVisible(false) end
     local ok=injectIframe(menuWasVisible)
     if ok then
+        M._lastOpenError=nil
         if not temporary and ctx and type(ctx.setPreferredInterfaceMode)=="function" then pcall(ctx.setPreferredInterfaceMode,"html") end
     elseif menuWasVisible then
         setMenuVisible(true)
     end
     if not ok then
         htmlTemporaryMode=false
+        M._lastOpenError="cef_inject_failed"
         if not previewOpen then __arzHtmlStopServer() end
     end
     if not ok and ctx and ctx.notify then pcall(ctx.notify,"Не удалось открыть CEF интерфейс. Используйте Lua режим.") end
-    return ok
+    return ok,M._lastOpenError
 end
+
 function M.is_open()
     return htmlOpen==true
 end
@@ -3121,21 +3332,47 @@ function M.init(context)
     token=makeToken()
     htmlRoot=ctx.getWorkingDirectory().."\\ArzMarket\\html"
     htmlWindowStatePath=ctx.getWorkingDirectory().."\\ArzMarket\\html_window_state.json"
-    restoreTradeDraft("buy")
-    restoreTradeDraft("sell")
-    loadWindowState()
-    __arzHtmlLoadItemIcons()
-    -- Build trade sources before any HTTP coroutine exists. This keeps file I/O
-    -- and first-time icon/catalog work out of /api/state after Alt+Tab.
-    refreshSourceCache("buy",true)
-    refreshSourceCache("sell",true)
-    acef=__arzHtmlLoadCefAdapter()
 
-    -- Arizona CEF can survive a MoonLoader Lua reload. Remove only our stale
-    -- iframe. The local HTTP bridge is started lazily by open_html/open_preview.
-    recoverGameInputAfterReload()
+    local indexPath=htmlRoot.."\\index.html"
+    if not doesFileExist(indexPath) then
+        M._lastInitError="html_index_missing:"..tostring(indexPath)
+        log(M._lastInitError)
+        return false
+    end
+
+    local function initStep(name,fn)
+        local ok,err=xpcall(fn,bridgeTraceback)
+        if not ok then log("init step "..tostring(name).." failed: "..tostring(err)) end
+        return ok
+    end
+
+    initStep("restore_buy_draft",function() restoreTradeDraft("buy") end)
+    initStep("restore_sell_draft",function() restoreTradeDraft("sell") end)
+    initStep("window_state",loadWindowState)
+    initStep("item_icons",__arzHtmlLoadItemIcons)
+    initStep("buy_cache",function() refreshSourceCache("buy",true) end)
+    initStep("sell_cache",function() refreshSourceCache("sell",true) end)
+
+    local cefOk,adapter,backend=xpcall(function()
+        return __arzHtmlLoadCefAdapter()
+    end,bridgeTraceback)
+    if cefOk then
+        acef=adapter
+        M._cefBackend=adapter and tostring(backend or "unknown") or "none"
+        M._cefBackendError=adapter and nil or tostring(backend or "cef_unavailable")
+    else
+        acef=nil
+        M._cefBackend="none"
+        M._cefBackendError=tostring(adapter)
+    end
+    if not acef then log("CEF adapter unavailable: "..tostring(M._cefBackendError)) end
+
+    initStep("input_recovery",recoverGameInputAfterReload)
+    M._lastInitError=nil
+    log("initialized htmlRoot="..tostring(htmlRoot).." cef="..tostring(M._cefBackend))
     return true
 end
+
 function M.render(context)
     ctx=context or ctx
     local imgui=ctx.imgui
@@ -3176,6 +3413,21 @@ function M.render(context)
         imgui.TextWrapped("Повторная попытка выполняется автоматически.")
     end
 end
+function M.get_diagnostics()
+    return {
+        running=running==true,
+        htmlOpen=htmlOpen==true,
+        port=port,
+        socketBackend=M._socketBackend,
+        cefBackend=M._cefBackend,
+        cefError=M._cefBackendError,
+        htmlRoot=htmlRoot,
+        indexExists=htmlRoot and doesFileExist(htmlRoot.."\\index.html") or false,
+        lastInitError=M._lastInitError,
+        lastOpenError=M._lastOpenError
+    }
+end
+
 function M.pump()
     if not running then return true end
     local now=nowMs()

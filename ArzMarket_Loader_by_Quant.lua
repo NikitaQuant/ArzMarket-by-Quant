@@ -1,6 +1,6 @@
 require 'moonloader'
 
-local LOADER_VERSION = '0.52'
+local LOADER_VERSION = '0.57'
 script_name('ArzMarket Loader by Quant')
 script_author('NikitaQuant')
 script_version(LOADER_VERSION)
@@ -27,6 +27,7 @@ local FIRST_BOOTSTRAP_PENDING_PATH = CONFIG_DIR .. 'first_bootstrap_pending.ini'
 local FIRST_BOOTSTRAP_COMPLETED_PATH = CONFIG_DIR .. 'first_bootstrap_completed.flag'
 local FIRST_BOOTSTRAP_VERIFIED_PATH = CONFIG_DIR .. 'managed_loader_verified.ini'
 local FIRST_BOOTSTRAP_FAILED_PATH = CONFIG_DIR .. 'managed_loader_failed.ini'
+local FIRST_BOOTSTRAP_PROGRESS_PATH = CONFIG_DIR .. 'managed_loader_progress.ini'
 local OFFLINE_FLAG_PATH = CONFIG_DIR .. 'offline_mode.flag'
 local COMPONENT_STATE_PATH = SCRIPT_DIR .. 'ArzMarket\\component_state.json'
 local ARZMARKET_INI_PATH = CONFIG_DIR .. 'ArzMarket.ini'
@@ -145,18 +146,43 @@ local function addCacheBuster(url)
         .. tostring(math.random(100000, 999999))
 end
 
-local function downloadAndWait(url, destination, timeoutSeconds)
+local DOWNLOAD_ATTEMPT_SEQUENCE = 0
+
+local function nextDownloadAttemptPath(destination)
+    DOWNLOAD_ATTEMPT_SEQUENCE = DOWNLOAD_ATTEMPT_SEQUENCE + 1
+    return tostring(destination)
+        .. '.arzdl.'
+        .. tostring(os.time())
+        .. '.'
+        .. tostring(DOWNLOAD_ATTEMPT_SEQUENCE)
+end
+
+local function downloadAndWait(url, destination, timeoutSeconds, onProgress)
     timeoutSeconds = timeoutSeconds or 20
-    removeFile(destination)
+
+    -- Never let two native downloader attempts write to the same path.
+    -- MoonLoader does not expose a documented cancellation API for downloadUrlToFile,
+    -- so a timed-out attempt must be isolated from every later retry.
+    local workPath = nextDownloadAttemptPath(destination)
+    removeFile(workPath)
 
     local finished = false
     local success = false
+    local active = true
     local startedAt = os.time()
+    local lastProgressAt = 0
 
+    local downloadId = nil
     local ok, errorText = pcall(function()
-        downloadUrlToFile(addCacheBuster(url), destination, function(_, status)
+        downloadId = downloadUrlToFile(addCacheBuster(url), workPath, function(_, status)
+            if not active then
+                if status == dlstatus.STATUSEX_ENDDOWNLOAD or (tonumber(status) and tonumber(status) < 0) then
+                    removeFile(workPath)
+                end
+                return
+            end
             if status == dlstatus.STATUSEX_ENDDOWNLOAD then
-                success = doesFileExist(destination) and fileSize(destination) > 0
+                success = doesFileExist(workPath) and fileSize(workPath) > 0
                 finished = true
             elseif tonumber(status) and tonumber(status) < 0 then
                 finished = true
@@ -164,19 +190,33 @@ local function downloadAndWait(url, destination, timeoutSeconds)
         end)
     end)
 
-    if not ok then
-        log('downloadUrlToFile error: ' .. tostring(errorText))
-        removeFile(destination)
-        return false
+    if not ok or downloadId == nil or downloadId == -1 then
+        active = false
+        log('downloadUrlToFile error: ' .. tostring(errorText or 'download_not_started'))
+        removeFile(workPath)
+        return false, 'download_start_failed'
     end
 
     while not finished and os.difftime(os.time(), startedAt) < timeoutSeconds do
+        if onProgress and os.time() - lastProgressAt >= 5 then
+            lastProgressAt = os.time()
+            pcall(onProgress)
+        end
         wait(50)
     end
 
     if not success then
-        removeFile(destination)
-        return false
+        active = false
+        if finished then removeFile(workPath) end
+        return false, finished and 'download_failed' or 'download_timeout'
+    end
+
+    active = false
+    removeFile(destination)
+    local renamed, renameError = os.rename(workPath, destination)
+    if not renamed then
+        removeFile(workPath)
+        return false, 'download_finalize_failed:' .. tostring(renameError)
     end
     return true
 end
@@ -275,11 +315,11 @@ local function decodeManifest(path)
     }
 end
 
-local function downloadManifest(url, tempFileName, label)
+local function downloadManifest(url, tempFileName, label, onProgress)
     local tempPath = SCRIPT_DIR .. tempFileName
     for attempt = 1, 3 do
         log(label .. ': download manifest attempt ' .. tostring(attempt))
-        if downloadAndWait(url, tempPath, 20) then
+        if downloadAndWait(url, tempPath, 20, onProgress) then
             local manifest = decodeManifest(tempPath)
             removeFile(tempPath)
             if manifest then return manifest end
@@ -313,6 +353,19 @@ local function compareVersionStrings(left, right)
         if av < bv then return -1 end
     end
     return 0
+end
+
+local function selectManifest(remoteManifest)
+    local packagedManifest = decodeManifest(SCRIPT_DIR .. 'updateArzMarket.js')
+    if packagedManifest then
+        local packagedValid = validateArzMarketFile(SCRIPT_DIR .. TARGET_ARZMARKET_FILENAME, packagedManifest)
+        local comparison = remoteManifest and compareVersionStrings(packagedManifest.latest, remoteManifest.latest)
+        if packagedValid and (not remoteManifest or (comparison and comparison >= 0)) then
+            log('using validated packaged ArzMarket manifest')
+            return packagedManifest
+        end
+    end
+    return remoteManifest
 end
 
 local function extractLoaderVersion(path)
@@ -366,48 +419,23 @@ local function isArzMarketFilename(filename)
     return false
 end
 
-local function parseFilenameVersion(filename)
-    local inside = tostring(filename or ''):match('%[([^%]]+)%]')
-    if not inside then return {} end
-    return parseVersionParts(inside)
-end
-
-local function compareVersionParts(left, right)
-    local count = math.max(#left, #right)
-    for index = 1, count do
-        local a = left[index] or 0
-        local b = right[index] or 0
-        if a > b then return 1 end
-        if a < b then return -1 end
-    end
-    return 0
-end
-
 local function cleanupDuplicateLoadedArzMarket()
-    local loaded = {}
+    local canonical = nil
+    local legacy = {}
     for _, scriptObject in ipairs(script.list()) do
         local currentName = scriptObject.filename or basename(scriptObject.path)
         if currentName ~= thisScript().filename and isArzMarketFilename(currentName) then
-            loaded[#loaded + 1] = {
-                object = scriptObject,
-                path = scriptObject.path,
-                name = currentName,
-                version = parseFilenameVersion(currentName)
-            }
+            if currentName == TARGET_ARZMARKET_FILENAME then
+                canonical = scriptObject
+            else
+                legacy[#legacy + 1] = scriptObject
+            end
         end
     end
-    if #loaded <= 1 then return end
-
-    local keep = loaded[1]
-    for index = 2, #loaded do
-        if compareVersionParts(loaded[index].version, keep.version) > 0 then keep = loaded[index] end
-    end
-
-    log('duplicate guard: found ' .. tostring(#loaded) .. ' loaded ArzMarket scripts, keeping ' .. tostring(keep.name))
-    for _, entry in ipairs(loaded) do
-        if entry.object ~= keep.object then
-            pcall(function() entry.object:unload() end)
-        end
+    if not canonical or #legacy == 0 then return end
+    log('duplicate guard: canonical loaded; unloading ' .. tostring(#legacy) .. ' legacy scripts')
+    for _, scriptObject in ipairs(legacy) do
+        pcall(function() scriptObject:unload() end)
     end
     wait(50)
 end
@@ -474,7 +502,7 @@ local function deleteStartupFile(filename)
 end
 
 local function cleanupStartupLegacyFiles()
-    local files = { 'ArzMarket_Loader.lua', '#ArzMarket[3_56].lua' }
+    local files = { 'ArzMarket_Loader.lua' }
     for _, filename in ipairs(files) do
         if filename ~= thisScript().filename then deleteStartupFile(filename) end
     end
@@ -521,6 +549,7 @@ local function beginFirstBootstrap(version)
     local session = tostring(os.time()) .. '_' .. tostring(math.random(100000, 999999))
     removeFile(FIRST_BOOTSTRAP_VERIFIED_PATH)
     removeFile(FIRST_BOOTSTRAP_FAILED_PATH)
+    removeFile(FIRST_BOOTSTRAP_PROGRESS_PATH)
 
     local content = table.concat({
         'protocol=1',
@@ -559,6 +588,25 @@ local function writeBootstrapVerification(path, session, success, reason, versio
     return atomicWrite(path, content)
 end
 
+local function writeBootstrapProgress(session, stage)
+    return atomicWrite(FIRST_BOOTSTRAP_PROGRESS_PATH, table.concat({
+        'protocol=1',
+        'session=' .. tostring(session),
+        'stage=' .. tostring(stage),
+        'updated_at=' .. tostring(os.time()),
+        ''
+    }, '\r\n'))
+end
+
+local function repairFailureReason(errorText)
+    errorText = tostring(errorText or '')
+    if errorText:find('^repair_') then return errorText end
+    if errorText:find('size_mismatch', 1, true) or errorText == 'file_empty' then return 'repair_size_mismatch' end
+    if errorText:find('crc32_mismatch', 1, true) then return 'repair_crc_mismatch' end
+    if errorText:find('lua_invalid', 1, true) then return 'repair_lua_invalid' end
+    return 'target_missing_repair_failed:' .. errorText
+end
+
 local function managedBootstrapVerification()
     if not IS_MANAGED_LOADER or not doesFileExist(FIRST_BOOTSTRAP_PENDING_PATH) then return false end
 
@@ -571,29 +619,111 @@ local function managedBootstrapVerification()
 
     log('managed bootstrap verification started, session=' .. session)
     cleanupStartupLegacyFiles()
-    cleanupDuplicateLoadedArzMarket()
-
-    local manifest = downloadManifest(CUSTOM_MANIFEST_URL, '.arzmarket_managed_verify_manifest.json', 'MANAGED VERIFY')
+    writeBootstrapProgress(session, 'manifest')
+    local manifest = selectManifest(downloadManifest(
+        CUSTOM_MANIFEST_URL, '.arzmarket_managed_verify_manifest.json', 'MANAGED VERIFY',
+        function() writeBootstrapProgress(session, 'manifest') end
+    ))
     if not manifest then
-        writeBootstrapVerification(FIRST_BOOTSTRAP_FAILED_PATH, session, false, 'custom_manifest_unavailable', '')
+        writeBootstrapVerification(FIRST_BOOTSTRAP_FAILED_PATH, session, false, 'manifest_unavailable', '')
         return true
     end
 
-    local targetPath = SCRIPT_DIR .. TARGET_ARZMARKET_FILENAME
-    local valid, validationError = validateArzMarketFile(targetPath, manifest)
+    local canonicalPath = SCRIPT_DIR .. TARGET_ARZMARKET_FILENAME
+    local previousPath = canonicalPath .. '.managed_repair_previous_' .. session
+    local previousMarker = readFile(INSTALL_VERSION_MARKER_PATH)
+    local repairInstalled = false
+    local hadPrevious = false
+    local function rollbackRepair()
+        if not repairInstalled then return end
+        removeFile(canonicalPath)
+        if hadPrevious and doesFileExist(previousPath) then
+            local restored, restoreError = os.rename(previousPath, canonicalPath)
+            if not restored then log('repair rollback failed: ' .. tostring(restoreError)) end
+        end
+        if previousMarker then atomicWrite(INSTALL_VERSION_MARKER_PATH, previousMarker)
+        else removeFile(INSTALL_VERSION_MARKER_PATH) end
+        repairInstalled = false
+    end
+
+    writeBootstrapProgress(session, 'validation')
+    local valid, validationError = validateArzMarketFile(canonicalPath, manifest)
     if not valid then
+        local repairPath = canonicalPath .. '.managed_repair.download'
+        log('managed verification: local ArzMarket validation failed (' .. tostring(validationError) .. '), starting isolated repair')
+        removeFile(repairPath)
+        if not isAllowedRepositoryUrl(manifest.updateurl) then
+            validationError = 'repair_url_blocked'
+        else
+            writeBootstrapProgress(session, 'repair_download')
+            local downloaded, downloadError = downloadAndWait(
+                manifest.updateurl, repairPath, 90,
+                function() writeBootstrapProgress(session, 'repair_download') end
+            )
+            if not downloaded then
+                validationError = downloadError == 'download_timeout'
+                    and 'repair_download_timeout' or 'target_missing_repair_failed:' .. tostring(downloadError)
+            else
+                writeBootstrapProgress(session, 'repair_validation')
+                local repairValid, repairError = validateArzMarketFile(repairPath, manifest)
+                if repairValid then
+                    if doesFileExist(canonicalPath) then
+                        local backedUp = os.rename(canonicalPath, previousPath)
+                        if not backedUp then
+                            repairValid = false
+                            repairError = 'repair_backup_failed'
+                        else
+                            hadPrevious = true
+                        end
+                    end
+                    if repairValid then
+                        writeBootstrapProgress(session, 'repair_install')
+                        local installed, installError = os.rename(repairPath, canonicalPath)
+                        if not installed then
+                            if hadPrevious then pcall(os.rename, previousPath, canonicalPath) end
+                            repairValid = false
+                            repairError = 'repair_install_failed:' .. tostring(installError)
+                        else
+                            repairInstalled = true
+                            valid, validationError = validateArzMarketFile(canonicalPath, manifest)
+                            if not valid then
+                                validationError = 'repair_post_validation_failed:' .. tostring(validationError)
+                                rollbackRepair()
+                            else
+                                log('managed verification: canonical ArzMarket restored and verified')
+                            end
+                        end
+                    end
+                end
+                if not repairValid then validationError = repairFailureReason(repairError) end
+            end
+        end
+        removeFile(repairPath)
+    end
+
+    if not valid then
+        log('managed bootstrap verification failed: ' .. tostring(validationError))
         writeBootstrapVerification(FIRST_BOOTSTRAP_FAILED_PATH, session, false, validationError, manifest.latest)
         return true
     end
 
-    writeInstallVersionMarker(manifest.latest)
-    cleanupOldArzMarketFiles(TARGET_ARZMARKET_FILENAME)
-    removeFile(FIRST_BOOTSTRAP_FAILED_PATH)
+    writeBootstrapProgress(session, 'version_marker')
+    if not writeInstallVersionMarker(manifest.latest) then
+        rollbackRepair()
+        writeBootstrapVerification(FIRST_BOOTSTRAP_FAILED_PATH, session, false, 'version_marker_write_failed', manifest.latest)
+        return true
+    end
     if not writeBootstrapVerification(FIRST_BOOTSTRAP_VERIFIED_PATH, session, true, 'ok', manifest.latest) then
+        rollbackRepair()
         writeBootstrapVerification(FIRST_BOOTSTRAP_FAILED_PATH, session, false, 'verified_write_failed', manifest.latest)
         return true
     end
 
+    cleanupDuplicateLoadedArzMarket()
+    cleanupOldArzMarketFiles(TARGET_ARZMARKET_FILENAME)
+    removeFile(previousPath)
+    removeFile(FIRST_BOOTSTRAP_FAILED_PATH)
+    removeFile(FIRST_BOOTSTRAP_PROGRESS_PATH)
     log('managed bootstrap verification passed, ArzMarket=' .. tostring(manifest.latest))
     return true
 end
@@ -720,9 +850,6 @@ local function installSelectedVersion(manifest)
         pcall(function() currentTargetScript:unload() end)
         wait(50)
     end
-    unloadScripts(otherScripts)
-    wait(50)
-
     local backupPath = targetPath .. '.loader_previous'
     removeFile(backupPath)
     if doesFileExist(targetPath) then
@@ -730,7 +857,7 @@ local function installSelectedVersion(manifest)
         if not backedUp then
             log('target backup failed: ' .. tostring(backupError))
             removeFile(tempPath)
-            restoreScripts(otherScripts)
+            if currentTargetScript then pcall(script.load, targetPath) end
             return false
         end
     end
@@ -740,7 +867,16 @@ local function installSelectedVersion(manifest)
         log('rename failed: ' .. tostring(renameError))
         if doesFileExist(backupPath) then pcall(os.rename, backupPath, targetPath) end
         removeFile(tempPath)
-        restoreScripts(otherScripts)
+        if currentTargetScript then pcall(script.load, targetPath) end
+        return false
+    end
+
+    local installedValid, installedError = validateArzMarketFile(targetPath, manifest)
+    if not installedValid then
+        log('installed ArzMarket validation failed: ' .. tostring(installedError))
+        removeFile(targetPath)
+        if doesFileExist(backupPath) then pcall(os.rename, backupPath, targetPath) end
+        if currentTargetScript then pcall(script.load, targetPath) end
         return false
     end
 
@@ -751,10 +887,11 @@ local function installSelectedVersion(manifest)
         log('new script failed to load')
         removeFile(targetPath)
         if doesFileExist(backupPath) then pcall(os.rename, backupPath, targetPath) end
-        restoreScripts(otherScripts)
+        if currentTargetScript then pcall(script.load, targetPath) end
         return false
     end
 
+    unloadScripts(otherScripts)
     removeFile(backupPath)
     cleanupOldArzMarketFiles(targetFilename)
     if firstBootstrapSession then
@@ -766,6 +903,20 @@ end
 
 function main()
     math.randomseed(os.time() + math.floor(os.clock() * 100000))
+
+    -- If the managed loader is already installed and valid, the bootstrap loader
+    -- must not compete with it. This is especially important in full-package
+    -- installs where both files can be present when MoonLoader starts.
+    if not IS_MANAGED_LOADER then
+        local managedPath = SCRIPT_DIR .. MANAGED_LOADER_FILENAME
+        if doesFileExist(managedPath) then
+            local managedValid, managedVersionOrError = validateLoaderFile(managedPath)
+            if managedValid and managedVersionOrError then
+                log('managed loader already present and valid; bootstrap loader stays idle')
+                return
+            end
+        end
+    end
 
     -- Fail closed on every machine that has not completed the two-stage bootstrap yet.
     -- This is done before the first yield so ArzMarket can see the pending/offline state
@@ -822,12 +973,15 @@ function main()
     cleanupStartupLegacyFiles()
     wait(150)
 
+    -- Bootstrap loader has one job: obtain/verify the CUSTOM ArzMarket build.
+    -- ORIGINAL vs CUSTOM version policy belongs exclusively to the managed loader
+    -- that the installed ArzMarket bootstraps afterwards.
     log('STEP 2: checking CUSTOM GitHub')
-    local customManifest = downloadManifest(
+    local customManifest = selectManifest(downloadManifest(
         CUSTOM_MANIFEST_URL,
         '.arzmarket_custom_manifest.json',
         'CUSTOM'
-    )
+    ))
 
     if not customManifest then
         log('STOP: CUSTOM manifest unavailable')

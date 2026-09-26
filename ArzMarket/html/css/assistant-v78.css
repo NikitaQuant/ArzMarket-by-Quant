@@ -146,10 +146,6 @@
   color: #fff;
 }
 .baron-assistant button.primary:hover { background: #2c94e2; color: #fff; }
-.baron-assistant button.interface-old { background: #e84f45; color: #fff; }
-.baron-assistant button.interface-old:hover { background: #f0645b; color: #fff; }
-.baron-assistant button.interface-new { background: #22ad63; color: #fff; }
-.baron-assistant button.interface-new:hover { background: #2ac471; color: #fff; }
 .baron-mascot-layer {
   position: fixed;
   z-index: 2147483001;
@@ -208,8 +204,6 @@
   display: block !important;
 }
 
-.baron-assistant button.tutorial-accept { min-width: 156px; }
-.baron-assistant button.tutorial-later { min-width: 102px; }
 
 
 /* Baron future-features promo. Keep these styles in the external stylesheet:
@@ -385,12 +379,6 @@
   padding-left: calc(18px * var(--baron-screen-scale)) !important;
   padding-right: calc(18px * var(--baron-screen-scale)) !important;
   font-size: calc(18px * var(--baron-screen-scale)) !important;
-}
-.baron-assistant button.tutorial-accept {
-  min-width: calc(156px * var(--baron-screen-scale)) !important;
-}
-.baron-assistant button.tutorial-later {
-  min-width: calc(102px * var(--baron-screen-scale)) !important;
 }
 .baron-assistant-actions.baron-link-actions {
   gap: calc(6px * var(--baron-screen-scale)) !important;

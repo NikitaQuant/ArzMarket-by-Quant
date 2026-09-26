@@ -1,7 +1,7 @@
 local M = {}
 
-M.VERSION = 61
-M.REQUIRED_TUTORIAL_VERSION = 1
+M.VERSION = 62
+M.REQUIRED_TUTORIAL_VERSION = 2
 M.NAME = "Барон дю Валлон де Брасье де Пьерфон"
 
 local MASCOT_SIZE = 440
@@ -35,6 +35,10 @@ local choiceCooldownRuntime = {
     key = nil,
     started_at = 0
 }
+local autoAdvanceRuntime = {
+    key = nil,
+    started_at = 0
+}
 
 local motion = {
     initialized = false,
@@ -65,41 +69,14 @@ local commandsRegistered = false
 
 local DISPLAY_DELAY_MS = 40000
 
--- Lua tutorial is preserved in baron_tutorial_lua.lua, but temporarily disabled.
-local LUA_TUTORIAL_ENABLED = false
-
 local MODULE_FILES = {
     onboarding = "baron_onboarding.lua",
-    tutorial_lua = "baron_tutorial_lua.lua",
     tutorial_html = "baron_tutorial_html.lua"
 }
 
 local PAGE_BY_ID = {
     [1] = "sell", [2] = "buy", [3] = "settings", [4] = "logs",
     [5] = "marketplace", [7] = "mods", [8] = "storage"
-}
-
-local OLD_ONBOARDING_STEPS = {
-    welcome = true,
-    interfaces_intro = true,
-    interface_lua = true,
-    interface_html = true,
-    lua_intro_1 = true,
-    lua_intro_2 = true,
-    lua_look = true,
-    html_intro_1 = true,
-    html_intro_2 = true,
-    html_intro_3 = true,
-    html_look = true,
-    free_try = true,
-    interface_choose = true,
-    interface_loading = true,
-    tutorial_offer = true,
-    lua_disabled_1 = true,
-    lua_disabled_1_more = true,
-    lua_disabled_2 = true,
-    lua_disabled_3 = true,
-    lua_redirect_offer = true
 }
 
 local function nowMs()
@@ -281,8 +258,6 @@ local function repairActiveState()
         state.current_step = "dormant"
         state.step = "dormant"
         state.current_message = 0
-        state.pending_interface = nil
-        state.choice_locked = false
         state.dismissed_step = nil
         state.revision = (tonumber(state.revision) or 0) + 1
         save()
@@ -309,15 +284,8 @@ local function repairActiveState()
         end
     end
 
-    if OLD_ONBOARDING_STEPS[stepId] then addCandidate("onboarding") end
-    if state.interface == "html" then
-        addCandidate("tutorial_html")
-    elseif state.interface == "lua" then
-        addCandidate("tutorial_lua")
-    end
     addCandidate("onboarding")
     addCandidate("tutorial_html")
-    addCandidate("tutorial_lua")
 
     for _, candidateId in ipairs(candidates) do
         local candidate = loadModule(candidateId)
@@ -341,8 +309,6 @@ local function repairActiveState()
     state.current_step = "dormant"
     state.step = "dormant"
     state.current_message = 0
-    state.pending_interface = nil
-    state.choice_locked = false
     state.dismissed_step = nil
     state.revision = (tonumber(state.revision) or 0) + 1
     save()
@@ -383,7 +349,7 @@ local function setStep(stepId)
 end
 
 local function tutorialModuleId(mode)
-    return mode == "html" and "tutorial_html" or "tutorial_lua"
+    return "tutorial_html"
 end
 
 local function newState(firstLaunch, preferredInterface)
@@ -394,35 +360,30 @@ local function newState(firstLaunch, preferredInterface)
             active = true,
             onboarding_complete = false,
             tutorial_complete = false,
-            lua_tutorial_complete = false,
             html_tutorial_complete = false,
-            interface = nil,
+            interface = "html",
             current_module = "onboarding",
             current_step = "welcome",
             step = "welcome",
             current_message = 0,
-            pending_interface = nil,
             dismissed_step = nil,
             revision = 1,
             session_generation = 1,
             display_delay_done = false
         }
     end
-    local mode = preferredInterface == "html" and "html" or "lua"
     return {
         version = M.VERSION,
         required_tutorial_version = 0,
         active = false,
         onboarding_complete = true,
         tutorial_complete = false,
-        lua_tutorial_complete = false,
         html_tutorial_complete = false,
-        interface = mode,
+        interface = "html",
         current_module = nil,
         current_step = "dormant",
         step = "dormant",
         current_message = 0,
-        pending_interface = nil,
         dismissed_step = nil,
         revision = 1,
         session_generation = 1,
@@ -440,14 +401,12 @@ local function migrateState(loaded, firstLaunch, preferredInterface)
         out.revision = tonumber(out.revision) or 1
         out.session_generation = tonumber(out.session_generation) or 1
         out.current_message = tonumber(out.current_message) or 0
-        out.lua_tutorial_complete = out.lua_tutorial_complete == true
         out.html_tutorial_complete = out.html_tutorial_complete == true
         out.onboarding_complete = out.onboarding_complete == true
         out.tutorial_complete = out.tutorial_complete == true
         out.required_tutorial_version = tonumber(out.required_tutorial_version) or 0
+        out.interface = "html"
         out.step = out.current_step
-        -- dismissed_step is only a transient visual state. Persisting it across
-        -- a script/CEF reload can make an unfinished tutorial look completed.
         if out.active == true and tostring(out.current_step or "") ~= "dormant" then
             out.dismissed_step = nil
             if tostring(out.current_step or "") ~= "welcome" then
@@ -462,57 +421,58 @@ local function migrateState(loaded, firstLaunch, preferredInterface)
     end
 
     local oldStep = tostring(loaded.current_step or loaded.step or "dormant")
-    local oldInterface = loaded.interface == "html" and "html" or loaded.interface == "lua" and "lua" or (preferredInterface == "html" and "html" or "lua")
-    local onboardingComplete = loaded.onboarding_complete == true or loaded.onboardingComplete == true
+    local oldModule = tostring(loaded.current_module or "")
     local tutorialComplete = loaded.tutorial_complete == true or loaded.tutorialComplete == true
-    local out = newState(false, oldInterface)
+    local out = newState(false, "html")
     out.revision = (tonumber(loaded.revision) or 0) + 1
     out.session_generation = (tonumber(loaded.session_generation) or 0) + 1
-    out.interface = oldInterface
-    out.onboarding_complete = onboardingComplete
+    out.interface = "html"
     out.tutorial_complete = tutorialComplete
-    out.lua_tutorial_complete = loaded.lua_tutorial_complete == true or (tutorialComplete and oldInterface == "lua")
-    out.html_tutorial_complete = loaded.html_tutorial_complete == true or (tutorialComplete and oldInterface == "html")
+    out.html_tutorial_complete = loaded.html_tutorial_complete == true or tutorialComplete
     out.required_tutorial_version = tonumber(loaded.required_tutorial_version) or 0
+
+    local tutorialStepMap = {
+        sell_intro = "sell_scan_prompt",
+        sell_scan = "sell_scan_prompt",
+        sell_inventory = "sell_scan_prompt",
+        sell_start = "sell_selected_1",
+        buy_intro = "buy_search",
+        buy_add = "buy_search",
+        buy_start = "buy_auto_prices",
+        go_logs = "logs_intro",
+        logs_intro = "logs_intro",
+        go_marketplace = "marketplace_intro",
+        marketplace_intro = "marketplace_intro",
+        go_mods = "mods_intro",
+        mods_intro = "mods_intro",
+        go_storage = "storage_intro_1",
+        storage_intro = "storage_intro_1",
+        finish = "finish_1"
+    }
 
     if oldStep == "dormant" then
         out.active = false
         out.current_module = nil
         out.current_step = "dormant"
-    elseif OLD_ONBOARDING_STEPS[oldStep] then
+    elseif oldModule == "tutorial_html" then
+        out.active = true
+        out.current_module = "tutorial_html"
+        out.current_step = tutorialStepMap[oldStep] or oldStep
+        out.onboarding_complete = true
+    elseif oldModule == "onboarding" and oldStep == "welcome" then
         out.active = true
         out.current_module = "onboarding"
-        local onboardingStepMap = {
-            interface_lua = "lua_intro_1",
-            interface_html = "html_intro_1",
-            lua_intro_2 = "lua_look",
-            html_intro_2 = "html_intro_1",
-            html_intro_3 = "html_look",
-            free_try = "interface_choose"
-        }
-        out.current_step = onboardingStepMap[oldStep] or oldStep
+        out.current_step = "welcome"
+        out.onboarding_complete = false
     else
-        local tutorialStepMap = {
-            sell_intro = "sell_scan_prompt",
-            sell_scan = "sell_scan_prompt",
-            sell_inventory = "sell_scan_prompt",
-            sell_start = "sell_selected_1",
-            buy_intro = "buy_search",
-            buy_add = "buy_search",
-            buy_start = "buy_auto_prices",
-            go_logs = "logs_intro",
-            logs_intro = "logs_intro",
-            go_marketplace = "marketplace_intro",
-            marketplace_intro = "marketplace_intro",
-            go_mods = "mods_intro",
-            mods_intro = "mods_intro",
-            go_storage = "storage_intro_1",
-            storage_intro = "storage_intro_1",
-            finish = "finish_1"
-        }
+        -- Any saved state from a removed onboarding path is migrated directly
+        -- to the current HTML tutorial.
         out.active = true
-        out.current_module = tutorialModuleId(oldInterface)
-        out.current_step = tutorialStepMap[oldStep] or oldStep
+        out.current_module = "tutorial_html"
+        out.current_step = "resize"
+        out.onboarding_complete = true
+        out.tutorial_complete = false
+        out.html_tutorial_complete = false
     end
     out.step = out.current_step
     out.display_delay_done = true
@@ -634,23 +594,7 @@ function M.init(context)
         state.release_tutorial_required = false
     end
 
-    -- Lua tutorial files and logic stay intact, but while the feature flag is off
-    -- any saved/running Lua tutorial is redirected to the temporary support notice.
-    if LUA_TUTORIAL_ENABLED ~= true and state.active == true and (
-        state.current_module == "tutorial_lua" or
-        (state.current_module == "onboarding" and state.current_step == "tutorial_offer" and state.interface == "lua")
-    ) then
-        state.interface = "lua"
-        state.pending_interface = nil
-        state.current_module = "onboarding"
-        state.current_step = "lua_disabled_1"
-        state.step = state.current_step
-        state.current_message = 0
-        state.dismissed_step = nil
-        state.onboarding_complete = true
-        state.tutorial_complete = false
-        state.lua_tutorial_complete = false
-    end
+    state.interface = "html"
     -- Every Lua/CEF reload starts a new assistant session. Late events from the
     -- previous CEF instance are rejected by session_generation.
     state.session_generation = (tonumber(state.session_generation) or 0) + 1
@@ -719,10 +663,6 @@ function M.isOnboarding()
     return M.isActive() and state.current_module == "onboarding"
 end
 
-function M.needsChooser()
-    if not M.isOnboarding() then return false end
-    return state.current_step == "interface_choose" or state.current_step == "interface_loading"
-end
 
 function M.isPreviewInteractive()
     return false
@@ -751,7 +691,7 @@ local function stepAllowsSkip(step)
     -- Baron bubble, but their own close button must still be allowed to advance.
     if step.silent and step.promo_window ~= true then return false end
     local waitMode = tostring(step.wait or "")
-    if waitMode == "page" or waitMode == "event" or waitMode == "event_or_skip" or waitMode == "interface_loading" then
+    if waitMode == "page" or waitMode == "event" or waitMode == "event_or_skip" then
         return false
     end
     return true
@@ -869,7 +809,6 @@ function M.snapshot(page, mode)
         choice = step.choice,
         choiceType = step.choice,
         finish = step.finish == true,
-        chooser = M.needsChooser(),
         previewInteractive = step.preview_interactive == true,
         followAnchor = step.follow_anchor == true,
         bubbleAsset = step.bubble_asset,
@@ -897,22 +836,13 @@ function M.snapshot(page, mode)
         messageVisible = step.silent ~= true and state.dismissed_step ~= state.current_step,
         silent = step.silent == true,
         page = page,
-        mode = mode or state.interface or "lua",
+        mode = "html",
         interface = state.interface,
-        pendingInterface = state.pending_interface
     }
 end
 
 local function completeTutorial(forceAll)
-    local mode = state.interface == "html" and "html" or "lua"
-    if forceAll == true then
-        state.html_tutorial_complete = true
-        state.lua_tutorial_complete = true
-    elseif mode == "html" then
-        state.html_tutorial_complete = true
-    else
-        state.lua_tutorial_complete = true
-    end
+    state.html_tutorial_complete = true
     state.tutorial_complete = true
     state.onboarding_complete = true
     state.required_tutorial_version = M.REQUIRED_TUTORIAL_VERSION
@@ -936,87 +866,13 @@ function M.next()
     local step = currentStep()
     if not step then return false end
     if step.finish then return completeTutorial() end
+    if step.start_tutorial == "html" then return M.restartTutorial("html") end
     if step.next then return setStep(step.next) end
     return false
 end
 
 function M.skipIntro()
     return M.skip()
-end
-
-function M.selectInterface(mode)
-    if state.current_module ~= "onboarding" or state.current_step ~= "interface_choose" then return false end
-    mode = mode == "html" and "html" or "lua"
-    state.pending_interface = mode
-    state.dismissed_step = nil
-    state.choice_locked = true
-    if not setStep("interface_loading") then return false end
-
-    if ctx and type(ctx.beginInterfaceSelection) == "function" then
-        local ok, result = pcall(ctx.beginInterfaceSelection, mode)
-        if not ok or result == false then
-            state.pending_interface = nil
-            state.choice_locked = false
-            setStep("interface_choose")
-            return false
-        end
-    end
-    return mode
-end
-
-function M.completeInterfaceLoading(mode)
-    if state.current_module ~= "onboarding" or state.current_step ~= "interface_loading" then return false end
-    mode = mode == "html" and "html" or "lua"
-    state.interface = mode
-    state.pending_interface = nil
-    state.choice_locked = false
-    state.onboarding_complete = false
-    if mode == "lua" and LUA_TUTORIAL_ENABLED ~= true then
-        state.onboarding_complete = true
-        state.tutorial_complete = false
-        state.lua_tutorial_complete = false
-        return setStep("lua_disabled_1")
-    end
-
-    local selectedTutorialId = tutorialModuleId(mode)
-    if not loadModule(selectedTutorialId) then
-        print("[ArzMarket][Baron] selected tutorial preload failed: " .. tostring(selectedTutorialId))
-    end
-    return setStep("tutorial_offer")
-end
-
-function M.chooseTutorial(accept)
-    if state.current_module ~= "onboarding" or state.current_step ~= "tutorial_offer" then return false end
-    local mode = state.interface == "html" and "html" or "lua"
-    state.onboarding_complete = true
-    if accept == true and mode == "lua" and LUA_TUTORIAL_ENABLED ~= true then
-        state.current_module = "onboarding"
-        state.tutorial_complete = false
-        state.lua_tutorial_complete = false
-        return setStep("lua_disabled_1")
-    end
-    if accept == true then
-        local moduleId = tutorialModuleId(mode)
-        local module = loadModule(moduleId)
-        if not module then return false end
-        state.current_module = moduleId
-        state.current_step = module.START_STEP or "resize"
-        state.step = state.current_step
-        state.active = true
-        state.dismissed_step = nil
-        state.tutorial_complete = false
-        state.session_generation = (tonumber(state.session_generation) or 0) + 1
-        touch()
-        return true
-    end
-
-    state.active = false
-    state.current_module = nil
-    state.current_step = "dormant"
-    state.step = "dormant"
-    state.dismissed_step = nil
-    touch()
-    return true
 end
 
 function M.chooseFutureDetails(accept)
@@ -1028,56 +884,12 @@ function M.chooseFutureDetails(accept)
     return setStep("finish_6")
 end
 
-function M.chooseLuaRedirect(accept)
-    if state.current_module ~= "onboarding" or state.current_step ~= "lua_redirect_offer" then return false end
-
-    if accept == true then
-        state.pending_interface = "html"
-        state.dismissed_step = nil
-        state.choice_locked = true
-        if not setStep("interface_loading") then return false end
-
-        -- The chooser is normally hidden after Lua was already selected. Re-enable
-        -- it before starting the existing fade/finalize selection path.
-        if ctx and type(ctx.runtime) == "table" and type(ctx.runtime.setChooserVisible) == "function" then
-            pcall(ctx.runtime.setChooserVisible, true)
-        end
-
-        if ctx and type(ctx.beginInterfaceSelection) == "function" then
-            local ok, result = pcall(ctx.beginInterfaceSelection, "html")
-            if not ok or result == false then
-                state.pending_interface = nil
-                state.choice_locked = false
-                setStep("lua_redirect_offer")
-                return false
-            end
-        end
-        return true
-    end
-
-    if getChoiceNoCooldownMs(currentStep()) > 0 then return false, "choice_cooldown" end
-
-    state.interface = "lua"
-    state.pending_interface = nil
-    state.choice_locked = false
-    state.onboarding_complete = true
-    state.tutorial_complete = false
-    state.lua_tutorial_complete = false
-    state.active = false
-    state.current_module = nil
-    state.current_step = "dormant"
-    state.step = "dormant"
-    state.dismissed_step = nil
-    touch()
-    return true
-end
-
 function M.skip()
     local step = currentStep()
     if not step then return false end
     if not stepAllowsSkip(step) then return false end
     if getSkipCooldownMs(step) > 0 then return false end
-    if step.finish then return M.next() end
+    if step.finish or step.start_tutorial == "html" then return M.next() end
 
     if step.skip_action and ctx and type(ctx.performTutorialAction) == "function" then
         local okAction, actionResult = pcall(ctx.performTutorialAction, step.skip_action, {
@@ -1124,14 +936,12 @@ function M.startOnboardingAt(stepId)
     state.active = true
     state.onboarding_complete = false
     state.tutorial_complete = false
-    state.pending_interface = nil
     state.interface = nil
     state.current_module = "onboarding"
     state.current_step = stepId
     state.step = stepId
     state.current_message = 0
     state.dismissed_step = nil
-    state.choice_locked = false
     state.display_delay_done = true
     state.session_generation = (tonumber(state.session_generation) or 0) + 1
     touch()
@@ -1140,44 +950,14 @@ function M.startOnboardingAt(stepId)
 end
 
 function M.restartTutorial(mode)
-    mode = mode == "html" and "html" or "lua"
-
-    if mode == "lua" and LUA_TUTORIAL_ENABLED ~= true then
-        local onboarding = loadModule("onboarding")
-        if not onboarding then return false end
-        state.interface = "lua"
-        state.pending_interface = nil
-        state.active = true
-        state.onboarding_complete = true
-        state.tutorial_complete = false
-        state.lua_tutorial_complete = false
-        state.current_module = "onboarding"
-        state.current_step = "lua_disabled_1"
-        state.step = state.current_step
-        state.current_message = 0
-        state.dismissed_step = nil
-        state.choice_locked = false
-        state.display_delay_done = true
-        state.session_generation = (tonumber(state.session_generation) or 0) + 1
-        touch()
-        notifyStepChanged()
-        return true
-    end
-
-    local moduleId = tutorialModuleId(mode)
-    local module = loadModule(moduleId)
+    local module = loadModule("tutorial_html")
     if not module then return false end
-    state.interface = mode
-    state.pending_interface = nil
+    state.interface = "html"
     state.active = true
     state.onboarding_complete = true
     state.tutorial_complete = false
-    if mode == "html" then
-        state.html_tutorial_complete = false
-    else
-        state.lua_tutorial_complete = false
-    end
-    state.current_module = moduleId
+    state.html_tutorial_complete = false
+    state.current_module = "tutorial_html"
     state.current_step = module.START_STEP or "resize"
     state.step = state.current_step
     state.current_message = 0
@@ -1185,6 +965,7 @@ function M.restartTutorial(mode)
     state.display_delay_done = true
     state.session_generation = (tonumber(state.session_generation) or 0) + 1
     touch()
+    notifyStepChanged()
     return true
 end
 
@@ -1193,16 +974,13 @@ function M.resetOnboarding()
     state.active = true
     state.onboarding_complete = false
     state.tutorial_complete = false
-    state.lua_tutorial_complete = false
     state.html_tutorial_complete = false
-    state.pending_interface = nil
-    state.interface = nil
+    state.interface = "html"
     state.current_module = "onboarding"
     state.current_step = "welcome"
     state.step = "welcome"
     state.current_message = 0
     state.dismissed_step = nil
-    state.choice_locked = false
     state.display_delay_done = true
     state.session_generation = (tonumber(state.session_generation) or 0) + 1
     touch()
@@ -1226,31 +1004,19 @@ end
 
 local function syncTrainingRuntime(kind, mode)
     kind = tostring(kind or "")
-    mode = mode == "html" and "html" or (mode == "lua" and "lua" or nil)
-
     runtimeCall("resetTransientUi", kind == "tutorial" or kind == "tutorial_future")
-    runtimeCall("setChooserVisible", kind == "interface_choice")
+    runtimeCall("setInterfaceConfig", "html", true)
 
-    if kind == "onboarding" or kind == "interface_choice" then
-        runtimeCall("setInterfaceConfig", nil, false)
-        runtimeCall("showLuaInterface", false)
+    if kind == "onboarding" then
         runtimeCall("showHtmlInterface", false)
-    elseif (kind == "tutorial" or kind == "tutorial_future") and mode ~= nil then
-        runtimeCall("setInterfaceConfig", mode, true)
+    elseif kind == "tutorial" or kind == "tutorial_future" then
         runtimeCall("resetTutorialPanels")
-        if mode == "html" then
-            runtimeCall("showLuaInterface", false)
-            runtimeCall("showHtmlInterface", true, kind == "tutorial_future" and "settings" or nil)
-        else
-            runtimeCall("showHtmlInterface", false)
-            runtimeCall("showLuaInterface", true)
-        end
+        runtimeCall("showHtmlInterface", true, kind == "tutorial_future" and "settings" or nil)
     elseif kind == "complete" then
-        runtimeCall("setChooserVisible", false)
+        runtimeCall("showHtmlInterface", true)
     else
         return false
     end
-
     return runtimeCall("saveInterfaceConfig")
 end
 
@@ -1263,42 +1029,31 @@ end
 function M.handleFaqCommand(argument)
     local level = tostring(argument or ""):match("^%s*(.-)%s*$") or ""
 
-    -- /faqq is a manual debug/training command. It must start immediately and
-    -- must not wait for either of the automatic 40 second onboarding gates.
     M.openDisplayGateNow()
     runtimeCall("openTutorialGate")
 
     local ok = false
     local kind = nil
-    local mode = nil
+    local mode = "html"
 
-    if level == "" then
+    if level == "" or level == "1" then
         ok = M.resetOnboarding()
         kind = "onboarding"
-    elseif level == "1" then
-        ok = M.startOnboardingAt("interface_choose")
-        kind = "interface_choice"
-    elseif level == "2" then
-        mode = "lua"
-        ok = M.restartTutorial(mode)
-        kind = "tutorial"
-    elseif level == "3" then
-        mode = "html"
-        ok = M.restartTutorial(mode)
+    elseif level == "2" or level == "3" then
+        -- Keep both historical shortcuts as harmless aliases to the only
+        -- supported tutorial, without retaining any old-interface behavior.
+        ok = M.restartTutorial("html")
         kind = "tutorial"
     elseif level == "4" then
-        mode = "html"
-        ok = M.restartTutorial(mode)
+        ok = M.restartTutorial("html")
         if ok ~= false then ok = setStep("future_details_offer") end
         kind = "tutorial_future"
     elseif level == "5" then
-        if state.interface ~= "lua" and state.interface ~= "html" then state.interface = "html" end
+        state.interface = "html"
         ok = completeTutorial(true)
         kind = "complete"
-        mode = state.interface
     elseif level == "6" then
-        mode = state.interface == "lua" and "lua" or "html"
-        ok = M.restartTutorial(mode)
+        ok = M.restartTutorial("html")
         if ok ~= false then ok = setStep("future_features") end
         if ok ~= false then bypassCurrentStepSkipCooldown() end
         kind = "tutorial_future"
@@ -1349,12 +1104,7 @@ end
 
 
 function M.setInterface(mode)
-    mode = mode == "html" and "html" or "lua"
-    if state.current_module == "onboarding" and state.current_step ~= "tutorial_offer" then
-        return false
-    end
-    if state.interface == mode then return true end
-    state.interface = mode
+    state.interface = "html"
     touch()
     return true
 end
@@ -2228,6 +1978,25 @@ function M.render(imgui, params)
     local screenH = tonumber(params.screenHeight) or 1080
     local segments = normalizeSegments(step)
     local text = plainText(segments)
+    local visible, textComplete = visibleSegments(step)
+
+    local autoDelay = tonumber(step.auto_advance_ms) or 0
+    if textComplete and autoDelay >= 0 and step.start_tutorial == "html" then
+        local key = tostring(state.current_module or "") .. ":" .. tostring(state.current_step or "")
+        local now = nowMs()
+        if autoAdvanceRuntime.key ~= key then
+            autoAdvanceRuntime.key = key
+            autoAdvanceRuntime.started_at = now
+        elseif now - (tonumber(autoAdvanceRuntime.started_at) or now) >= autoDelay then
+            autoAdvanceRuntime.key = nil
+            autoAdvanceRuntime.started_at = 0
+            M.next()
+            return false
+        end
+    else
+        autoAdvanceRuntime.key = nil
+        autoAdvanceRuntime.started_at = 0
+    end
 
     local position = tostring(step.position or "anchor")
     local requiresAnchor = step.target ~= nil and position == "anchor" and step.optional_anchor ~= true
@@ -2380,7 +2149,6 @@ function M.render(imgui, params)
         end
     end
 
-    local visible = visibleSegments(step)
     local insetX = layout.bubbleInsetX
     local bodyLocalX = bodyLeft - wp.x
     local actionRegionX, actionRegionW = bodyLocalX, bodyWidth
@@ -2425,45 +2193,7 @@ function M.render(imgui, params)
     imgui.PushStyleVarFloat(imgui.StyleVar.FrameRounding, 18 * uiScale)
     imgui.PushStyleVarFloat(imgui.StyleVar.FrameBorderSize, 0)
 
-    if step.choice == "interface" then
-        local oldW, newW, gap = 132 * uiScale, 132 * uiScale, 12 * uiScale
-        local totalW = oldW + newW + gap
-        imgui.SetCursorPos(imgui.ImVec2(actionRegionX + (actionRegionW - totalW) * 0.5, actionY - wp.y))
-        imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.90, 0.33, 0.27, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.96, 0.39, 0.32, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.82, 0.27, 0.22, 1))
-        imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1, 1, 1, 1))
-        if imgui.Button("Старый##baron_interface_lua", imgui.ImVec2(oldW, 38 * uiScale)) then M.selectInterface("lua") end
-        imgui.PopStyleColor(4)
-        imgui.SameLine(0, gap)
-        imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.13, 0.68, 0.39, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.17, 0.76, 0.45, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.10, 0.59, 0.33, 1))
-        imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1, 1, 1, 1))
-        if imgui.Button("Новый##baron_interface_html", imgui.ImVec2(newW, 38 * uiScale)) then M.selectInterface("html") end
-        imgui.PopStyleColor(4)
-    elseif step.choice == "lua_redirect" then
-        local yesW, noW, gap = 132 * uiScale, 132 * uiScale, 12 * uiScale
-        local totalW = yesW + noW + gap
-        local remainingNoMs = getChoiceNoCooldownMs(step)
-        local noReady = remainingNoMs <= 0
-        local noLabel = getChoiceNoCooldownLabel(step, remainingNoMs)
-        imgui.SetCursorPos(imgui.ImVec2(actionRegionX + (actionRegionW - totalW) * 0.5, actionY - wp.y))
-        imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.13, 0.68, 0.39, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.17, 0.76, 0.45, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.10, 0.59, 0.33, 1))
-        imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1, 1, 1, 1))
-        if imgui.Button("Да##baron_lua_redirect_yes", imgui.ImVec2(yesW, 38 * uiScale)) then M.chooseLuaRedirect(true) end
-        imgui.PopStyleColor(4)
-        imgui.SameLine(0, gap)
-        imgui.PushStyleColor(imgui.Col.Button, noReady and imgui.ImVec4(0.90, 0.94, 0.98, 1) or imgui.ImVec4(0.78, 0.84, 0.90, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonHovered, noReady and imgui.ImVec4(0.84, 0.91, 0.97, 1) or imgui.ImVec4(0.78, 0.84, 0.90, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonActive, noReady and imgui.ImVec4(0.80, 0.88, 0.95, 1) or imgui.ImVec4(0.78, 0.84, 0.90, 1))
-        imgui.PushStyleColor(imgui.Col.Text, noReady and imgui.ImVec4(0.29, 0.43, 0.60, 1) or imgui.ImVec4(0.45, 0.53, 0.62, 1))
-        local clickedNo = imgui.Button(noLabel .. "##baron_lua_redirect_no", imgui.ImVec2(noW, 38 * uiScale))
-        imgui.PopStyleColor(4)
-        if noReady and clickedNo then M.chooseLuaRedirect(false) end
-    elseif step.choice == "future_details" then
+    if step.choice == "future_details" then
         local yesW, noW, gap = 132 * uiScale, 286 * uiScale, 12 * uiScale
         local totalW = yesW + noW + gap
         local remainingNoMs = getChoiceNoCooldownMs(step)
@@ -2484,18 +2214,6 @@ function M.render(imgui, params)
         local clickedNo = imgui.Button(noLabel .. "##baron_future_details_no", imgui.ImVec2(noW, 38 * uiScale))
         imgui.PopStyleColor(4)
         if noReady and clickedNo then M.chooseFutureDetails(false) end
-    elseif step.choice == "tutorial" then
-        local buttonH = 42 * uiScale
-        local acceptW = 200 * uiScale
-        local actionX = actionRegionX + math.max(0, (actionRegionW - acceptW) * 0.5)
-        imgui.SetCursorPos(imgui.ImVec2(actionX, actionY - wp.y))
-        imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.13, 0.52, 0.82, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.17, 0.59, 0.90, 1))
-        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.11, 0.47, 0.75, 1))
-        imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1, 1, 1, 1))
-        local acceptClicked = imgui.Button("Пройти обучение##baron_accept", imgui.ImVec2(acceptW, buttonH))
-        imgui.PopStyleColor(4)
-        if acceptClicked then M.chooseTutorial(true) end
     elseif tostring(step.message_link_label or "") ~= "" and tostring(step.message_link_url or "") ~= "" then
         local linkLabel = tostring(step.message_link_label)
         local linkUrl = tostring(step.message_link_url)
