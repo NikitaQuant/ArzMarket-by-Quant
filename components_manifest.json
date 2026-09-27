@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "bundle_version": 301,
+  "bundle_version": 302,
   "base_url": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/",
   "files": [
     {
@@ -486,13 +486,13 @@
     {
       "path": "ArzMarket/html/index.html",
       "size": 38095,
-      "crc32": "15B3D7C7",
+      "crc32": "2C7D5F0F",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/app.js",
-      "size": 260042,
-      "crc32": "286AB018",
+      "size": 263881,
+      "crc32": "941D2730",
       "required": true
     },
     {
@@ -581,8 +581,8 @@
     },
     {
       "path": "modules/arz_html_ui.lua",
-      "size": 162508,
-      "crc32": "E6867F6E",
+      "size": 167032,
+      "crc32": "30AB977E",
       "required": true
     },
     {

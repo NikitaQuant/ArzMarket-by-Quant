@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 79,
+    module_version = 80,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -22,7 +22,11 @@ local cefCursorOwned = false
 local cursorWasActiveBeforeHtml = false
 local clients, token, htmlRoot, currentPage, currentSettingsSection = {}, "", "", "buy", nil
 local requestQueue = {}
-local requestWorkerRunning = false
+local requestWorkerState = {
+    running=false,generation=0,thread=nil,heartbeatAt=0,jobStartedAt=0,jobPath="",
+    recoveries=0,lastRecoveryAt=0,lastError=nil,lastWatchdogAt=0,
+    queueLimit=32,jobTimeoutMs=32000,idleTimeoutMs=15000
+}
 local serverGeneration = 0
 local serviceBusy = false
 local lastServiceErrorAt = 0
@@ -2608,8 +2612,11 @@ local function handle(req)
         for key,value in pairs(bridgePerf) do snapshot[key]=value end
         snapshot.elapsedMs=math.max(0,nowMs()-bridgePerf.startedAt)
         snapshot.averageStateBuildMs=bridgePerf.stateBuilds>0 and bridgePerf.totalStateBuildMs/bridgePerf.stateBuilds or 0
-        snapshot.activeWorkers=(requestWorkerRunning and 1 or 0)+(storageWorkerRunning and 1 or 0)
+        snapshot.activeWorkers=((requestWorkerState.running and requestWorkerState.generation==serverGeneration) and 1 or 0)+(storageWorkerRunning and 1 or 0)
         snapshot.pendingRequests=#requestQueue
+        snapshot.requestWorkerRecoveries=requestWorkerState.recoveries
+        snapshot.requestWorkerLastError=requestWorkerState.lastError
+        snapshot.requestWorkerJobPath=requestWorkerState.jobPath
         local clientCount=0; for _ in pairs(clients) do clientCount=clientCount+1 end
         snapshot.activeClients=clientCount
         return jsonResponse(200,{ok=true,performance=snapshot})
@@ -2658,7 +2665,7 @@ local function handle(req)
             if tonumber(req.query.since)==tonumber(cachedState.revision) then return response(204,"","application/json; charset=utf-8") end
             return response(200,cachedState.body,"application/json; charset=utf-8","no-store")
         end
-        if not focusIsStable() then
+        if not focusIsStable() and requested~="marketplace" then
             if cachedState then
                 if tonumber(req.query.since)==tonumber(cachedState.revision) then return response(204,"","application/json; charset=utf-8") end
                 return response(200,cachedState.body,"application/json; charset=utf-8","no-store")
@@ -2729,22 +2736,30 @@ end
 -- to call callbacks that may yield to the MoonLoader scheduler.
 local function enqueueRequest(entry,req)
     if not entry or not clients[entry] or entry.processing then return false end
+    if #requestQueue>=requestWorkerState.queueLimit then
+        queueResponse(entry,response(503,"bridge_busy"))
+        return false
+    end
     entry.processing=true
     entry.deadline=nowMs()+30000
-    requestQueue[#requestQueue+1]={entry=entry,req=req}
+    requestQueue[#requestQueue+1]={entry=entry,req=req,queuedAt=nowMs()}
     return true
 end
 
 local function requestWorker(generation)
-    while requestWorkerRunning and generation==serverGeneration do
+    while requestWorkerState.running and generation==serverGeneration do
+        if requestWorkerState.generation==generation then requestWorkerState.heartbeatAt=nowMs() end
         local job=table.remove(requestQueue,1)
         if job then
             local entry=job.entry
+            if requestWorkerState.generation==generation then
+                requestWorkerState.jobStartedAt=nowMs()
+                requestWorkerState.jobPath=tostring(job.req and job.req.path or "")
+            end
             if entry and clients[entry] then
-                -- Do not use xpcall here. Some request callbacks legitimately
-                -- pass through MoonLoader code that may yield; resuming such a
-                -- request through xpcall caused "cannot resume non-suspended
-                -- coroutine" and killed the whole ArzMarket script.
+                -- Do not use xpcall here. Some request callbacks can yield in
+                -- MoonLoader. pcall keeps the existing runtime behavior while
+                -- the watchdog below can replace a worker that never returns.
                 local okHandle,out=pcall(handle,job.req)
                 if not okHandle then
                     local detail=bridgeTraceback(out)
@@ -2755,14 +2770,42 @@ local function requestWorker(generation)
                 end
                 if clients[entry] then queueResponse(entry,out) end
             end
+            if requestWorkerState.generation==generation then
+                requestWorkerState.jobStartedAt=0
+                requestWorkerState.jobPath=""
+                requestWorkerState.heartbeatAt=nowMs()
+            end
             ctx.wait(0)
         else
-            -- The old idle wait(0) woke this coroutine every rendered game
-            -- frame even when HTML had sent no request. Keep response latency
-            -- low without burning a MoonLoader timeslice while idle.
             ctx.wait(16)
         end
     end
+    if requestWorkerState.generation==generation then
+        requestWorkerState.generation=0
+        requestWorkerState.thread=nil
+        requestWorkerState.jobStartedAt=0
+        requestWorkerState.jobPath=""
+        requestWorkerState.heartbeatAt=nowMs()
+    end
+end
+
+function __arzHtmlStartRequestWorker(generation)
+    if not running or not requestWorkerState.running then return false,"worker_disabled" end
+    requestWorkerState.generation=generation
+    requestWorkerState.heartbeatAt=nowMs()
+    requestWorkerState.jobStartedAt=0
+    requestWorkerState.jobPath=""
+    local workerOk,workerOrError=pcall(ctx.lua_thread.create,function()
+        requestWorker(generation)
+    end)
+    if not workerOk or not workerOrError then
+        if requestWorkerState.generation==generation then requestWorkerState.generation=0 end
+        requestWorkerState.thread=nil
+        requestWorkerState.lastError="request_worker_start_failed: "..tostring(workerOrError)
+        return false,requestWorkerState.lastError
+    end
+    requestWorkerState.thread=workerOrError
+    return true
 end
 
 local function service()
@@ -2823,6 +2866,44 @@ function __arzHtmlRecoverServiceClients()
     for entry in pairs(clients) do entries[#entries+1]=entry end
     for _,entry in ipairs(entries) do closeClient(entry) end
     requestQueue={}
+end
+
+function __arzHtmlRecoverRequestWorker(reason)
+    if not running or not requestWorkerState.running then return false,"worker_disabled" end
+    local now=nowMs()
+    if now-requestWorkerState.lastRecoveryAt<1000 then return false,"recovery_cooldown" end
+    requestWorkerState.lastRecoveryAt=now
+    requestWorkerState.recoveries=requestWorkerState.recoveries+1
+    requestWorkerState.lastError=tostring(reason or "worker_unhealthy")
+    log("request worker recovery #"..tostring(requestWorkerState.recoveries)..": "..requestWorkerState.lastError)
+    __arzHtmlRecoverServiceClients()
+    stateResponseCache={}
+    serverGeneration=serverGeneration+1
+    requestWorkerState.generation=0
+    requestWorkerState.thread=nil
+    requestWorkerState.jobStartedAt=0
+    requestWorkerState.jobPath=""
+    requestWorkerState.heartbeatAt=now
+    return __arzHtmlStartRequestWorker(serverGeneration)
+end
+
+function __arzHtmlEnsureRequestWorkerHealthy()
+    if not running or not requestWorkerState.running then return true end
+    local now=nowMs()
+    if requestWorkerState.generation~=serverGeneration then
+        local ok,err=__arzHtmlRecoverRequestWorker("worker_missing")
+        return ok,err
+    end
+    if requestWorkerState.jobStartedAt>0 and now-requestWorkerState.jobStartedAt>requestWorkerState.jobTimeoutMs then
+        local path=requestWorkerState.jobPath~="" and requestWorkerState.jobPath or "unknown"
+        local ok,err=__arzHtmlRecoverRequestWorker("handler_timeout:"..path)
+        return ok,err
+    end
+    if requestWorkerState.jobStartedAt==0 and requestWorkerState.heartbeatAt>0 and now-requestWorkerState.heartbeatAt>requestWorkerState.idleTimeoutMs then
+        local ok,err=__arzHtmlRecoverRequestWorker("worker_heartbeat_timeout")
+        return ok,err
+    end
+    return true
 end
 
 function __arzHtmlSafeService(generation)
@@ -3059,20 +3140,25 @@ function __arzHtmlStartServer()
     serverGeneration=serverGeneration+1
     local generation=serverGeneration
     running=true
-    requestWorkerRunning=true
+    requestWorkerState.running=true
+    requestWorkerState.generation=0
+    requestWorkerState.thread=nil
+    requestWorkerState.heartbeatAt=nowMs()
+    requestWorkerState.jobStartedAt=0
+    requestWorkerState.jobPath=""
+    requestWorkerState.lastError=nil
+    requestWorkerState.lastWatchdogAt=0
     serviceBusy=false
 
-    local workerOk,workerOrError=pcall(ctx.lua_thread.create,function()
-        requestWorker(generation)
-    end)
-    if not workerOk or not workerOrError then
+    local workerOk,workerError=__arzHtmlStartRequestWorker(generation)
+    if not workerOk then
         running=false
-        requestWorkerRunning=false
+        requestWorkerState.running=false
         if server then pcall(function() server:close() end) end
         server,port=nil,nil
         socketApi=nil
         M._socketBackend="none"
-        return false,"request_worker_start_failed: "..tostring(workerOrError)
+        return false,tostring(workerError)
     end
     log("bridge listening on 127.0.0.1:"..tostring(port).." backend="..tostring(M._socketBackend))
     return true
@@ -3081,7 +3167,12 @@ end
 function __arzHtmlStopServer()
     serverGeneration=serverGeneration+1
     running=false
-    requestWorkerRunning=false
+    requestWorkerState.running=false
+    requestWorkerState.generation=0
+    requestWorkerState.thread=nil
+    requestWorkerState.heartbeatAt=0
+    requestWorkerState.jobStartedAt=0
+    requestWorkerState.jobPath=""
     stopStorageSnapshotWorker()
     serviceBusy=false
     requestQueue={}
@@ -3432,9 +3523,17 @@ function M.pump()
     if not running then return true end
     local now=nowMs()
     local ok,err=true,nil
+    if now-requestWorkerState.lastWatchdogAt>=250 then
+        requestWorkerState.lastWatchdogAt=now
+        local workerOk,workerErr=__arzHtmlEnsureRequestWorkerHealthy()
+        if not workerOk and workerErr~="recovery_cooldown" then
+            ok,err=false,workerErr
+        end
+    end
     if now-lastServiceAt>=8 then
         lastServiceAt=now
-        ok,err=__arzHtmlSafeService(serverGeneration)
+        local serviceOk,serviceErr=__arzHtmlSafeService(serverGeneration)
+        if not serviceOk then ok,err=false,serviceErr end
     end
     if htmlOpen then
         ensureIframe()

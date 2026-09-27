@@ -22,6 +22,7 @@
     pageCache: Object.create(null),
     pageRevision: {buy:0, sell:0, settings:0, logs:0, marketplace:0, mods:0, storage:0},
     pageRequests: Object.create(null),
+    deferredPageState: Object.create(null),
     toastTimer: 0,
     clearArmedUntil: 0,
     budgetPreviewTimer: 0,
@@ -41,7 +42,7 @@
     storage: {search:'', type:'all', place:'all', selectedKey:null, tab:'distribution'},
     settings: {section:initialSettingsSection, mergeSelected:new Set(), pendingScale:null, paletteDragging:false},
     modsSection: 'scripts',
-    marketplace: {search:'', selectedShopKey:null},
+    marketplace: {search:'', selectedShopKey:null, loadingStartedAt:0, bridgeFailures:0},
     interfaceScalePercent: 100,
     minimalMode: false,
     minimalModeHydrated: false
@@ -807,10 +808,25 @@
     const fetchOptions = Object.assign({}, options);
     delete fetchOptions.timeoutMs;
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    const timeoutId = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+    let timeoutId = null;
     let response;
     try {
-      response = await fetch(path, Object.assign({}, fetchOptions, {headers, cache: 'no-store', signal: controller ? controller.signal : options.signal}));
+      const fetchPromise = fetch(path, Object.assign({}, fetchOptions, {headers, cache: 'no-store', signal: controller ? controller.signal : options.signal}));
+      if (controller) {
+        timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+        response = await fetchPromise;
+      } else {
+        response = await Promise.race([
+          fetchPromise,
+          new Promise((_, reject) => {
+            timeoutId = window.setTimeout(() => {
+              const error = new Error('timeout');
+              error.name = 'TimeoutError';
+              reject(error);
+            }, timeoutMs);
+          })
+        ]);
+      }
     } finally {
       if (timeoutId !== null) window.clearTimeout(timeoutId);
     }
@@ -1540,12 +1556,66 @@
     state.pageRevision[page] = Number(result.revision || 0);
   }
 
+  function isTradeEditorActive(page = state.page) {
+    if (page !== 'buy' && page !== 'sell') return false;
+    const active = document.activeElement;
+    return active instanceof HTMLElement && active.dataset?.arzTradeEditor === '1';
+  }
+
+  function applyDeferredTradeState(page = state.page) {
+    if (isTradeEditorActive(page)) return false;
+    const pending = state.deferredPageState[page];
+    if (!pending) return false;
+    delete state.deferredPageState[page];
+    applyPageState(page, pending, true);
+    return true;
+  }
+
+  function setMarketplaceLocalError(reason = 'bridge_unavailable', resetRevision = true) {
+    if (state.page !== 'marketplace') return;
+    const current = state.data || emptyPageState('marketplace');
+    const data = Object.assign({}, current.data || {}, {status:'error', errorReason:String(reason || 'bridge_unavailable')});
+    state.data = Object.assign({}, current, {data});
+    state.pageCache.marketplace = state.data;
+    if (resetRevision) state.pageRevision.marketplace = 0;
+    state.marketplace.loadingStartedAt = 0;
+    try { renderMarketplace(); } catch (err) { console.error('[ArzMarket HTML] marketplace error render failed:', err); }
+  }
+
+  function updateMarketplaceLoadingWatchdog() {
+    if (state.page !== 'marketplace') return;
+    const status = String(state.data?.data?.status || 'loading');
+    if (status !== 'loading') {
+      state.marketplace.loadingStartedAt = 0;
+      return;
+    }
+    if (!state.marketplace.loadingStartedAt) state.marketplace.loadingStartedAt = Date.now();
+    if (Date.now() - state.marketplace.loadingStartedAt >= 120000) {
+      setMarketplaceLocalError('loading_deadline', false);
+      refs.runtimeText.textContent = 'Маркетплейс не отвечает';
+    }
+  }
+
   function applyPageState(page, result, force = false) {
     if (!result || result.unchanged) return;
     rememberPageState(page, result);
     if (state.page !== page) return;
+    if (!force && isTradeEditorActive(page)) {
+      state.deferredPageState[page] = result;
+      return;
+    }
+    delete state.deferredPageState[page];
     state.data = result;
     state.revision = state.pageRevision[page] || 0;
+    if (page === 'marketplace') {
+      state.marketplace.bridgeFailures = 0;
+      const marketplaceStatus = String(result?.data?.status || 'loading');
+      if (marketplaceStatus === 'loading') {
+        if (!state.marketplace.loadingStartedAt) state.marketplace.loadingStartedAt = Date.now();
+      } else {
+        state.marketplace.loadingStartedAt = 0;
+      }
+    }
     const selectedTheme = result?.common?.htmlThemeKey || result?.data?.appearance?.palette_key;
     const selectedThemeProfile = result?.common?.htmlThemeProfile || result?.data?.appearance?.global_palette || null;
     if (selectedThemeProfile?.enabled === true) applyHtmlTheme('global_palette', selectedThemeProfile);
@@ -1591,12 +1661,18 @@
         else if (state.page === page) {
           refs.runtimeText.textContent = 'Система готова';
           if (state.pageCache[page]) revealHydratedInterface();
+          if (page === 'marketplace') updateMarketplaceLoadingWatchdog();
           window.requestAnimationFrame(() => window.requestAnimationFrame(notifyHostReady));
         }
         return result;
       } catch (err) {
         if (state.page === page) {
           refs.runtimeText.textContent = 'Нет связи с Lua';
+          if (page === 'marketplace') {
+            state.marketplace.bridgeFailures = Number(state.marketplace.bridgeFailures || 0) + 1;
+            const currentStatus = String(state.data?.data?.status || 'loading');
+            if (currentStatus === 'loading' || currentStatus === 'error') setMarketplaceLocalError(`bridge_${err?.message || 'unavailable'}`);
+          }
           if (force) showToast(`Bridge: ${err.message}`, 'error');
         }
         throw err;
@@ -2498,6 +2574,7 @@
     wrap.append(div(label, 'field-label'));
     const input = document.createElement('input');
     input.className = 'field-input';
+    input.dataset.arzTradeEditor = '1';
     input.type = 'number';
     input.min = '0';
     input.step = '1';
@@ -2694,6 +2771,7 @@
   function makeSellInlineNumber(item, value, key, options = {}) {
     const input = document.createElement('input');
     input.className = `sell-inline-input ${options.className || ''}`.trim();
+    input.dataset.arzTradeEditor = '1';
     const formatMoney = options.formatMoney === true;
     input.type = formatMoney ? 'text' : 'number';
     input.inputMode = formatMoney ? 'numeric' : '';
@@ -2713,7 +2791,7 @@
       n = Math.trunc(n);
       const available = Math.max(0, Math.trunc(Number(item?.all_count) || 0));
       if (options.clampAvailable && available > 0) n = Math.min(n, available);
-      input.value = formatMoney ? moneyRef(n) : String(n);
+      if (document.activeElement !== input) input.value = formatMoney ? moneyRef(n) : String(n);
       const patch = key === 'count' ? {count: n, maximum: false} : {[key]: n};
       await patchItem(item, patch);
     };
@@ -4203,8 +4281,9 @@
     try {
       refs.saveBadge.textContent = 'Сохранение...';
       await action('trade.item.update', {side: state.page, identity: item.identity, patch});
+      Object.assign(item, patch);
       refs.saveBadge.textContent = 'Сохранено';
-      await refresh(true);
+      if (!isTradeEditorActive(state.page)) await refresh(true);
       setTimeout(() => { refs.saveBadge.textContent = 'Автосохранение'; }, 900);
       return true;
     } catch (err) {
@@ -4216,7 +4295,7 @@
       } else {
         showToast(`Не удалось сохранить: ${err.message}`, 'error');
       }
-      await refresh(true);
+      if (!isTradeEditorActive(state.page)) await refresh(true);
       return false;
     }
   }
@@ -4519,6 +4598,7 @@
 
   function bindSellDetailNumber(input, kind) {
     if (!input) return;
+    input.dataset.arzTradeEditor = '1';
     let timer = 0;
     const commit = async () => {
       clearTimeout(timer);
@@ -4806,6 +4886,13 @@
   installWheelScroller(refs.sellSaleRows);
   installWheelScroller(refs.sellInfoContent);
 
+  document.addEventListener('focusout', event => {
+    if (event.target?.dataset?.arzTradeEditor !== '1') return;
+    window.setTimeout(() => {
+      if (!isTradeEditorActive(state.page)) applyDeferredTradeState(state.page);
+    }, 0);
+  }, true);
+
   window.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.repeat) return;
     if (activePopupSelect) {
@@ -4915,6 +5002,7 @@
       const delay = document.visibilityState === 'hidden' ? 10000 : busy ? 750 : minimized ? 6000 : 4000;
       await new Promise(resolve => window.setTimeout(resolve, delay));
       try { await refresh(false); } catch (_) {}
+      if (state.page === 'marketplace') updateMarketplaceLoadingWatchdog();
     }
   })();
 })();

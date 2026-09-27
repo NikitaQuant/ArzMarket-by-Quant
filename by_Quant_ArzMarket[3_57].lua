@@ -1995,12 +1995,29 @@ function arzUiExtensionsCreateContext(extension)
 		fallbackActive = false,
 		fallbackStartedAt = 0,
 		attempts = 0,
-		nextRetryAt = 0
+		nextRetryAt = 0,
+		loadingStartedAt = 0,
+		loadingDeadlineSeconds = 120
 	}
 	ctx.pumpMarketplaceHtml = function()
 		if type(marketState) ~= "table" or type(marketplace_Manager) ~= "function" then return false, "marketplace_unavailable" end
 		local runtime = ctx.marketplaceHtmlRuntime
 		local now = os.time()
+		local terminalMarketplaceState = type(download_marketplace) == "table"
+			or download_marketplace == true or download_marketplace == "auth"
+			or download_marketplace == "blocked" or download_marketplace == "error"
+		if terminalMarketplaceState then
+			runtime.loadingStartedAt = 0
+		else
+			if (tonumber(runtime.loadingStartedAt) or 0) <= 0 then runtime.loadingStartedAt = now end
+			if now - (tonumber(runtime.loadingStartedAt) or now) >= (tonumber(runtime.loadingDeadlineSeconds) or 120) then
+				marketState.marketplaceError = marketState.marketplaceError or "loading_deadline"
+				download_marketplace = "error"
+				runtime.attempts = math.max(3, tonumber(runtime.attempts) or 0)
+				runtime.nextRetryAt = 0
+				return true
+			end
+		end
 		if marketState.catalogJustLoaded then
 			marketState.catalogJustLoaded = false
 			runtime.attempts = 0
@@ -2189,6 +2206,7 @@ function arzUiExtensionsCreateContext(extension)
 		marketState.marketplaceError = nil
 		ctx.marketplaceHtmlRuntime.attempts = 0
 		ctx.marketplaceHtmlRuntime.nextRetryAt = 0
+		ctx.marketplaceHtmlRuntime.loadingStartedAt = os.time()
 		if serverIndex ~= nil then
 			local maxIndex = math.max(0, #(marketState.marketplace_servers or {}) - 1)
 			local normalized = math.max(0, math.min(maxIndex, math.floor(tonumber(serverIndex) or 0)))
@@ -2647,12 +2665,14 @@ end
 -- Keep marketState.scriptVersion unchanged for server compatibility.
 -- Increase ARZ_LOCAL_BUILD_ID and update the notes on every local release.
 -- ============================================================
-ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.20-r29-html-native-input"
+ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.27-r31-html-stability"
 ARZ_RELEASE_NOTES_PATH = getWorkingDirectory() .. "/ArzMarket/release_notes_state.json"
 ARZ_RELEASE_NOTES = {
 	build = ARZ_LOCAL_BUILD_ID,
 	title = "Что изменилось",
 	items = {
+		"Исправлен ввод цены: автосохранение больше не пересоздаёт активное поле и не сбивает каретку во время набора.",
+		"Исправлено зависание HTML Маркетплейса: добавлены watchdog bridge, восстановление request worker и жёсткий выход из вечного loading.",
 		"Исправлен ввод при стандартном SA-MP курсоре: Lua и HTML ArzMarket остаются кликабельными при открытом игровом диалоге, а клики вне окна ArzMarket продолжают работать в самом SA-MP диалоге.",
 		"ArzMarket больше не включает SA-MP cursor mode 1. Обычный режим использует штатный MoonLoader/mimgui/CEF курсор без блокировки клавиш; для внешнего SA-MP курсора включается отдельный совместимый input bridge.",
 		"HTML Marketplace исправлен: загрузка и fallback больше не зависят от рендера Lua-страницы, устранена вечная загрузка после обновления items/buy и оптимизирована передача большого списка лавок.",
@@ -11764,7 +11784,7 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.57.135"
+ARZ_UPDATE_VERSION = "3.57.137"
 ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
@@ -23609,7 +23629,7 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
-ARZ_COMPONENTS.bootstrap.expected_bundle_version = 301
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 302
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"
