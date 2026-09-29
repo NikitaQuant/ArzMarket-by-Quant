@@ -34,7 +34,7 @@
   <link rel="stylesheet" href="/static/css/storage-v43-sell-parity.css?v=43">
   <link rel="stylesheet" href="/static/css/settings-v45.css?v=45">
   <link rel="stylesheet" href="/static/css/settings-v46-fix.css?v=88">
-  <link rel="stylesheet" href="/static/css/marketplace-v47.css?v=51">
+  <link rel="stylesheet" href="/static/css/marketplace-v47.css?v=55">
   <link rel="stylesheet" href="/static/css/mods-v55.css?v=88">
   <link rel="stylesheet" href="/static/css/average-prices-v56.css?v=58">
   <link rel="stylesheet" href="/static/css/ui-unified-v59.css?v=60">
@@ -341,6 +341,13 @@
               <button class="mods-catalog-tab" type="button" data-mods-section="mine" role="tab" aria-selected="false">Мои</button>
             </aside>
             <section class="mods-catalog-content" aria-live="polite"></section>
+            <section id="modsModuleViewer" class="mods-module-viewer hidden" aria-live="polite">
+              <header class="mods-module-viewer-header">
+                <button id="modsModuleBackButton" class="mods-module-back-button" type="button">← Назад</button>
+                <strong id="modsModuleTitle" class="mods-module-viewer-title">Модуль</strong>
+              </header>
+              <iframe id="modsModuleFrame" class="mods-module-frame" src="about:blank" title="Пользовательский модуль"></iframe>
+            </section>
           </div>
           <div id="storageWorkspace" class="storage-workspace hidden">
             <section class="storage-table-card">
@@ -392,7 +399,7 @@
     <div id="toast" class="toast hidden"></div>
   </div>
   <script src="/static/js/assistant-v78.js?v=266"></script>
-  <script src="/static/js/app.js?v=270"></script>
+  <script src="/static/js/app.js?v=275"></script>
   <script src="/static/js/buy-polish.js?v=210"></script>
 </body>
 </html>

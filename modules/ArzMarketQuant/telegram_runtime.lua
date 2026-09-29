@@ -1,4 +1,4 @@
-local M = { api_version = 1, module_version = 1 }
+local M = { api_version = 1, module_version = 2 }
 
 function M.init(ctx)
 local context = type(ctx) == "table" and ctx or {}
@@ -485,7 +485,7 @@ function sendTelegramNotification(message)
 	end)
 	local telegramMessage = string.gsub(urlEncodedMessage, " ", "+")
 
-	telegramWorkingOriginalAsyncHttpRequest(
+	asyncHttpRequest(
 		"POST",
 		"https://"
 			.. (ini.cfg.telegram_reserve and "api-telegram.arz.market" or "api.telegram.org")

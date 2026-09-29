@@ -475,6 +475,39 @@ function saveLog(text)
 	end
 end
 
+ARZ_MARKETPLACE_DIAG_SESSION = ARZ_MARKETPLACE_DIAG_SESSION or (os.date("%Y%m%d-%H%M%S") .. "-" .. tostring(math.random(1000, 9999)))
+function arzMarketplaceDiagWrite(layer, eventName, fields)
+	local ok, err = pcall(function()
+		local path = getWorkingDirectory() .. "/ArzMarket/UsersInfo/logs/marketplace_diag.txt"
+		local file = io.open(path, "a")
+		if not file then return end
+		local function clean(value)
+			local text = tostring(value == nil and "" or value):gsub("[\r\n\t]", " ")
+			if #text > 500 then text = text:sub(1, 500) end
+			return text
+		end
+		local parts = {
+			"ts=" .. os.date("%Y-%m-%dT%H:%M:%S"),
+			"session=" .. clean(ARZ_MARKETPLACE_DIAG_SESSION),
+			"layer=" .. clean(layer),
+			"event=" .. clean(eventName),
+			"build=" .. clean(ARZ_LOCAL_BUILD_ID or "")
+		}
+		if type(fields) == "table" then
+			local keys = {}
+			for key in pairs(fields) do keys[#keys + 1] = tostring(key) end
+			table.sort(keys)
+			for _, key in ipairs(keys) do
+				parts[#parts + 1] = clean(key) .. "=" .. clean(fields[key])
+			end
+		end
+		file:write(table.concat(parts, " ") .. "\n")
+		file:flush()
+		file:close()
+	end)
+	return ok, err
+end
+
 function writeJsonFile(data, path)
 	local encoded = encodeJsonSafe(data, cjson.encode)
 	if not encoded or not (encoded:find("%{") or encoded:find("%[")) then
@@ -1296,6 +1329,9 @@ function arzRenderMainDonorLauncherDownloadCard()
 end
 
 function arzUiExtensionsCreateContext(extension)
+	-- Resolve the real local marketState through a late-bound accessor.
+	-- This function is defined before the local marketState declaration.
+	local marketState = type(ARZ_UI_EXTENSIONS.getMarketState) == "function" and ARZ_UI_EXTENSIONS.getMarketState() or nil
 	local ctx = {
 		api_version = ARZ_UI_EXTENSION_API_VERSION,
 		extension_id = extension.id,
@@ -1556,6 +1592,7 @@ function arzUiExtensionsCreateContext(extension)
   return arzOpenSpecialPage(page, true)
  end
 	ctx.getTradeAutomationState = function()
+		if type(arzUserModsGetTradeState) == "function" then return arzUserModsGetTradeState() end
 		return {
 			sell = tradeAutomation.sell == true,
 			buy = tradeAutomation.buy == true,
@@ -1607,15 +1644,12 @@ function arzUiExtensionsCreateContext(extension)
 		return false
 	end
 	ctx.startTrade = function(side)
-		if type(sampProcessChatInput) ~= "function" then return false end
-		side = side == "sell" and "sell" or "buy"
-		sampProcessChatInput(side == "sell" and "/crsell" or "/crbuy")
-		return true
+		if type(arzUserModsStartTrade) == "function" then return arzUserModsStartTrade(side) end
+		return false, "trade_service_unavailable"
 	end
 	ctx.cancelTrade = function()
-		if type(off_sell_buy) ~= "function" then return false end
-		off_sell_buy()
-		return true
+		if type(arzUserModsCancelTrade) == "function" then return arzUserModsCancelTrade() end
+		return false, "trade_service_unavailable"
 	end
 	ctx.getTradeUiState = function()
 		local buyScanState = buyScanMode == true
@@ -1770,48 +1804,12 @@ function arzUiExtensionsCreateContext(extension)
 		return buyContinueMode
 	end
 	ctx.listTradeConfigs = function(side)
-		side = side == "sell" and "sell" or "buy"
-		local directory = "moonloader/ArzMarket/" .. side .. "-cfg"
-		local out = {}
-		if type(lfs) ~= "table" or type(lfs.dir) ~= "function" or not doesDirectoryExist(directory) then
-			return out
-		end
-		local ok = pcall(function()
-			for fileName in lfs.dir(directory) do
-				if type(fileName) == "string" and fileName:match("%.json$") then
-					out[#out + 1] = fileName
-				end
-			end
-		end)
-		if not ok then return {} end
-		table.sort(out, function(a, b) return string.lower(a) < string.lower(b) end)
-		return out
+		if type(arzUserModsListTradeConfigs) == "function" then return arzUserModsListTradeConfigs(side) end
+		return {}
 	end
 	ctx.loadTradeConfig = function(side, fileName)
-		side = side == "sell" and "sell" or "buy"
-		fileName = tostring(fileName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-		if fileName ~= "" and not fileName:match("%.json$") then fileName = fileName .. ".json" end
-		if fileName == "" or fileName:find("[/\\]") or fileName:find("..", 1, true) or not fileName:match("^[^%c]+%.json$") then
-			return false, "invalid_config_name"
-		end
-		local path = "moonloader/ArzMarket/" .. side .. "-cfg/" .. fileName
-		if not doesFileExist(path) or type(loadConfig) ~= "function" then return false, "config_missing" end
-		local ok, loaded = pcall(loadConfig, path)
-		if not ok or type(loaded) ~= "table" then return false, "config_invalid" end
-		if side == "buy" then
-			buyList = loaded
-			loadedBuyConfig = fileName
-			ini.cfg.load_config_buy = fileName
-			configFileNames.buy = fileName
-		else
-			sellList = loaded
-			loadedSellConfig = fileName
-			ini.cfg.load_config_sell = fileName
-			configFileNames.sell = fileName
-		end
-		if type(tradeFilterInvalidate) == "function" then pcall(tradeFilterInvalidate, side) end
-		if type(save_all) == "function" then save_all() end
-		return true
+		if type(arzUserModsLoadTradeConfig) == "function" then return arzUserModsLoadTradeConfig(side, fileName) end
+		return false, "trade_service_unavailable"
 	end
 	ctx.getSettingsSnapshot = function()
 		if type(arzHtmlSettingsGetSnapshot) ~= "function" then return {} end
@@ -1930,8 +1928,29 @@ function arzUiExtensionsCreateContext(extension)
 			launcher_download_message = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD and tostring(ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD.message or "") or "",
 			launcher_download_path = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD and tostring(ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD.path or "") or "",
 			launcher_download_target = ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD and tostring(ARZ_MAIN_DONOR_LAUNCHER_DOWNLOAD.target or "") or "",
-			launcher_download_filename = tostring(ARZ_MAIN_DONOR_LAUNCHER_FILENAME or "Arizona_Main_Donor_Launcher.zip")
+			launcher_download_filename = tostring(ARZ_MAIN_DONOR_LAUNCHER_FILENAME or "Arizona_Main_Donor_Launcher.zip"),
+			user_modules = type(arzUserModsGetPublicList) == "function" and arzUserModsGetPublicList() or {}
 		}
+	end
+	ctx.userModState = function(moduleId)
+		if type(arzUserModsGetState) ~= "function" then return false, "runtime_unavailable" end
+		return arzUserModsGetState(moduleId)
+	end
+	ctx.userModAction = function(moduleId, action, payload)
+		if type(arzUserModsHandleAction) ~= "function" then return false, "runtime_unavailable" end
+		return arzUserModsHandleAction(moduleId, action, payload)
+	end
+	ctx.userModSetEnabled = function(moduleId, enabled)
+		if type(arzUserModsSetEnabled) ~= "function" then return false, "runtime_unavailable" end
+		return arzUserModsSetEnabled(moduleId, enabled == true)
+	end
+	ctx.userModReload = function(moduleId)
+		if type(arzUserModsReload) ~= "function" then return false, "runtime_unavailable" end
+		return arzUserModsReload(moduleId)
+	end
+	ctx.userModResolveAsset = function(moduleId, relativePath)
+		if type(arzUserModsResolveAsset) ~= "function" then return false, "runtime_unavailable" end
+		return arzUserModsResolveAsset(moduleId, relativePath)
 	end
 	ctx.setModsValue = function(key, value)
 		key = tostring(key or "")
@@ -2177,6 +2196,10 @@ function arzUiExtensionsCreateContext(extension)
 		if type(timers) == "table" and type(timers[16]) == "number" and timers[16] > 0 then
 			lastUpdated = math.max(0, os.time() - timers[16])
 		end
+		if marketState.marketplaceDiagLastSnapshotStatus ~= status then
+			marketState.marketplaceDiagLastSnapshotStatus = status
+			arzMarketplaceDiagWrite("MP", "snapshot_status", {status=status, shops=tostring(#shops), error=tostring(marketState.catalogError or marketState.marketplaceError or "")})
+		end
 
 		return {
 			status = status,
@@ -2278,14 +2301,86 @@ function arzUiExtensionsCreateContext(extension)
 		SendToServer("/findilavka " .. tostring(math.floor(uid)))
 		return true
 	end
+	ctx.marketplaceAuthRuntime = ctx.marketplaceAuthRuntime or {
+		state = "idle",
+		message = "",
+		provider = "telegram"
+	}
 	ctx.openMarketplaceAuthProvider = function(provider)
-		if type(openUrl) ~= "function" then return false, "open_url_unavailable" end
-		if tostring(provider) == "vk" then
-			openUrl("https://vk.com/im/convo/-237814015")
-		else
-			openUrl("https://t.me/ArzMarketManager_bot")
+		provider = tostring(provider or "telegram") == "vk" and "vk" or "telegram"
+		ctx.marketplaceAuthRuntime.provider = provider
+		local url = provider == "vk" and "https://vk.com/im/convo/-237814015" or "https://t.me/ArzMarketManager_bot"
+		local ok = pcall(os.execute, 'explorer "' .. url .. '"')
+		if not ok then
+			if type(openUrl) ~= "function" then return false, "open_url_unavailable" end
+			local fallbackOk = pcall(openUrl, url)
+			if not fallbackOk then return false, "open_url_failed" end
 		end
 		return true
+	end
+	ctx.submitMarketplaceAuthKey = function(candidateKey)
+		candidateKey = tostring(candidateKey or ""):gsub("^%s*(.-)%s*$", "%1")
+		if candidateKey == "" or #candidateKey > 255 or candidateKey:find("[%z\r\n]") then
+			ctx.marketplaceAuthRuntime.state = "error"
+			ctx.marketplaceAuthRuntime.message = "Введите корректный Premium ключ."
+			return false, "invalid_key"
+		end
+		if ctx.marketplaceAuthRuntime.state == "pending" then return false, "request_in_flight" end
+		ctx.marketplaceAuthRuntime.state = "pending"
+		ctx.marketplaceAuthRuntime.message = "Проверяю ключ..."
+		marketState.premiumTokenAuth = imguiNew.char[256](candidateKey)
+
+		asyncHttpRequest("POST", marketState.host .. "/api/checkKey/" .. candidateKey, {}, function(tokenAuthResponse)
+			if tokenAuthResponse.status_code == 201 then
+				local decodedOk, decodedInfo = pcall(decodeJson, tokenAuthResponse.text)
+				if not decodedOk or type(decodedInfo) ~= "table" then
+					ctx.marketplaceAuthRuntime.state = "error"
+					ctx.marketplaceAuthRuntime.message = "Сервер вернул некорректный ответ."
+					return
+				end
+				marketState.premiumUserInfo = decodedInfo
+				if marketState.premiumUserInfo.endTime then
+					arzNetworkAcceptPremiumAuth(candidateKey, marketState.premiumUserInfo.UserTempKey)
+					ini.cfg.premiumTokenAuth = arzAuthFreezeNumber("ini_premiumTokenAuth", 2, -1) or ini.cfg.premiumTokenAuth
+					local writeSuccess = writeKey(candidateKey, "premiumTokenAuth")
+					if writeSuccess == false then
+						ctx.marketplaceAuthRuntime.state = "error"
+						ctx.marketplaceAuthRuntime.message = "Ключ принят, но не удалось сохранить авторизацию."
+						return
+					end
+					save_all()
+					isStartLoadPremium = 0
+					download_marketplace = nil
+					marketState.marketplaceError = nil
+					ctx.marketplaceHtmlRuntime.attempts = 0
+					ctx.marketplaceHtmlRuntime.nextRetryAt = 0
+					ctx.marketplaceHtmlRuntime.loadingStartedAt = 0
+					ctx.marketplaceAuthRuntime.state = "success"
+					ctx.marketplaceAuthRuntime.message = "Авторизация маркетплейса успешна!"
+					sendNotify(u8:decode("Авторизация маркетплейса успешна!"))
+				elseif marketState.premiumUserInfo.error then
+					ctx.marketplaceAuthRuntime.state = "error"
+					ctx.marketplaceAuthRuntime.message = "К сожалению данный ключ отсутствует."
+				else
+					ctx.marketplaceAuthRuntime.state = "error"
+					ctx.marketplaceAuthRuntime.message = "Сервер не подтвердил ключ."
+				end
+			else
+				ctx.marketplaceAuthRuntime.state = "error"
+				ctx.marketplaceAuthRuntime.message = "Ошибка " .. tostring(tokenAuthResponse.status_code) .. "."
+			end
+		end, function()
+			ctx.marketplaceAuthRuntime.state = "error"
+			ctx.marketplaceAuthRuntime.message = "Ошибка клиента/сервера. Обратитесь в поддержку."
+		end)
+		return true
+	end
+	ctx.getMarketplaceAuthStatus = function()
+		return {
+			state = tostring(ctx.marketplaceAuthRuntime.state or "idle"),
+			message = tostring(ctx.marketplaceAuthRuntime.message or ""),
+			provider = tostring(ctx.marketplaceAuthRuntime.provider or "telegram")
+		}
 	end
 	return ctx
 end
@@ -2538,10 +2633,14 @@ function arzUiExtensionsOpenHtml(page, settingsSection, options)
 	end
 
 	local temporary = type(options) == "table" and options.temporary == true
+	local requestedUserModId = type(options) == "table" and tostring(options.user_mod_id or ""):lower() or ""
+	if requestedUserModId == "" or #requestedUserModId > 96 or requestedUserModId:find("..", 1, true) or not requestedUserModId:match("^[a-z0-9_.%-]+$") then
+		requestedUserModId = nil
+	end
 	local ok, result, detail = xpcall(function()
 		local targetPage = page == "sell" and "sell" or page == "settings" and "settings" or page == "logs" and "logs" or page == "marketplace" and "marketplace" or page == "mods" and "mods" or page == "storage" and "storage" or "buy"
 		local targetSettingsSection = targetPage == "settings" and settingsSection or nil
-		return extension.open_html(targetPage, targetSettingsSection, { temporary = temporary })
+		return extension.open_html(targetPage, targetSettingsSection, { temporary = temporary, user_mod_id = requestedUserModId })
 	end, arzUiExtensionTraceback)
 	if not ok or result == false then
 		extension._last_error = not ok and tostring(result) or tostring(detail or extension._last_error or "open_html returned false")
@@ -2665,12 +2764,38 @@ end
 -- Keep marketState.scriptVersion unchanged for server compatibility.
 -- Increase ARZ_LOCAL_BUILD_ID and update the notes on every local release.
 -- ============================================================
-ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.27-r31-html-stability"
+ARZ_LOCAL_BUILD_ID = "3.57-custom-2026.09.29-r32-http-coroutine-stability"
+
+-- Temporary cleanup: Auto Lavka Bot is disabled/removed from this diagnostic build.
+do
+	local autoLavkaBotRoot = getWorkingDirectory() .. "/ArzMarket/mods/auto_lavka_bot/"
+	local autoLavkaBotFiles = {
+		"manifest.json",
+		"main.lua",
+		"html/app.js",
+		"html/index.html",
+		"html/style.css",
+		"lua/config.lua",
+		"lua/lavka_controller.lua",
+		"lua/logger.lua",
+		"lua/monitor.lua",
+		"lua/movement.lua",
+		"lua/spot_finder.lua",
+		"lua/state_machine.lua",
+		"lua/trade_adapter.lua"
+	}
+	for _, relativePath in ipairs(autoLavkaBotFiles) do
+		pcall(os.remove, autoLavkaBotRoot .. relativePath)
+	end
+end
 ARZ_RELEASE_NOTES_PATH = getWorkingDirectory() .. "/ArzMarket/release_notes_state.json"
 ARZ_RELEASE_NOTES = {
 	build = ARZ_LOCAL_BUILD_ID,
 	title = "Что изменилось",
 	items = {
+		"Стабильность Lua: убрано принудительное завершение request worker и опасные pcall-границы вокруг callbacks с wait(), из-за которых возможны coroutine error и C0000005 внутри lua51.dll.",
+		"HTTP совместимость: старые API-запросы снова используют актуальные данные текущей игровой сессии; убраны сохранённые fallback для nick, UID, server и ключей, а proxy transport приведён ближе к оригинальному requests.",
+		"Добавлена универсальная система пользовательских модулей: отдельный runtime, вкладка Мои, HTML viewer, lifecycle, event bus и безопасный bridge без привязки к конкретному модулю.",
 		"Исправлен ввод цены: автосохранение больше не пересоздаёт активное поле и не сбивает каретку во время набора.",
 		"Исправлено зависание HTML Маркетплейса: добавлены watchdog bridge, восстановление request worker и жёсткий выход из вечного loading.",
 		"Исправлен ввод при стандартном SA-MP курсоре: Lua и HTML ArzMarket остаются кликабельными при открытом игровом диалоге, а клики вне окна ArzMarket продолжают работать в самом SA-MP диалоге.",
@@ -3907,6 +4032,9 @@ modificationState = {
 }
 local setLrendEnabled
 local marketState
+ARZ_UI_EXTENSIONS.getMarketState = function()
+	return marketState
+end
 
 function modificationState.invalidateBackgroundBlur()
 	if modificationState.blurNative == nil then
@@ -5439,18 +5567,22 @@ function arzProxyWriteCurlRequest(method, url, requestOptions, requestKey, outpu
 	local configPath = ARZ_PROXY_TEMP_DIR .. "\\" .. requestKey .. ".curl"
 	local errorPath = ARZ_PROXY_TEMP_DIR .. "\\" .. requestKey .. ".err"
 	local dataPath = nil
+	-- The original requests.lua normalizes missing data to an empty string and
+	-- always adds Content-Length. Keep those semantics in the curl proxy path.
 	local requestData = requestOptions.data
-	if type(requestData) == "table" then
+	if requestData == nil then
+		requestData = ""
+	elseif type(requestData) == "table" then
 		local ok, encoded = pcall(cjson.encode, requestData)
 		if not ok or type(encoded) ~= "string" then
 			return nil, true, "proxy_request_json_encode_failed"
 		end
 		requestData = encoded
-	elseif requestData ~= nil and type(requestData) ~= "string" then
+	elseif type(requestData) ~= "string" then
 		requestData = tostring(requestData)
 	end
 
-	if type(requestData) == "string" and #requestData > 0 then
+	if #requestData > 0 then
 		dataPath = ARZ_PROXY_TEMP_DIR .. "\\" .. requestKey .. ".data"
 		local dataFile = io.open(dataPath, "wb")
 		if not dataFile then return nil, true, "proxy_request_body_file_failed" end
@@ -5473,10 +5605,10 @@ function arzProxyWriteCurlRequest(method, url, requestOptions, requestKey, outpu
 	local lines = {
 		"silent",
 		"show-error",
-		"location",
 		"noproxy = \"\"",
 		"proto = \"=http,https\"",
 		"proto-redir = \"=http,https\"",
+		"http1.1",
 		"max-time = " .. tostring(timeout),
 		"connect-timeout = " .. tostring(connectTimeout),
 		"request = " .. quotedMethod,
@@ -5485,6 +5617,12 @@ function arzProxyWriteCurlRequest(method, url, requestOptions, requestKey, outpu
 		"output = " .. quotedOutput,
 		"write-out = \"ARZHTTP:%{http_code}:ARZEXIT:%{exitcode}\""
 	}
+	-- LuaSocket follows redirects by default only for GET/HEAD. Do not let curl
+	-- silently change the redirect behavior of original POST requests.
+	if method == "GET" or method == "HEAD" then
+		lines[#lines + 1] = "location"
+		lines[#lines + 1] = "max-redirs = 5"
+	end
 
 	if cfg.username ~= "" then
 		local credentials = cfg.username .. ":" .. cfg.password
@@ -5500,6 +5638,13 @@ function arzProxyWriteCurlRequest(method, url, requestOptions, requestKey, outpu
 	end
 
 	local wantsCompressed = false
+	local hasUserAgent = false
+	local hasContentType = false
+	local hasContentLength = false
+	local hasConnection = false
+	local hasTe = false
+	local hasAccept = false
+	local hasExpect = false
 	if type(requestOptions.headers) == "table" then
 		for headerName, headerValue in pairs(requestOptions.headers) do
 			if headerValue ~= nil then
@@ -5509,13 +5654,20 @@ function arzProxyWriteCurlRequest(method, url, requestOptions, requestKey, outpu
 					if dataPath then pcall(os.remove, dataPath) end
 					return nil, true, "proxy_request_header_invalid"
 				end
-				if string.lower(name) == "accept-encoding" then
+				local lowerName = string.lower(name)
+				if lowerName == "accept-encoding" then
 					local lowerValue = string.lower(value)
 					wantsCompressed = lowerValue:find("gzip", 1, true) ~= nil
 						or lowerValue:find("deflate", 1, true) ~= nil
 						or lowerValue:find("br", 1, true) ~= nil
 						or lowerValue:find("zstd", 1, true) ~= nil
-				end
+				elseif lowerName == "user-agent" then hasUserAgent = true
+				elseif lowerName == "content-type" then hasContentType = true
+				elseif lowerName == "content-length" then hasContentLength = true
+				elseif lowerName == "connection" then hasConnection = true
+				elseif lowerName == "te" then hasTe = true
+				elseif lowerName == "accept" then hasAccept = true
+				elseif lowerName == "expect" then hasExpect = true end
 				local quotedHeader = arzProxyCurlConfigQuote(name .. ": " .. value)
 				if not quotedHeader then
 					if dataPath then pcall(os.remove, dataPath) end
@@ -5523,6 +5675,33 @@ function arzProxyWriteCurlRequest(method, url, requestOptions, requestKey, outpu
 				end
 				lines[#lines + 1] = "header = " .. quotedHeader
 			end
+		end
+	end
+
+	-- requests.lua adds Content-Length for every request and LuaSocket adds
+	-- User-Agent/Connection/TE defaults. curl has different defaults, so make
+	-- the proxy path reproduce the original transport instead of fingerprinting
+	-- the request as curl. Curl also adds Accept and Content-Type on its own;
+	-- suppress those unless the original request explicitly supplied them.
+	if not hasContentLength then
+		lines[#lines + 1] = "header = \"Content-Length: " .. tostring(#requestData) .. "\""
+	end
+	if not hasConnection then lines[#lines + 1] = "header = \"Connection: close, TE\"" end
+	if not hasTe then lines[#lines + 1] = "header = \"TE: trailers\"" end
+	if not hasAccept then lines[#lines + 1] = "header = \"Accept:\"" end
+	if not hasContentType then lines[#lines + 1] = "header = \"Content-Type:\"" end
+	if not hasExpect then lines[#lines + 1] = "header = \"Expect:\"" end
+	if not hasUserAgent then
+		local defaultUserAgent = ""
+		local httpOk, socketHttp = pcall(require, "socket.http")
+		if httpOk and type(socketHttp) == "table" and type(socketHttp.USERAGENT) == "string" then
+			defaultUserAgent = socketHttp.USERAGENT
+		end
+		if defaultUserAgent ~= "" and not defaultUserAgent:find("[\r\n%z]") then
+			local quotedUserAgent = arzProxyCurlConfigQuote("User-Agent: " .. defaultUserAgent)
+			if quotedUserAgent then lines[#lines + 1] = "header = " .. quotedUserAgent end
+		else
+			lines[#lines + 1] = "header = \"User-Agent:\""
 		end
 	end
 	if wantsCompressed then
@@ -6423,7 +6602,9 @@ function arzStopReceivingAccountData()
 	arzIniCaptureLockSnapshot()
 	ARZ_AUTH_FREEZE = {}
 	if type(marketState) == "table" and type(marketState.myUidCheck) == "table" then
-		marketState.myUidCheck[1] = false
+		-- Persistence is locked, but current-session UID discovery must keep working.
+		marketState.myUidCheck[1] = true
+		marketState.myUidCheck[3] = os.time() - 3
 	end
 	pcall(arzAuthFreezeProtectIni)
 	pcall(arzApplySavedAuthRuntime)
@@ -6432,8 +6613,8 @@ end
 
 function arzStartReceivingAccountData()
 	-- Removing the marker is the only persistent unlock action. When unlocked,
-	-- incoming account/auth values may update the INI again. HTTP requests still
-	-- read those values from the INI, never directly from transient packet data.
+	-- incoming account/auth values may update the INI again. Legacy API requests
+	-- use current-session runtime identity/token data and never a stale profile fallback.
 	if not arzIniPersistWriteLock(false) then return false end
 	ARZ_INI_WRITE_LOCKED = false
 	ARZ_INI_LOCK_SNAPSHOT = nil
@@ -7783,6 +7964,8 @@ AUTO_AD_RECONNECT_STATE = AUTO_AD_RECONNECT_STATE or {
 	pendingResume = false,
 	resumeAfter = 0
 }
+
+
 local menuThemePath = "moonloader/ArzMarket/js/menu_theme.json"
 menuThemeConfig = gojson(menuThemePath):Load({
 	selectedSputnik = "",
@@ -9185,6 +9368,242 @@ local var_0_153 = imguiNew.bool(ini.cfg.auto_catcher)
 local autoNameUtf8 = u8("" .. ini.cfg.auto_name)
 local loadedSellConfig = "" .. ini.cfg.load_config_sell
 local loadedBuyConfig = "" .. ini.cfg.load_config_buy
+
+function arzUserModsDeepCopy(value, depth, seen)
+	local valueType = type(value)
+	if valueType ~= "table" then
+		if valueType == "nil" or valueType == "string" or valueType == "number" or valueType == "boolean" then return value end
+		return nil
+	end
+	depth = tonumber(depth) or 0
+	if depth > 24 then return nil end
+	seen = seen or {}
+	if seen[value] then return nil end
+	seen[value] = true
+	local out = {}
+	for key, item in pairs(value) do
+		if type(key) ~= "table" then out[key] = arzUserModsDeepCopy(item, depth + 1, seen) end
+	end
+	seen[value] = nil
+	return out
+end
+
+function arzUserModsToUtf8(value)
+	value = tostring(value or "")
+	if type(u8) == "table" and type(u8.encode) == "function" then
+		local ok, encoded = pcall(function() return u8:encode(value) end)
+		if ok and encoded ~= nil then return encoded end
+	end
+	local ok, encoded = pcall(function() return u8(value) end)
+	return ok and encoded or value
+end
+
+function arzUserModsFromUtf8(value)
+	value = tostring(value or "")
+	if type(u8) == "table" and type(u8.decode) == "function" then
+		local ok, decoded = pcall(function() return u8:decode(value) end)
+		if ok and decoded ~= nil then return decoded end
+	end
+	return value
+end
+
+function arzUserModsNowMs()
+	if type(getGameTimer) == "function" then
+		local ok, value = pcall(getGameTimer)
+		if ok and tonumber(value) then return tonumber(value) end
+	end
+	return math.floor(os.clock() * 1000)
+end
+
+function arzUserModsListTradeConfigs(side)
+	side = side == "sell" and "sell" or "buy"
+	local directory = "moonloader/ArzMarket/" .. side .. "-cfg"
+	local out = {}
+	if type(lfs) ~= "table" or type(lfs.dir) ~= "function" or not doesDirectoryExist(directory) then return out end
+	local ok = pcall(function()
+		for fileName in lfs.dir(directory) do
+			if type(fileName) == "string" and fileName:match("%.json$") then out[#out + 1] = fileName end
+		end
+	end)
+	if not ok then return {} end
+	table.sort(out, function(a, b) return string.lower(a) < string.lower(b) end)
+	return out
+end
+
+function arzUserModsLoadTradeConfig(side, fileName)
+	side = side == "sell" and "sell" or "buy"
+	fileName = tostring(fileName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if fileName ~= "" and not fileName:match("%.json$") then fileName = fileName .. ".json" end
+	if fileName == "" or fileName:find("[/\\]") or fileName:find(":", 1, true) or fileName:find("..", 1, true) or not fileName:match("^[^%c]+%.json$") then
+		return false, "invalid_config_name"
+	end
+	local path = "moonloader/ArzMarket/" .. side .. "-cfg/" .. fileName
+	if not doesFileExist(path) or type(loadConfig) ~= "function" then return false, "config_missing" end
+	local ok, loaded = pcall(loadConfig, path)
+	if not ok or type(loaded) ~= "table" then return false, "config_invalid" end
+	if side == "buy" then
+		buyList = loaded
+		loadedBuyConfig = fileName
+		ini.cfg.load_config_buy = fileName
+		configFileNames.buy = fileName
+	else
+		sellList = loaded
+		loadedSellConfig = fileName
+		ini.cfg.load_config_sell = fileName
+		configFileNames.sell = fileName
+	end
+	if type(tradeFilterInvalidate) == "function" then pcall(tradeFilterInvalidate, side) end
+	if type(save_all) == "function" then pcall(save_all) end
+	return true
+end
+
+function arzUserModsStartTrade(side)
+	if type(sampProcessChatInput) ~= "function" then return false, "chat_input_unavailable" end
+	side = side == "sell" and "sell" or "buy"
+	local ok, err = pcall(sampProcessChatInput, side == "sell" and "/crsell" or "/crbuy")
+	return ok, ok and nil or tostring(err)
+end
+
+function arzUserModsCancelTrade()
+	if type(off_sell_buy) ~= "function" then return false, "cancel_unavailable" end
+	local ok, err = pcall(off_sell_buy)
+	return ok, ok and nil or tostring(err)
+end
+
+function arzUserModsGetTradeState()
+	return {
+		sell = type(tradeAutomation) == "table" and tradeAutomation.sell == true or false,
+		buy = type(tradeAutomation) == "table" and tradeAutomation.buy == true or false,
+		score = type(tradeAutomation) == "table" and tonumber(tradeAutomation.score) or 0,
+		score_from = type(tradeAutomation) == "table" and tonumber(tradeAutomation.score_from) or 0,
+		loaded_sell = tostring(loadedSellConfig or ""),
+		loaded_buy = tostring(loadedBuyConfig or "")
+	}
+end
+
+function arzUserModsListAutoAdProfiles()
+	local out = {}
+	for profileId, profile in pairs(type(autoAdProfiles) == "table" and autoAdProfiles or {}) do
+		if type(profile) == "table" then
+			local copied = arzUserModsDeepCopy(profile)
+			copied.id = tonumber(profileId) or profileId
+			out[#out + 1] = copied
+		end
+	end
+	table.sort(out, function(a, b) return (tonumber(a.id) or 0) < (tonumber(b.id) or 0) end)
+	return out
+end
+
+function arzUserModsGetAutoAdProfileState(profileId)
+	profileId = math.floor(tonumber(profileId) or 0)
+	local profile = type(autoAdProfiles) == "table" and autoAdProfiles[profileId] or nil
+	if type(profile) ~= "table" then return false, "profile_not_found" end
+	local copied = arzUserModsDeepCopy(profile)
+	copied.id = profileId
+	return true, copied
+end
+
+function arzUserModsSetAutoAdProfileEnabled(profileId, enabled)
+	profileId = math.floor(tonumber(profileId) or 0)
+	local profile = type(autoAdProfiles) == "table" and autoAdProfiles[profileId] or nil
+	if type(profile) ~= "table" then return false, "profile_not_found" end
+	local command, commandSettings = normalizeAutoAdProfile(profile)
+	enabled = enabled == true
+	if enabled then
+		if tonumber(profile.isTimer) == nil or tonumber(profile.isTimer) <= 0 then return false, "invalid_interval" end
+		if tostring(profile.isPiarText or "") == "" then return false, "empty_text" end
+		if command == "/ad" then
+			for otherId, otherProfile in pairs(autoAdProfiles) do
+				if otherId ~= profileId and type(otherProfile) == "table" and otherProfile.isEnabled then
+					local otherCommand = normalizeAutoAdProfile(otherProfile)
+					if otherCommand == "/ad" then return false, "another_ad_profile_enabled" end
+				end
+			end
+		end
+	end
+	profile.isEnabled = enabled
+	profile.osTime = os.time()
+	if command == "/ad" and type(commandSettings) == "table" and type(commandSettings.isRetry) == "table" then
+		commandSettings.isRetry.osTime = os.time()
+	end
+	local saved = writeJsonFile(autoAdProfiles, "moonloader/ArzMarket/vrProfile.json") == true
+	if not saved then return false, "profile_save_failed" end
+	return true, { id = profileId, enabled = profile.isEnabled == true, command = command }
+end
+
+function arzResolveAutoAdText(adProfile)
+	local text = tostring(type(adProfile) == "table" and adProfile.isPiarText or "")
+	if not text:find("{LAVKA_ID}", 1, true) then return text end
+	local lavkaNumber = tonumber(type(ini) == "table" and type(ini.cfg) == "table" and ini.cfg.active_lavka_number or nil)
+	if lavkaNumber == nil or lavkaNumber <= 0 then return nil, "active_lavka_number_unavailable" end
+	local resolved = text:gsub("{LAVKA_ID}", tostring(math.floor(lavkaNumber)))
+	return resolved
+end
+
+function arzUserModsDispatch(eventName, ...)
+	local runtime = type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.user_mod_runtime or nil
+	if type(runtime) ~= "table" or type(runtime.dispatch) ~= "function" then return false end
+	local ok, result = pcall(runtime.dispatch, eventName, ...)
+	if not ok then print("[ArzMarket][UserModRuntime] dispatch failed: " .. tostring(result)); return false end
+	return result ~= false
+end
+
+function arzUserModsGetRuntime()
+	return type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.user_mod_runtime or nil
+end
+
+function arzUserModsGetPublicList()
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.getPublicList) ~= "function" then return {} end
+	local ok, list = pcall(runtime.getPublicList)
+	return ok and type(list) == "table" and list or {}
+end
+
+function arzUserModsGetState(moduleId)
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.getState) ~= "function" then return false, "runtime_unavailable" end
+	return runtime.getState(moduleId)
+end
+
+function arzUserModsHandleAction(moduleId, action, payload)
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.handleAction) ~= "function" then return false, "runtime_unavailable" end
+	return runtime.handleAction(moduleId, action, payload)
+end
+
+function arzUserModsSetEnabled(moduleId, enabled)
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.setEnabled) ~= "function" then return false, "runtime_unavailable" end
+	return runtime.setEnabled(moduleId, enabled == true)
+end
+
+function arzUserModsReload(moduleId)
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.reload) ~= "function" then return false, "runtime_unavailable" end
+	return runtime.reload(moduleId)
+end
+
+function arzUserModsResolveAsset(moduleId, relativePath)
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.resolveAsset) ~= "function" then return false, "runtime_unavailable" end
+	return runtime.resolveAsset(moduleId, relativePath)
+end
+
+function arzUserModsTick()
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.tick) ~= "function" then return false end
+	local ok, err = pcall(runtime.tick)
+	if not ok then print("[ArzMarket][UserModRuntime] tick failed: " .. tostring(err)); return false end
+	return true
+end
+
+function arzUserModsShutdown(reason)
+	local runtime = arzUserModsGetRuntime()
+	if type(runtime) ~= "table" or type(runtime.shutdown) ~= "function" then return false end
+	local ok, err = pcall(runtime.shutdown, tostring(reason or "arzmarket_terminate"))
+	if not ok then print("[ArzMarket][UserModRuntime] shutdown failed: " .. tostring(err)); return false end
+	return true
+end
 local leftMenuBlurEnabled = imguiNew.bool(ini.cfg.left_menu_blur)
 local autoLavkaNameEnabled = imguiNew.bool(ini.cfg.auto_name_lavka)
 local alwaysConvert = imguiNew.bool(ini.cfg.Always_convert)
@@ -10630,6 +11049,128 @@ ARZ_FEATURE_MODULES.contexts.telegram_runtime = {
   marketState = marketState, telegramUi = telegramUi,
   telegramNotifyEnabled = telegramNotifyEnabled
  }
+
+ARZ_FEATURE_MODULES.contexts.user_mod_runtime = {
+  getWorkingDirectory = getWorkingDirectory,
+  doesFileExist = doesFileExist,
+  doesDirectoryExist = doesDirectoryExist,
+  createDirectory = createDirectory,
+  lfs = lfs,
+  decodeJsonSafe = decodeJsonSafe,
+  encodeJsonSafe = encodeJsonSafe,
+  nowMs = arzUserModsNowMs,
+  host = {
+    getWorkingDirectory = getWorkingDirectory,
+    notify = function(text)
+      if type(sendNotify) ~= "function" then return false, "notify_unavailable" end
+      local ok, err = pcall(sendNotify, arzUserModsFromUtf8(text))
+      return ok, ok and nil or tostring(err)
+    end,
+    chat = function(text)
+      if type(AFKMessage) ~= "function" then return false, "chat_unavailable" end
+      local ok, err = pcall(AFKMessage, arzUserModsFromUtf8(text))
+      return ok, ok and nil or tostring(err)
+    end,
+    toUtf8 = arzUserModsToUtf8,
+    fromUtf8 = arzUserModsFromUtf8,
+    nowMs = arzUserModsNowMs
+  },
+  game = {
+    isSampReady = function()
+      return type(isSampAvailable) == "function" and isSampAvailable() == true
+    end,
+    getPlayerPosition = function()
+      if not doesCharExist(PLAYER_PED) then return nil, "player_unavailable" end
+      local x, y, z = getCharCoordinates(PLAYER_PED)
+      return { x = tonumber(x) or 0, y = tonumber(y) or 0, z = tonumber(z) or 0 }
+    end,
+    getInterior = function()
+      if not doesCharExist(PLAYER_PED) then return nil, "player_unavailable" end
+      return tonumber(getCharActiveInterior(PLAYER_PED)) or 0
+    end,
+    getVirtualWorld = function()
+      if type(sampGetPlayerIdByCharHandle) ~= "function" or type(sampGetPlayerVirtualWorld) ~= "function" then return 0 end
+      local found, playerId = sampGetPlayerIdByCharHandle(PLAYER_PED)
+      if not found then return 0 end
+      return tonumber(sampGetPlayerVirtualWorld(playerId)) or 0
+    end,
+    isPlayerAlive = function()
+      return doesCharExist(PLAYER_PED) and (type(isCharDead) ~= "function" or not isCharDead(PLAYER_PED))
+    end,
+    isPlayerInVehicle = function()
+      return doesCharExist(PLAYER_PED) and type(isCharInAnyCar) == "function" and isCharInAnyCar(PLAYER_PED) == true
+    end,
+    sendCommand = function(command)
+      if type(sampProcessChatInput) ~= "function" then return false, "chat_input_unavailable" end
+      local value = arzUserModsFromUtf8(command)
+      if value == "" then return false, "empty_command" end
+      local ok, err = pcall(sampProcessChatInput, value)
+      return ok, ok and nil or tostring(err)
+    end,
+    sendDialogResponse = function(dialogId, button, listIndex, inputText)
+      if type(sampSendDialogResponse) ~= "function" then return false, "dialog_response_unavailable" end
+      local ok, err = pcall(sampSendDialogResponse, tonumber(dialogId) or 0, tonumber(button) or 0, tonumber(listIndex) or 0, arzUserModsFromUtf8(inputText or ""))
+      return ok, ok and nil or tostring(err)
+    end,
+    forceOnfootSync = function()
+      if type(sampForceOnfootSync) ~= "function" then return false, "onfoot_sync_unavailable" end
+      local ok, err = pcall(sampForceOnfootSync)
+      return ok, ok and nil or tostring(err)
+    end
+  },
+  lavka = {
+    getPlacementSnapshot = function(px, py, pz, radius)
+      local module = type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.mod_runtime or nil
+      if type(module) ~= "table" or type(module.getLavkaPlacementSnapshot) ~= "function" then return { revision = 0, zones = {}, scanned_at = 0 } end
+      return module.getLavkaPlacementSnapshot(px, py, pz, radius)
+    end,
+    resolveGround = function(x, y, referenceZ)
+      local module = type(ARZ_FEATURE_MODULES) == "table" and ARZ_FEATURE_MODULES.mod_runtime or nil
+      if type(module) ~= "table" or type(module.resolveLavkaGround) ~= "function" then return nil, false end
+      return module.resolveLavkaGround(x, y, referenceZ)
+    end,
+    getActiveNumber = function()
+      local value = tonumber(type(ini) == "table" and type(ini.cfg) == "table" and ini.cfg.active_lavka_number or nil)
+      return value and value > 0 and math.floor(value) or -1
+    end,
+    syncActiveNumber = function(number)
+      number = tonumber(number)
+      if number == nil or number <= 0 then return false, "invalid_shop_number" end
+      number = math.floor(number)
+      if type(ini) ~= "table" or type(ini.cfg) ~= "table" then return false, "ini_unavailable" end
+      ini.cfg.active_lavka_number = number
+      if type(marketplacePayload) == "table" then marketplacePayload.LavkaUid = number end
+      if type(save_all) == "function" then
+        local ok, err = pcall(save_all)
+        if not ok then return false, tostring(err) end
+      end
+      return true, number
+    end,
+    getLegacyActiveState = function()
+      return activeLavkaId
+    end
+  },
+  trade = {
+    listConfigs = arzUserModsListTradeConfigs,
+    loadConfig = arzUserModsLoadTradeConfig,
+    start = arzUserModsStartTrade,
+    cancel = arzUserModsCancelTrade,
+    getState = arzUserModsGetTradeState
+  },
+  ads = {
+    listProfiles = arzUserModsListAutoAdProfiles,
+    getProfileState = arzUserModsGetAutoAdProfileState,
+    setProfileEnabled = arzUserModsSetAutoAdProfileEnabled
+  },
+  telegram = {
+    send = function(text)
+      if type(sendTelegramNotification) ~= "function" then return false, "telegram_unavailable" end
+      local ok, result = pcall(sendTelegramNotification, arzUserModsFromUtf8(text))
+      if not ok then return false, tostring(result) end
+      return result ~= false, result == false and "telegram_send_failed" or nil
+    end
+  }
+ }
 ARZ_FEATURE_MODULES.contexts.trade_filters = {
   u8 = u8, storageFinder = storageFinder, configFileNames = configFileNames,
   getBuyList = function() return buyList end,
@@ -10886,6 +11427,8 @@ function main()
 		writeJsonFile(autoAdProfiles, "moonloader/ArzMarket/vrProfile.json")
 	end
 
+	if not arzLoadBundledModule("user_mod_runtime", ARZ_FEATURE_MODULES.contexts.user_mod_runtime) then return end
+
 	modificationState.lrendFont = renderCreateFont("Arial", 10, renderFontFlags.BOLD + renderFontFlags.SHADOW)
 
 	jsonLog = readJsonFile("moonloader\\ArzMarket\\Log.json")
@@ -11022,11 +11565,6 @@ function main()
 		end
 	end)
 
-	sampRegisterChatCommand("autolavka", function()
-		marketState.autoLavka = not marketState.autoLavka
-
-		sendNotify(u8:decode("Авто установка лавки ") .. (marketState.autoLavka and u8:decode("включено") or u8:decode("выключено")))
-	end)
 
 	sampRegisterChatCommand("arzhtml", function()
 		local ok = arzUiExtensionsOpenHtml(selectedMenuPage == 1 and "sell" or selectedMenuPage == 3 and "settings" or selectedMenuPage == 4 and "logs" or selectedMenuPage == 5 and "marketplace" or selectedMenuPage == 8 and "storage" or "buy")
@@ -11272,6 +11810,8 @@ function main()
 	while true do
 		wait(0)
 
+		arzUserModsTick()
+
 		if arzHtmlPendingTradeScan ~= nil then
 			local request = arzHtmlPendingTradeScan
 			arzHtmlPendingTradeScan = nil
@@ -11429,7 +11969,7 @@ function main()
 			local marketplaceServerAddress = sampGetCurrentServerAddress()
 			local marketplaceServerId = serverIdByAddress[marketplaceServerAddress]
 
-			local marketplaceUsername = arzNetworkMarketplaceNickname()
+			local marketplaceUsername = last_name or sampGetPlayerNickname(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED)))
 			if marketplaceServerId ~= nil and marketplaceUsername ~= "" then
 				timers[11] = os.time()
 				marketplacePayload.username = marketplaceUsername
@@ -11492,7 +12032,7 @@ function main()
 			local marketplaceServerAddress = sampGetCurrentServerAddress()
 			local marketplaceServerId = serverIdByAddress[marketplaceServerAddress]
 
-			local marketplaceUsername = arzNetworkMarketplaceNickname()
+			local marketplaceUsername = last_name or sampGetPlayerNickname(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED)))
 			if marketplaceServerId ~= nil and marketplaceUsername ~= "" then
 				deAFKMessage(debug.getinfo(1, "l"), "[MarketPlace] CLEAR ALL DATA")
 
@@ -11645,19 +12185,15 @@ function main()
 			end
 		end
 
-		if marketState.autoLavka and timers[35] + 5.1 <= os.clock() then
-			timers[35] = os.clock()
-
-			SendToServer("/lavka")
-		end
 
 		if marketState.sendPayDayExp[1] and marketState.sendPayDayExp[2] + 61 <= os.time() then
 			marketState.sendPayDayExp[1] = false
 
 			deAFKMessage("sendPayDayExp[POST]")
 
+			local currentAddress = sampGetCurrentServerAddress()
 			local realPlayerName, uid = arzNetworkNameAndUid()
-			if realPlayerName ~= "" and uid ~= "" then
+			if currentAddress and serverIdByAddress[currentAddress] and uid ~= "" and realPlayerName ~= "" then
 				asyncHttpRequest("POST", "https://reserve-api.arz.market/api/addExp/" .. realPlayerName .. "[" .. uid .. "]", nil, nil, nil, 1)
 			end
 		end
@@ -11667,7 +12203,7 @@ function main()
 			tradeContextTick()
 		end
 
-		if not ARZ_INI_WRITE_LOCKED and marketState.myUidCheck[1] and marketState.myUidCheck[3] + 3 <= os.time() then
+		if marketState.myUidCheck[1] and marketState.myUidCheck[3] + 3 <= os.time() then
 			deAFKMessage("myUidCheck")
 
 			marketState.myUidCheck[3] = os.time()
@@ -11723,6 +12259,13 @@ function main()
 				end
 
 				if adProfile.isEnabled and (adProfile.osTime == -1 or os.time() - adProfile.osTime > adProfile.isTimer) then
+					local resolvedAdText, resolveAdError = arzResolveAutoAdText(adProfile)
+					if resolvedAdText == nil then
+						adProfile.osTime = os.time()
+						print("[ArzMarket][AutoAd] profile " .. tostring(profileName) .. " skipped: " .. tostring(resolveAdError))
+						break
+					end
+
 					adProfile.osTime = os.time()
 
 					if commandSettings.isCounter.status then
@@ -11739,22 +12282,28 @@ function main()
 
 					if command == "/vr" then
 						timers[36][2] = { os.time(), commandSettings.isADVIP }
-						sampProcessChatInput(command .. " " .. adProfile.isPiarText)
+						sampProcessChatInput(command .. " " .. resolvedAdText)
 					elseif command == "/ad" then
-						marketState.send_adControl = { active = true, uid = profileName, timer = os.time() }
-						SendToServer(command .. " " .. adProfile.isPiarText)
+						marketState.send_adControl = { active = true, uid = profileName, timer = os.time(), resolvedText = resolvedAdText }
+						SendToServer(command .. " " .. resolvedAdText)
 					else
-						SendToServer(command .. " " .. adProfile.isPiarText)
+						SendToServer(command .. " " .. resolvedAdText)
 					end
 
 					break
 				end
 
 				if adProfile.isEnabled and command == "/ad" and commandSettings.isRetry.status and (commandSettings.isRetry.osTime == -1 or os.time() - commandSettings.isRetry.osTime > commandSettings.isRetry.retryTime) then
+					local resolvedAdText, resolveAdError = arzResolveAutoAdText(adProfile)
+					if resolvedAdText == nil then
+						commandSettings.isRetry.osTime = os.time()
+						print("[ArzMarket][AutoAd] retry profile " .. tostring(profileName) .. " skipped: " .. tostring(resolveAdError))
+						break
+					end
 					adProfile.osTime = os.time()
 					commandSettings.isRetry.osTime = os.time()
-					marketState.send_adControl = { active = true, uid = profileName, timer = os.time() }
-					SendToServer(command .. " " .. adProfile.isPiarText)
+					marketState.send_adControl = { active = true, uid = profileName, timer = os.time(), resolvedText = resolvedAdText }
+					SendToServer(command .. " " .. resolvedAdText)
 					break
 				end
 			end
@@ -11784,8 +12333,9 @@ function arzCompareVersions(leftVersion, rightVersion)
 	return 0
 end
 
-ARZ_UPDATE_VERSION = "3.57.137"
-ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/updateArzMarket.js"
+ARZ_UPDATE_VERSION = "3.57.138"
+ARZ_DIAGNOSTIC_FREEZE_UPDATES = true
+ARZ_UPDATE_INFO_URL = "https://raw.githubusercontent.com/FREYM1337/forumnick/main/ArzMarketV3/updateArzMarket.js"
 
 function autoUpdateCheckUrl()
 	print("isUpdate?")
@@ -11802,7 +12352,7 @@ function autoUpdateCheckUrl()
 				local compareResult = arzCompareVersions(latestVersion, currentVersion)
 				local hasUpdateUrl = type(updateInfo.updateurl) == "string" and updateInfo.updateurl ~= ""
 
-				if compareResult == 1 and hasUpdateUrl then
+				if compareResult == 1 and hasUpdateUrl and not ARZ_DIAGNOSTIC_FREEZE_UPDATES then
 					deAFKMessage("[+] new version > " .. currentVersion .. " | " .. latestVersion)
 					marketState.scriptVersion[2] = true
 				else
@@ -11812,7 +12362,7 @@ function autoUpdateCheckUrl()
 
 				local remoteItemsUpdate = tonumber(updateInfo.itemsUpdate)
 				local localItemsUpdate = tonumber(ini.cfg.lastItemsUpdate) or 0
-				if remoteItemsUpdate and remoteItemsUpdate > localItemsUpdate and doesFileExist(getWorkingDirectory() .. "/ArzMarket/items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json") then
+				if not ARZ_DIAGNOSTIC_FREEZE_UPDATES and remoteItemsUpdate and remoteItemsUpdate > localItemsUpdate and doesFileExist(getWorkingDirectory() .. "/ArzMarket/items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json") then
 					print("removed items")
 					os.remove(getWorkingDirectory() .. "/ArzMarket/items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json")
 				end
@@ -11860,84 +12410,84 @@ ARZ_NETWORK_AUTH_RUNTIME = ARZ_NETWORK_AUTH_RUNTIME or {
 }
 
 function arzNetworkMarketplaceNickname()
-	local ok, nick = pcall(function() return select(1, arzWatchdogCurrentIdentity()) end)
+	local ok, nick = pcall(getName)
 	if ok and type(nick) == "string" and nick:match("%S") and not nick:find("%z") then return nick end
-	local saved = arzSavedCfgString("authNickname")
-	return saved:match("%S") and saved or ""
+	return ""
 end
 
 function arzNetworkNameAndUid()
-	local nick, address = arzWatchdogCurrentIdentity()
-	local serverId = serverIdByAddress[address]
-	local liveName = ""
-	if nick ~= "" and serverId ~= nil then
-		local encodedServer, encodedNick = nick:match("^%[(%-?%d+)%](%S+)$")
-		if serverId == 0 and encodedServer then
-			liveName = "[" .. encodedServer .. "]" .. encodedNick
-		elseif serverId ~= 0 then
-			liveName = "[" .. tostring(serverId) .. "]" .. nick
-		end
+	local okName, liveName = pcall(getRealName, 1)
+	liveName = okName and type(liveName) == "string" and liveName or ""
+	local liveUid = tostring(ARZ_NETWORK_AUTH_RUNTIME.liveUid or "")
+	if liveName ~= "" and ARZ_NETWORK_AUTH_RUNTIME.liveUidIdentity == liveName and liveUid:match("^%d+$") then
+		return liveName, liveUid, liveName
 	end
-	if liveName ~= "" and ARZ_NETWORK_AUTH_RUNTIME.liveUidIdentity == liveName and ARZ_NETWORK_AUTH_RUNTIME.liveUid and ARZ_NETWORK_AUTH_RUNTIME.liveUid:match("^%d+$") then
-		return liveName, ARZ_NETWORK_AUTH_RUNTIME.liveUid, liveName
-	end
-	local savedName, savedUid = arzSavedCfgString("authRealNameMode1"), arzSavedCfgString("authUid")
-	if liveName ~= "" and liveName == savedName and savedUid:match("^%d+$") then return liveName, savedUid, liveName end
-	return savedName, savedUid, liveName
+	-- Do not substitute a UID/name saved from another account into an old API request.
+	return liveName, "", liveName
 end
 
 function arzNetworkPremiumUserIdentity()
-	local ok, launchName = pcall(function() return ffi.string(ffi.C.GetCommandLineA()):match("%-n%s+(%S+)") end)
+	local ok, launchName = pcall(getRealName, 2)
 	if ok and type(launchName) == "string" and launchName:match("%S") and not launchName:find("%z") then return launchName end
-	local nick = select(1, arzWatchdogCurrentIdentity())
-	if nick ~= "" then return nick:match("^%[%-?%d+%](%S+)$") or nick end
-	return arzSavedCfgString("authRealNameMode2")
+	return ""
 end
 
 function arzNetworkActivePremiumAuth()
-	local savedKey = arzSavedCfgString("authPremiumTokenAuth")
-	if not ARZ_NETWORK_AUTH_RUNTIME.registryRead and savedKey == "" then
+	-- Original ArzMarket gets Premium auth from the current session or registry.
+	-- Do not silently replace it with an INI/profile key from another account.
+	if ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey and ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey ~= "" then
+		local activeTemp = ARZ_NETWORK_AUTH_RUNTIME.activeTempKey
+		if type(activeTemp) ~= "string" or activeTemp == "" then activeTemp = nil end
+		return ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey, activeTemp
+	end
+	if not ARZ_NETWORK_AUTH_RUNTIME.registryRead then
 		ARZ_NETWORK_AUTH_RUNTIME.registryRead = true
 		local okKey, registryKey = pcall(getKey, "premiumTokenAuth")
 		local okTemp, registryTemp = pcall(getKey, "UserTempKey")
 		if okKey and type(registryKey) == "string" then ARZ_NETWORK_AUTH_RUNTIME.registryKey = registryKey end
 		if okTemp and type(registryTemp) == "string" then ARZ_NETWORK_AUTH_RUNTIME.registryTempKey = registryTemp end
 	end
-	local key = ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey or (savedKey ~= "" and savedKey or ARZ_NETWORK_AUTH_RUNTIME.registryKey)
-	local tempKey = ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey and ARZ_NETWORK_AUTH_RUNTIME.activeTempKey or (savedKey ~= "" and arzSavedCfgString("authUserTempKey") or ARZ_NETWORK_AUTH_RUNTIME.registryTempKey)
-	return key or "", tempKey or ""
+	local registryTemp = ARZ_NETWORK_AUTH_RUNTIME.registryTempKey
+	if type(registryTemp) ~= "string" or registryTemp == "" then registryTemp = nil end
+	return ARZ_NETWORK_AUTH_RUNTIME.registryKey or "", registryTemp
+end
+
+function arzNetworkLiveServerAuth()
+	local token = tostring(ARZ_LAST_SEEN_SERVER_TOKEN or ""):gsub("^%s*(.-)%s*$", "%1")
+	local serverId = tostring(ARZ_LAST_SEEN_SERVER_ID or ""):gsub("^%s*(.-)%s*$", "%1")
+	if token == "" or serverId == "" then return "", "" end
+	return token, serverId
 end
 
 function arzNetworkAcceptPremiumAuth(key, tempKey)
 	if type(key) ~= "string" or key == "" or key:find("[%z\r\n]") then return false end
+	local normalizedTempKey = type(tempKey) == "string" and tempKey ~= "" and tempKey or nil
 	ARZ_NETWORK_AUTH_RUNTIME.activePremiumKey = key
-	ARZ_NETWORK_AUTH_RUNTIME.activeTempKey = type(tempKey) == "string" and tempKey or ""
+	ARZ_NETWORK_AUTH_RUNTIME.activeTempKey = normalizedTempKey
 	if not ARZ_INI_WRITE_LOCKED then
 		arzAuthFreezeCfgString("authPremiumTokenAuth", key, "cfg:authPremiumTokenAuth")
-		if ARZ_NETWORK_AUTH_RUNTIME.activeTempKey ~= "" then
-			arzAuthFreezeCfgString("authUserTempKey", ARZ_NETWORK_AUTH_RUNTIME.activeTempKey, "cfg:authUserTempKey")
+		if normalizedTempKey then
+			arzAuthFreezeCfgString("authUserTempKey", normalizedTempKey, "cfg:authUserTempKey")
 		else
 			ini.cfg.authUserTempKey = ""
 			ARZ_AUTH_FREEZE["cfg:authUserTempKey"] = nil
 			arzAuthIniDirectSave()
 		end
 	end
-	marketState.premiumKeys[1], marketState.premiumKeys[2] = key, ARZ_NETWORK_AUTH_RUNTIME.activeTempKey
+	marketState.premiumKeys[1], marketState.premiumKeys[2] = key, normalizedTempKey
 	return true
 end
 
 function arzNetworkRequestUnban()
 	if download_marketplace ~= "blocked" or marketState.marketplaceUnbanAvailable ~= true then return false, "unban_unavailable" end
 	local activeKey = arzNetworkActivePremiumAuth()
-	local authKey = arzSavedCfgString("marketAuthKey")
-	local authToken = arzSavedCfgString("myServerToken")
-	local serverId = arzSavedCfgString("myServerId")
-	if activeKey == "" or authKey == "" or authToken == "" or serverId == "" then return false, "auth_unavailable" end
+	local liveAuthToken, liveServerId = arzNetworkLiveServerAuth()
+	if activeKey == "" or liveAuthToken == "" or liveServerId == "" then return false, "auth_unavailable" end
 	local requestBody = encodeJson({
-		authKey = authKey,
-		authToken = authToken,
+		authKey = tostring(marketState.premiumKeys[3]),
+		authToken = liveAuthToken,
 		scriptVersion = tostring(marketState.scriptVersion[1]),
-		serverId = serverId,
+		serverId = liveServerId,
 		authClient = activeKey
 	})
 	local requestId, requestError = asyncHttpRequest("GET", "https://api.arz.market/api/getMyUnban", {
@@ -11968,9 +12518,13 @@ function arzApplySavedAuthRuntime()
 	if type(marketState) ~= "table" then return end
 	marketState.premiumKeys = marketState.premiumKeys or {}
 	marketState.premiumKeys[1], marketState.premiumKeys[2] = arzNetworkActivePremiumAuth()
-	marketState.premiumKeys[3] = arzSavedCfgString("marketAuthKey")
-	if type(marketState.myUidCheck) == "table" then
-		marketState.myUidCheck[2] = arzSavedCfgString("authUid") ~= "" and arzSavedCfgString("authUid") or nil
+	-- premiumKeys[3] is intentionally not restored from the custom saved profile.
+	-- Old API requests must use only runtime values that the original script had.
+	if marketState.premiumTokenAuth ~= nil and marketState.premiumKeys[1] and marketState.premiumKeys[1] ~= "" then
+		local okCurrent, current = pcall(ffi.string, marketState.premiumTokenAuth)
+		if okCurrent and current == "" then
+			marketState.premiumTokenAuth = imguiNew.char[256](marketState.premiumKeys[1])
+		end
 	end
 end
 
@@ -12106,9 +12660,8 @@ function loadPremiumFunction(premiumLoadMode)
 	if premiumLoadMode == 3 then
 		local activeKey = arzNetworkActivePremiumAuth()
 		local _, liveAddress = arzWatchdogCurrentIdentity()
-		local liveServerId = serverIdByAddress[liveAddress]
+		local premiumServerId = serverIdByAddress[liveAddress]
 		local premiumUsername = arzNetworkPremiumUserIdentity()
-		local premiumServerId = liveServerId ~= nil and liveServerId or tonumber(arzSavedCfgString("myServerId"))
 		if activeKey == "" or premiumUsername == "" or premiumServerId == nil then return end
 		local premiumUserPayload = {
 			username = premiumUsername,
@@ -12117,7 +12670,7 @@ function loadPremiumFunction(premiumLoadMode)
 		local premiumUserRequestBody = " [\n        " .. encodeJson(premiumUserPayload) .. "        ] "
 
 		deAFKMessage(debug.getinfo(1, "l"), "[sendPremiumNick]SEND DATA=[" .. premiumUserRequestBody .. "]")
-		deAFKMessage(debug.getinfo(1, "l"), "[sendPremiumNick]NICK=[current or saved]")
+		deAFKMessage(debug.getinfo(1, "l"), "[sendPremiumNick]NICK=[launch/current session]")
 		asyncHttpRequest("POST", (ini.cfg.priumUrlChange == true and marketState.premiumUrl[2] or marketState.premiumUrl[1]) .. "/api/insertPremiumUser/" .. activeKey, {
 			headers = {
 				["content-type"] = "application/json"
@@ -12230,16 +12783,38 @@ function custom_packet(packetBytes)
 end
 
 function getName()
-	return arzSavedCfgString("authNickname")
+	if last_name == nil then
+		local playerFound, playerId = sampGetPlayerIdByCharHandle(PLAYER_PED)
+		if not playerFound then return nil end
+		return sampGetPlayerNickname(playerId)
+	end
+	return last_name
 end
 
 function getRealName(nameMode)
+	local encodedServer
+	local playerFound, playerId = sampGetPlayerIdByCharHandle(PLAYER_PED)
+	if not playerFound then return nil end
+	local playerName = sampGetPlayerNickname(playerId)
+	if type(playerName) ~= "string" or playerName == "" then return nil end
+	if playerName:match("%[(%-?%d+)%](%S+)") then
+		encodedServer, playerName = playerName:match("%[(%-?%d+)%](%S+)")
+	end
+
+	local serverAddress = select(1, sampGetCurrentServerAddress())
+	local serverId = serverIdByAddress[serverAddress]
+	if serverId == nil then
+		local launchAddress = ffi.string(ffi.C.GetCommandLineA()):match("%-h%s+(%S+)")
+		if launchAddress then serverId = serverIdByAddress[launchAddress] end
+	end
+
+	if (serverId == nil or serverId == 0) and nameMode == 1 and (tonumber(encodedServer) == nil or encodedServer == nil or playerName == nil) then
+		return nil
+	end
 	if nameMode == 1 then
-		local saved = arzSavedCfgString("authRealNameMode1")
-		return saved ~= "" and saved or nil
+		return serverId and serverId ~= 0 and "[" .. serverId .. "]" .. sampGetPlayerNickname(playerId) or "[" .. tonumber(encodedServer) .. "]" .. playerName
 	elseif nameMode == 2 then
-		local saved = arzSavedCfgString("authRealNameMode2")
-		return saved ~= "" and saved or nil
+		return ffi.string(ffi.C.GetCommandLineA()):match("%-n%s+(%S+)")
 	end
 	return nil
 end
@@ -12324,9 +12899,12 @@ function sampev.onCreate3DText(textId, color, position, drawDistance, testLOS, a
 			timer = os.clock()
 		}
 	end
+
+	arzUserModsDispatch("onCreate3DText", textId, color, position, drawDistance, testLOS, attachedPlayerId, attachedVehicleId, text)
 end
 
 function sampev.onRemove3DTextLabel(textId)
+	arzUserModsDispatch("onRemove3DText", textId)
 	if lavkaHelperOnRemove3DText then
 		lavkaHelperOnRemove3DText(textId)
 	end
@@ -14570,32 +15148,38 @@ function marketplaceAuthPage()
 	imgui.PushFont(fonts[18])
 
 	local imguiCol = imgui.Col
+	local authDisplay = imgui.GetIO().DisplaySize
+	local authWidth = math.max(420, math.min(760, authDisplay.x - 30))
+	local authHeight = math.max(360, math.min(455, authDisplay.y - 30))
+	local authChildHeight = math.max(205, authHeight - 170)
 
 	imgui.PushStyleColor(imguiCol.PopupBg, imgui.ImVec4(0.05, 0.06, 0.1, 0.9))
 	imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(0, 0))
+	imgui.SetNextWindowPos(imgui.ImVec2(authDisplay.x / 2, authDisplay.y / 2), imgui.Cond.Always, imgui.ImVec2(0.5, 0.5))
+	imgui.SetNextWindowSize(imgui.ImVec2(authWidth, authHeight), imgui.Cond.Always)
 
 	if imgui.BeginPopupModal("Авторизация в маркетплейсе.", _, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse) then
 		marketState.isPopupActive = true
 
-		imgui.SetWindowSizeVec2(imgui.ImVec2(650, 405))
 		imgui.CustomSeparator(imgui.GetWindowWidth())
 		imgui.SetCursorPosX(imgui.GetCursorPos().x + 5)
-		imgui.BeginChild("marketplaceAuthPage", imgui.ImVec2(-1, 255), true)
-		imgui.TextColoredRGB(u8:decode("{cccccc}Здравствуйте. Данный раздел создан для того что бы авторизоваться в маркетплейсе..."))
-		imgui.TextColoredRGB(u8:decode("{cccccc}авторизуйтесь что бы продолжить использовать функцию \"Маркетплейс\"."))
-		imgui.TextColoredRGB(u8:decode("{cccccc}ВНИМАНИЕ! Ключ для доступа можно взять написав в боте /start затем нажмите... ."))
-		imgui.TextColoredRGB(u8:decode("{cccccc}кнопку \"Личный кабинет\"."))
-		imgui.CustomSeparator(imgui.GetWindowWidth())
+		imgui.BeginChild("marketplaceAuthPage", imgui.ImVec2(-5, authChildHeight), true)
+		imgui.TextWrapped("Здравствуйте. Данный раздел предназначен для авторизации в Маркетплейсе.")
+		imgui.TextWrapped("Авторизуйтесь, чтобы продолжить использовать функцию \"Маркетплейс\".")
+		imgui.TextWrapped("ВНИМАНИЕ! Ключ доступа можно получить в боте: отправьте /start, затем нажмите кнопку \"Личный кабинет\".")
+		imgui.CustomSeparator(imgui.GetContentRegionAvail().x)
+		imgui.TextColoredRGB(u8:decode("{cccccc}Введите ключ маркетплейса"))
+		imgui.SetNextItemWidth(math.max(120, imgui.GetContentRegionAvail().x - 5))
 
-		if imgui.InputTextWithHintD("Введите ключ маркетплейса.", "Введите ключ", marketState.premiumTokenAuth, ffi.sizeof(marketState.premiumTokenAuth)) then
+		if imgui.InputTextWithHintD("##marketplaceAuthKey", "Введите ключ", marketState.premiumTokenAuth, ffi.sizeof(marketState.premiumTokenAuth)) then
 		end
 
 		imgui.EndChild()
-		imgui.CustomSeparator(imgui.GetWindowWidth())
+		imgui.CustomSeparator(imgui.GetContentRegionAvail().x)
 
 		imgui.GetStyle().FrameBorderSize = borderSideEnabled[0] and 1 or 0
 
-		if imgui.Button("Проверить авторизацию", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
+		if imgui.Button("Проверить авторизацию", imgui.ImVec2(imgui.GetContentRegionAvail().x, 30)) then
 			local candidateKey = ffi.string(marketState.premiumTokenAuth)
 			if candidateKey ~= "" and not candidateKey:find("[%z\r\n]") then
 			sendNotify(u8:decode("  Попытка авторизации..."))
@@ -14641,14 +15225,14 @@ function marketplaceAuthPage()
 			end
 		end
 
-		if imgui.Button("Ничего не открылось", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
+		if imgui.Button("Ничего не открылось", imgui.ImVec2(imgui.GetContentRegionAvail().x, 30)) then
 			marketState.isPopupActive = false
 
 			imgui.CloseCurrentPopup()
 			openUrl("https://t.me/ArzMarketManager_bot", "https://vk.com/im/convo/-237814015", "Telegram", u8:decode("Вконтакте"), true)
 		end
 
-		if imgui.Button("Закрыть", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
+		if imgui.Button("Закрыть", imgui.ImVec2(imgui.GetContentRegionAvail().x, 30)) then
 			marketState.isPopupActive = false
 
 			imgui.CloseCurrentPopup()
@@ -14902,14 +15486,13 @@ function premiumPage(frame)
 		end
 
 		if marketState.isMenuActive == 1 and imgui.Button("Привязать аккаунт", imgui.ImVec2(imgui.GetWindowWidth(), 30)) then
-			local savedRealPlayerName, savedUid = arzNetworkNameAndUid()
+			local realPlayerName, liveUid = arzNetworkNameAndUid()
 			local candidateKey = ffi.string(marketState.premiumTokenAuth)
-			if candidateKey == "" then candidateKey = arzNetworkActivePremiumAuth() end
 
-			if savedUid ~= "" and savedRealPlayerName ~= "" and candidateKey ~= "" then
+			if liveUid ~= "" and realPlayerName ~= "" and candidateKey ~= "" then
 				local bindingRequestBody = encodeJson({
 					keyAccept = candidateKey,
-					gameNickname = savedRealPlayerName .. "[" .. savedUid .. "]"
+					gameNickname = realPlayerName .. "[" .. liveUid .. "]"
 				})
 
 				asyncHttpRequest("POST", marketState.host .. "/api/confirm-binding", {
@@ -16181,6 +16764,7 @@ end
 function onScriptTerminate(script, quitGame)
 	if script == thisScript() then
 		if type(arzMainDonorLauncherReleaseWorker) == "function" then pcall(arzMainDonorLauncherReleaseWorker, true) end
+		arzUserModsShutdown("arzmarket_terminate")
 		if type(arzUiExtensionsShutdown) == "function" then pcall(arzUiExtensionsShutdown, quitGame == true) end
 		-- mimgui and arz_html_ui release only the MoonLoader cursor they own.
 		-- Never reset SA-MP cursor mode here because a game dialog/CEF or another
@@ -17346,7 +17930,7 @@ function arzCatalogResetFailures()
 	marketState.catalogError = nil
 end
 
-marketState.catalogRequest = function(state, url, installData, retryFunction)
+marketState.catalogRequest = function(state, url, installData)
 	if state.inFlight or state.retryScheduled or state.failed then return false end
 	state.attempts = state.attempts + 1
 	state.inFlight = true
@@ -17356,29 +17940,18 @@ marketState.catalogRequest = function(state, url, installData, retryFunction)
 		if not state.inFlight or state.generation ~= generation then return end
 		state.inFlight = false
 		print("[ArzMarket][Catalog] " .. state.name .. " attempt " .. tostring(state.attempts) .. " failed: " .. tostring(reason))
-		if state.attempts < 3 then
-			state.retryScheduled = true
-			local delay = state.attempts == 1 and 1000 or 3000
-			lua_thread.create(function()
-				wait(delay)
-				if state.generation == generation and state.retryScheduled then
-					state.retryScheduled = false
-					retryFunction()
-				end
-			end)
-		else
-			state.failed = true
-			if state.name == "items" then marketState.catalogItemsPending = false end
-			if state.name == "items" or type(json_vlad) ~= "table" or #json_vlad == 0 then
-				state.error = state.name .. ":" .. tostring(reason)
-				marketState.catalogError = state.error
-				download_marketplace = "error"
-			end
+		state.failed = true
+		if state.name == "items" then marketState.catalogItemsPending = false end
+		if state.name == "items" or type(json_vlad) ~= "table" or #json_vlad == 0 then
+			state.error = state.name .. ":" .. tostring(reason)
+			marketState.catalogError = state.error
+			download_marketplace = "error"
 		end
 	end
 	local requestId, requestError = asyncHttpRequest("GET", url, {}, function(response)
-		if type(response) ~= "table" or (response.status_code ~= 200 and response.status_code ~= 304) then
-			fail("http_" .. tostring(response and response.status_code))
+		local statusOk, statusCode = pcall(function() return response.status_code end)
+		if not statusOk or (statusCode ~= 200 and statusCode ~= 304) then
+			fail("http_" .. tostring(statusOk and statusCode or "invalid_response"))
 			return
 		end
 		local ok, result = pcall(function()
@@ -17411,8 +17984,7 @@ function get_buyList()
 			whiteList = {}
 			writeJsonFile(whiteList, "moonloader/ArzMarket/white_list.json")
 			sendNotify(u8:decode("Установка товаров прошла успешна! Список обновлен!"))
-		end,
-		function() get_buyList() end
+		end
 	)
 end
 
@@ -17430,8 +18002,7 @@ function getItemList()
 			download_marketplace = nil
 			marketState.catalogJustLoaded = true
 			print("items_data" .. tostring(ini.cfg.lastItemsUpdate) .. ".json loaded")
-		end,
-		function() getItemList() end
+		end
 	)
 end
 
@@ -17445,118 +18016,27 @@ function averagePriceGcStep(stepCount)
 	end
 end
 
-function fetchAveragePriceResponse(url, timeoutSeconds)
-	if arzScriptOfflineReject("http", url) then
-		return nil, nil, "offline_mode"
-	end
+function fetchAveragePriceResponse(url)
+	local completed, response, failure = false, nil, nil
+	local requestId, requestError = asyncHttpRequest("GET", url, {}, function(result)
+		response = result
+		completed = true
+	end, function(err)
+		failure = tostring(err or "request_failed")
+		completed = true
+	end)
+	if not requestId then return nil, nil, tostring(requestError or "request_not_started") end
 
-	if not effilLoaded or not effil then
-		return nil, nil, "effil unavailable"
-	end
+	local deadline = os.time() + 47
+	while not completed and os.time() <= deadline do wait(0) end
+	if not completed then return nil, nil, "request timeout" end
+	if failure then return nil, nil, failure end
 
-	local requestThread
-	local proxyRequest = false
-	local proxyThread, proxyEnabled, proxyError = arzProxyCreateHttpThread(
-		"GET",
-		url,
-		{ headers = { ["Accept-Encoding"] = "identity" } },
-		arzProxyNextRequestKey("avgprice"),
-		timeoutSeconds or 90
-	)
-
-	if proxyEnabled then
-		proxyRequest = true
-		if not proxyThread then
-			return nil, nil, "proxy request blocked: " .. tostring(proxyError)
-		end
-		requestThread = proxyThread
-	else
-		local createOk, directThread = pcall(function()
-			return effil.thread(function(targetUrl)
-				local requests = require("requests")
-				local workerEffil = require("effil")
-				local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
-				local requestOk, response = workerPcall(requests.request, "GET", targetUrl, {
-					headers = {
-						["Accept-Encoding"] = "identity"
-					}
-				})
-
-				if not requestOk then
-					return false, tostring(response)
-				end
-
-				local statusCode = tonumber(response and response.status_code) or 0
-				local responseText = type(response and response.text) == "string" and response.text or ""
-				return true, statusCode, responseText
-			end)(url)
-		end)
-		if not createOk or not directThread then
-			return nil, nil, "cannot start request: " .. tostring(directThread)
-		end
-		requestThread = directThread
-	end
-
-	local startedAt = os.time()
-	local timeout = tonumber(timeoutSeconds) or 90
-
-	while true do
-		if ARZ_SCRIPT_OFFLINE then
-			pcall(function()
-				if requestThread.cancel then requestThread:cancel(0) end
-			end)
-			return nil, nil, "offline_mode"
-		end
-
-		local statusOk, threadStatus, threadError = pcall(function()
-			return requestThread:status()
-		end)
-
-		if not statusOk then
-			return nil, nil, "request status failed: " .. tostring(threadStatus)
-		end
-
-		if threadError then
-			return nil, nil, "request thread failed: " .. tostring(threadError)
-		end
-
-		if threadStatus == "completed" then
-			local getOk, requestOk, statusOrError, responseText = pcall(function()
-				return requestThread:get(0)
-			end)
-
-			if not getOk then
-				return nil, nil, "request result failed: " .. tostring(requestOk)
-			end
-
-			if not requestOk then
-				return nil, nil, tostring(statusOrError)
-			end
-
-			if proxyRequest then
-				local response = statusOrError
-				if type(response) ~= "table" then
-					return nil, nil, "proxy returned invalid response"
-				end
-				return tonumber(response.status_code) or 0, type(response.text) == "string" and response.text or "", nil
-			end
-
-			return tonumber(statusOrError) or 0, type(responseText) == "string" and responseText or "", nil
-		elseif threadStatus == "cancelled" then
-			return nil, nil, "request canceled"
-		end
-
-		if os.time() - startedAt >= timeout then
-			pcall(function()
-				if requestThread.cancel then
-					requestThread:cancel(0)
-				end
-			end)
-			return nil, nil, "request timeout"
-		end
-
-		wait(0)
-	end
+	local ok, statusCode, responseText = pcall(function()
+		return response.status_code, response.text
+	end)
+	if not ok then return nil, nil, "invalid_response" end
+	return tonumber(statusCode) or 0, type(responseText) == "string" and responseText or "", nil
 end
 
 function get_prices()
@@ -17630,7 +18110,7 @@ function get_prices()
 				priceData[job.key] = nil
 				jobOk = true
 			else
-				local statusCode, fetchedText, requestError = fetchAveragePriceResponse(job.url, 90)
+				local statusCode, fetchedText, requestError = fetchAveragePriceResponse(job.url)
 				responseText = fetchedText
 
 				if not avgPriceSourceIsEnabled(job.key) then
@@ -17761,26 +18241,39 @@ function marketplace_Manager()
 
 			print("set timer")
 
-			arzApplySavedAuthRuntime()
+			local activeClientKey = arzNetworkActivePremiumAuth()
+			local liveAuthToken, liveAuthServerId = arzNetworkLiveServerAuth()
+			if activeClientKey == "" or liveAuthToken == "" or liveAuthServerId == "" then
+				marketState.marketplaceError = nil
+				timers[22] = os.time() - 4
+				return
+			end
+			marketState.premiumKeys[1] = activeClientKey
 			local marketplaceRequestBody = encodeJson({
-				authKey = arzSavedCfgString("marketAuthKey"),
-				authToken = arzSavedCfgString("myServerToken"),
+				authKey = tostring(marketState.premiumKeys[3]),
+				authToken = liveAuthToken,
 				scriptVersion = tostring(marketState.scriptVersion[1]),
-				serverId = arzSavedCfgString("myServerId"),
-				authClient = arzNetworkActivePremiumAuth()
+				serverId = liveAuthServerId,
+				authClient = activeClientKey
 			})
 
 			marketState.marketplaceInFlight = true
 			marketState.marketplaceRequestStartedAt = os.time()
-			local marketplaceRequestId, marketplaceRequestError = asyncHttpRequest("GET", marketState.marketplaceTimeOut == nil and marketState.marketplaceUrl[1] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceTimeOut == true and marketState.marketplaceUrl[2] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceUrl[3], {
+			arzMarketplaceDiagWrite("MP", "manager_start", {selected=tonumber(ini.cfg.marketplaceSelectedItem) or 0, fallback=tostring(marketState.marketplaceTimeOut), banned=tostring(ini.cfg.bannedByRkn == true), catalog_items=tostring(type(marketState.itemsMarketData) == "table" and #marketState.itemsMarketData or 0)})
+			local marketplaceRequestId, marketplaceRequestError
+			marketplaceRequestId, marketplaceRequestError = asyncHttpRequest("GET", marketState.marketplaceTimeOut == nil and marketState.marketplaceUrl[1] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceTimeOut == true and marketState.marketplaceUrl[2] .. "/" .. ini.cfg.marketplaceSelectedItem - 1 or marketState.marketplaceUrl[3], {
 				headers = {
 					["content-type"] = "application/json"
 				},
 				data = u8(marketplaceRequestBody)
 			}, function(marketplaceResponse)
 				marketState.marketplaceInFlight = false
-				if type(marketplaceResponse) ~= "table" then
+				local statusOk, responseStatus = pcall(function() return marketplaceResponse.status_code end)
+				local textOk, responseText = pcall(function() return marketplaceResponse.text end)
+				arzMarketplaceDiagWrite("MP", "callback", {id=tostring(marketplaceRequestId or ""), status=tostring(statusOk and responseStatus or "invalid"), body_bytes=tostring(textOk and type(responseText) == "string" and #responseText or 0)})
+				if not statusOk or responseStatus == nil then
 					marketState.marketplaceError = "invalid_response"
+					arzMarketplaceDiagWrite("MP", "backend_error", {id=tostring(marketplaceRequestId or ""), reason="invalid_response"})
 					download_marketplace = nil
 					return
 				end
@@ -17809,6 +18302,7 @@ function marketplace_Manager()
 
 					if marketplaceResponse.status_code == 400 or marketplaceResponse.status_code == 412 then
 						download_marketplace = "blocked"
+						arzMarketplaceDiagWrite("MP", "backend_state", {id=tostring(marketplaceRequestId or ""), status="blocked", http=tostring(marketplaceResponse.status_code)})
 
 						local gameState = sampGetGamestate()
 
@@ -17817,6 +18311,7 @@ function marketplace_Manager()
 
 					if marketplaceResponse.status_code == 401 then
 						download_marketplace = "auth"
+						arzMarketplaceDiagWrite("MP", "backend_state", {id=tostring(marketplaceRequestId or ""), status="auth", http="401"})
 					end
 
 					if marketplaceResponse.status_code ~= 400 and marketplaceResponse.status_code ~= 401 and marketplaceResponse.status_code ~= 412 then
@@ -17835,6 +18330,7 @@ function marketplace_Manager()
 							if not marketplaceDecodeOk or type(marketplaceData) ~= "table" or type(marketplaceData.list) ~= "table" then
 								print("marketplace invalid response")
 								marketState.marketplaceError = "invalid_json"
+								arzMarketplaceDiagWrite("MP", "backend_error", {id=tostring(marketplaceRequestId or ""), reason="invalid_json", body_bytes=tostring(type(marketplaceResponse.text) == "string" and #marketplaceResponse.text or 0)})
 								download_marketplace = nil
 								return
 							end
@@ -17864,6 +18360,7 @@ function marketplace_Manager()
 									end
 
 									marketState.lavka_summ = #download_marketplace
+									arzMarketplaceDiagWrite("MP", "backend_ready", {id=tostring(marketplaceRequestId or ""), shops=tostring(#download_marketplace), queue=tostring(marketState.marketplaceQueue or 0)})
 
 									for marketIndex, marketData in pairs(download_marketplace) do
 										for itemIndex, itemName in pairs(marketData.items_buy) do
@@ -17925,6 +18422,7 @@ function marketplace_Manager()
 							print("json cant loaded. error " .. tostring(marketplaceResponse.status_code))
 
 							marketState.marketplaceError = "buy_catalog_missing"
+							arzMarketplaceDiagWrite("MP", "backend_error", {id=tostring(marketplaceRequestId or ""), reason="buy_catalog_missing"})
 							get_buyList()
 							download_marketplace = true
 						end
@@ -17939,11 +18437,13 @@ function marketplace_Manager()
 					end
 
 						marketState.marketplaceError = "http_" .. tostring(marketplaceResponse.status_code)
+						arzMarketplaceDiagWrite("MP", "backend_error", {id=tostring(marketplaceRequestId or ""), reason=marketState.marketplaceError, http=tostring(marketplaceResponse.status_code)})
 						download_marketplace = nil
 				end
 			end, function(marketplaceError)
 				marketState.marketplaceInFlight = false
 				marketState.marketplaceError = tostring(marketplaceError or "request_failed")
+				arzMarketplaceDiagWrite("MP", "transport_error", {id=tostring(marketplaceRequestId or ""), reason=marketState.marketplaceError})
 				deAFKMessage(debug.getinfo(1, "l"), "error ")
 				print("timer error " .. tostring(marketplaceError))
 
@@ -17952,6 +18452,7 @@ function marketplace_Manager()
 			if not marketplaceRequestId then
 				marketState.marketplaceInFlight = false
 				marketState.marketplaceError = tostring(marketplaceRequestError or "request_not_started")
+				arzMarketplaceDiagWrite("MP", "request_not_started", {reason=marketState.marketplaceError})
 				download_marketplace = nil
 			end
 		else
@@ -19197,6 +19698,7 @@ function openUrl(primaryUrl, alternativeUrl, primaryTitle, alternativeTitle, pre
 end
 
 function sampev.onSendDialogResponse(dialogId, button, listIndex, inputText)
+	arzUserModsDispatch("onSendDialogResponse", dialogId, button, listIndex, inputText)
 	if dialogId == LOW_PRICE_GUARD_DIALOG_ID then
 		local pendingSide = LOW_PRICE_GUARD_PENDING_FORCE and LOW_PRICE_GUARD_PENDING_FORCE.side or nil
 		local pendingCommand = LOW_PRICE_GUARD_PENDING_FORCE and LOW_PRICE_GUARD_PENDING_FORCE.command or nil
@@ -19672,6 +20174,7 @@ function magiclines(text)
 end
 
 function sampev.onShowDialog(dialogId, style, title, button1, button2, text)
+	arzUserModsDispatch("onShowDialog", dialogId, style, title, button1, button2, text)
 	dialogEventSerial = dialogEventSerial + 1
 	if marketBuyRouteHandleDialog then
 		local okBuyRouteDialog, buyRouteResult = pcall(
@@ -19727,7 +20230,18 @@ function sampev.onShowDialog(dialogId, style, title, button1, button2, text)
 
 	if marketState.send_adControl.active and marketState.send_adControl.uid ~= -1 then
 		if text:find(u8:decode("Напишите текст объявление")) and title:find(u8:decode("Подача объявления")) then
-			local adText = autoAdProfiles[marketState.send_adControl.uid].isPiarText
+			local adProfile = autoAdProfiles[marketState.send_adControl.uid]
+			local adText = tostring(marketState.send_adControl.resolvedText or "")
+			if adText == "" and type(adProfile) == "table" then
+				local resolvedText, resolveError = arzResolveAutoAdText(adProfile)
+				if resolvedText == nil then
+					print("[ArzMarket][AutoAd] dialog skipped: " .. tostring(resolveError))
+					marketState.send_adControl = { uid = -1, active = false, timer = os.time() }
+					sampSendDialogResponse(dialogId, 0, 0, "")
+					return false
+				end
+				adText = resolvedText
+			end
 
 			deAFKMessage("input to dialog ad " .. adText)
 			sampSendDialogResponse(dialogId, 1, 1, adText)
@@ -21457,6 +21971,7 @@ function sampev.onInitGame(...)
 end
 
 function sampev.onServerMessage(color, message)
+	arzUserModsDispatch("onServerMessage", color, message)
 	if type(message) == "string" and message:find(u8:decode("Соединение с сервером потеряно."), 1, true) then
 		arzAutoRecSchedule("chat_message")
 	end
@@ -21478,25 +21993,21 @@ function sampev.onServerMessage(color, message)
 		cycleTradeOnBuyStarted(message)
 	end
 
-	if not ARZ_INI_WRITE_LOCKED and marketState.myUidCheck[1] == true and message:match("UID: (%d+)") then
+	if marketState.myUidCheck[1] == true and message:match("UID: (%d+)") then
 		local incomingUid = message:match("UID: (%d+)")
 		ARZ_NETWORK_AUTH_RUNTIME.liveUid = incomingUid
-		local _, _, liveName = arzNetworkNameAndUid()
+		local liveName = getRealName(1) or ""
 		ARZ_NETWORK_AUTH_RUNTIME.liveUidIdentity = liveName
-		local savedUid = arzAuthFreezeUid(incomingUid)
-		marketState.myUidCheck = { false, savedUid or incomingUid, os.time() }
-		save_all()
+		marketState.myUidCheck = { false, incomingUid, os.time() }
+		if not ARZ_INI_WRITE_LOCKED then
+			arzAuthFreezeUid(incomingUid)
+			save_all()
+		end
 		return false
 	end
 
-	if marketState.autoLavka and (message:find(u8:decode("поскольку он сломан")) or message:find(u8:decode("вас нет надетого на вас переносного ларька")) or message:find(u8:decode("У Вас уже установлена лавка"))) and color == -10270721 then
-		marketState.autoLavka = false
-
-		sendNotify(u8:decode("Авто установка лавки выключено. Какая-то ошибочка."))
-	end
-
-	if message:find(u8:decode("Достигнут лимит лавок на сервере")) and color == -10270721 and not marketState.autoLavka then
-		AFKMessage(u8:decode("Лимит лавок на сервере! Доступна функция авто-установки лавки! Команда: /autolavka"))
+	if message:find(u8:decode("Достигнут лимит лавок на сервере")) and color == -10270721 then
+		AFKMessage(u8:decode("Лимит лавок на сервере!"))
 	end
 
 	if ((message:find(u8:decode("Вы сняли лавку")) or message:find(u8:decode("У Вас закончилось время для настройки товаров!")) or message:find(u8:decode("Ваша лавка была закрыта")) or message:find(u8:decode("Вы отказались от аренды лавки!"))) and color == -10270721 or message:find(u8:decode("удалил вашу лавку")) and color == -6723841 or message:find(u8:decode("Лавка была удалена")) and color == 1941201407 or message:find(u8:decode("так как время аренды аксессуара вышло")) and color == -10270721) and activeLavkaId ~= -1 then
@@ -21534,11 +22045,6 @@ function sampev.onServerMessage(color, message)
 			replaceLoggerVisible[0] = true
 		end
 
-		if marketState.autoLavka then
-			marketState.autoLavka = false
-
-			sendNotify(u8:decode("Авто установка лавки выключено так как вы успешно установили лавку."))
-		end
 
 		if telegramUi.lavka_build[0] then
 			sendTelegramNotification("[" .. os.date("%H:%M:%S", os.time()) .. u8:decode("] Вы успешно установили или арендовали лавку!"))
@@ -23361,7 +23867,7 @@ function onSendRpc(rpcId, bitStream)
 	if rpcId == 52 and resetTradeContext then
 		resetTradeContext("spawn_request")
 	end
-	if not ARZ_INI_WRITE_LOCKED and rpcId == 52 then
+	if rpcId == 52 then
 		deAFKMessage("spawn req")
 		marketState.myUidCheck[1] = true
 		marketState.myUidCheck[3] = os.time() - 3
@@ -23369,6 +23875,7 @@ function onSendRpc(rpcId, bitStream)
 end
 
 function onReceivePacket(packetId, bitStream)
+	arzUserModsDispatch("onNetworkPacket", packetId)
 	if packetId == 33 or packetId == 32 or packetId == 34 then
 		LOW_PRICE_GUARD_FORCE_ONCE_SIDE = nil
 		LOW_PRICE_GUARD_FORCE_ONCE_EXPIRES = 0
@@ -23385,11 +23892,6 @@ function onReceivePacket(packetId, bitStream)
 			marketState.onPremUsersLoad = true
 		end
 
-		if marketState.autoLavka then
-			sendNotify(u8:decode("Авто лавка отключена."))
-
-			marketState.autoLavka = false
-		end
 
 		if marketplacePayload.enabled == true then
 			MarketPlace_Clear = true
@@ -23629,7 +24131,7 @@ end
 ARZ_COMPONENTS = ARZ_COMPONENTS or { bootstrap = {} }
 ARZ_COMPONENTS.bootstrap = ARZ_COMPONENTS.bootstrap or {}
 ARZ_COMPONENTS.bootstrap.manifest_url = "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/components_manifest.json"
-ARZ_COMPONENTS.bootstrap.expected_bundle_version = 302
+ARZ_COMPONENTS.bootstrap.expected_bundle_version = 303
 ARZ_COMPONENTS.bootstrap.runtime_root = getWorkingDirectory()
 ARZ_COMPONENTS.bootstrap.state_path = getWorkingDirectory() .. "\\ArzMarket\\component_state.json"
 ARZ_COMPONENTS.bootstrap.stage_root = getWorkingDirectory() .. "\\ArzMarket\\.component_stage"
@@ -24314,6 +24816,25 @@ function arzComponentsBootstrapAll()
 	ARZ_COMPONENTS.bootstrap.last_error = nil
 	ARZ_COMPONENTS.bootstrap.last_status = "checking"
 
+	if ARZ_DIAGNOSTIC_FREEZE_UPDATES then
+		local packagedManifest, packagedError = arzComponentsReadManifestFile(ARZ_COMPONENTS.bootstrap.packaged_manifest_path)
+		if not packagedManifest then
+			ARZ_COMPONENTS.bootstrap.last_status = "diagnostic_frozen_failed"
+			ARZ_COMPONENTS.bootstrap.last_error = "packaged_manifest_unavailable:" .. tostring(packagedError)
+			return false, ARZ_COMPONENTS.bootstrap.last_error
+		end
+		local localReady, localError = arzComponentsValidateLocalAgainstManifest(packagedManifest)
+		if not localReady then
+			ARZ_COMPONENTS.bootstrap.last_status = "diagnostic_frozen_failed"
+			ARZ_COMPONENTS.bootstrap.last_error = "packaged_components_invalid:" .. tostring(localError)
+			return false, ARZ_COMPONENTS.bootstrap.last_error
+		end
+		ARZ_COMPONENTS.bootstrap.remote_bundle_version = packagedManifest.bundle_version
+		ARZ_COMPONENTS.bootstrap.last_status = "diagnostic_frozen"
+		ARZ_COMPONENTS.bootstrap.last_error = nil
+		return true
+	end
+
 	if not arzComponentsEnsureDirectory(getWorkingDirectory() .. "\\ArzMarket") then
 		ARZ_COMPONENTS.bootstrap.last_error = "arzmarket_directory_unavailable"
 		return false, ARZ_COMPONENTS.bootstrap.last_error
@@ -24681,6 +25202,12 @@ function arzModulesBuildSingleGameStatusMessage(moduleName)
 end
 
 function arzModulesFetchManifest()
+	if ARZ_DIAGNOSTIC_FREEZE_UPDATES then
+		ARZ_MODULES.bootstrap.manifest_checked = true
+		ARZ_MODULES.bootstrap.manifest_cache = nil
+		ARZ_MODULES.bootstrap.manifest_error = "diagnostic_updates_frozen"
+		return nil, ARZ_MODULES.bootstrap.manifest_error
+	end
 	if ARZ_MODULES.bootstrap.manifest_checked then
 		return ARZ_MODULES.bootstrap.manifest_cache, ARZ_MODULES.bootstrap.manifest_error
 	end
@@ -24950,6 +25477,7 @@ end
 function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveSelfInfo)
 	-- Telegram follows the original ArzMarket network path and is intentionally
 	-- isolated from our later offline/proxy transport additions.
+	local isMarketplaceDiagRequest = type(url) == "string" and url:find("getMarketplace", 1, true) ~= nil
 	local isOriginalTelegramTransport = type(url) == "string" and (
 		url:find("https://api.telegram.org/", 1, true) == 1
 		or url:find("https://api-telegram.arz.market/", 1, true) == 1
@@ -24962,10 +25490,11 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 		blockedByOffline = arzScriptOfflineReject("http", url)
 	end
 	if blockedByOffline then
+		if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "transport_setup_error", {reason="offline_mode"}) end
 		if type(onError) == "function" then
 			lua_thread.create(function()
 				wait(0)
-				pcall(onError, "offline_mode")
+				onError("offline_mode")
 			end)
 		end
 		return nil, "offline_mode"
@@ -25005,11 +25534,12 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 
 	if proxyEnabled then
 		if not proxyThread then
+			if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "transport_setup_error", {id=requestId, reason="proxy_required", detail=tostring(proxyError)}) end
 			clearAsyncRequestState()
 			if type(onError) == "function" then
 				lua_thread.create(function()
 					wait(0)
-					pcall(onError, "proxy_required: " .. tostring(proxyError))
+					onError("proxy_required: " .. tostring(proxyError))
 				end)
 			end
 			return nil, "proxy_required: " .. tostring(proxyError)
@@ -25019,11 +25549,9 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 		local createOk, createdThread = pcall(function()
 			return effil.thread(function(method, url, requestOptions)
 				local requests = require("requests")
-				local workerEffil = require("effil")
-				local workerPcall = type(workerEffil.pcall) == "function" and workerEffil.pcall or pcall
-				local requestSucceeded, response = workerPcall(requests.request, method, url, requestOptions)
+				local requestSucceeded, response = pcall(requests.request, method, url, requestOptions)
 
-				if not requestSucceeded then
+				if not requestSucceeded or type(response) ~= "table" then
 					return false, response
 				end
 
@@ -25067,11 +25595,12 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 			end)(method, url, requestOptions)
 		end)
 		if not createOk or not createdThread then
+			if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "transport_setup_error", {id=requestId, reason="effil_start_failed"}) end
 			clearAsyncRequestState()
 			if type(onError) == "function" then
 				lua_thread.create(function()
 					wait(0)
-					pcall(onError, "effil_start_failed: " .. tostring(createdThread))
+					onError("effil_start_failed: " .. tostring(createdThread))
 				end)
 			end
 			return nil, "effil_start_failed: " .. tostring(createdThread)
@@ -25081,6 +25610,7 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 
 	marketState.asyncThreads = marketState.asyncThreads or {}
 	marketState.asyncThreads[requestId] = requestThread
+	if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "transport_start", {id=requestId, transport=proxyEnabled and "proxy" or "effil"}) end
 
 	onSuccess = onSuccess or function()
 		return
@@ -25092,8 +25622,10 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 	lua_thread.create(function(currentRequestId)
 		while true do
 			if ARZ_SCRIPT_OFFLINE and not isOriginalTelegramTransport then
+				if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "transport_cancel_offline", {id=currentRequestId}) end
 				pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
 				clearAsyncRequestState()
+				onError("offline_mode")
 				return
 			end
 
@@ -25103,14 +25635,15 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 			local statusOk, threadStatus, threadError = pcall(function() return requestThread:status() end)
 			if not statusOk then
 				clearAsyncRequestState()
-				pcall(onError, "effil_status_failed: " .. tostring(threadStatus))
+				onError("effil_status_failed: " .. tostring(threadStatus))
 				return
 			end
 
 			if requestStartedAt + 45 < os.time() then
+				if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "transport_timeout", {id=currentRequestId, elapsed_ms=tostring(math.max(0, os.time() - requestStartedAt) * 1000)}) end
 				pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
 				clearAsyncRequestState()
-				pcall(onError, "timeout")
+				onError("timeout")
 				return
 			end
 
@@ -25124,10 +25657,11 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 
 					if timers[39][2] > 9 then
 						marketState.marketplaceTimeOut = true
+						if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "primary_fallback_trigger", {id=currentRequestId, counter=tostring(timers[39][2])}) end
 						pcall(function() if requestThread.cancel then requestThread:cancel(0) end end)
 						clearAsyncRequestState()
 
-						pcall(onError, threadError)
+						onError(threadError)
 
 						return
 					end
@@ -25146,7 +25680,7 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 						clearAsyncRequestState()
 						AFKMessage(u8:decode("К сожалению таблицу цен загрузить не получилось из за ограничения вашего провайдера."))
 						AFKMessage(u8:decode("Для решения вашей проблемы возможно поможет команда /premhost, напишите ее в чат игры"))
-						pcall(onError, threadError)
+						onError(threadError)
 
 						return
 					end
@@ -25154,25 +25688,35 @@ function asyncHttpRequest(method, url, requestOptions, onSuccess, onError, saveS
 
 				if threadStatus == "completed" then
 					local getOk, requestSucceeded, response = pcall(function() return requestThread:get(0) end)
+					if isMarketplaceDiagRequest then
+						local statusOk, statusCode = pcall(function() return response.status_code end)
+						local textOk, responseText = pcall(function() return response.text end)
+						arzMarketplaceDiagWrite("MP", "transport_complete", {id=currentRequestId, ok=tostring(getOk and requestSucceeded == true), response_type=type(response), http=tostring(statusOk and statusCode or ""), body_bytes=tostring(textOk and type(responseText) == "string" and #responseText or 0), elapsed_ms=tostring(math.max(0, os.time() - requestStartedAt) * 1000)})
+					end
 					clearAsyncRequestState()
-					if not getOk then pcall(onError, "effil_get_failed: " .. tostring(requestSucceeded)); return end
+					if not getOk then onError("effil_get_failed: " .. tostring(requestSucceeded)); return end
 					if requestSucceeded then
 						if not ARZ_INI_WRITE_LOCKED and saveSelfInfo == 1 and type(response) == "table" and type(response.text) == "string" and response.text:find("username") and response.text:find("exp") and response.text:find("osTime") then
 							pcall(arzAuthFreezeSelfInfo, response.text)
 						end
-						pcall(onSuccess, response)
+						-- Preserve original ArzMarket callback semantics: callbacks run directly inside
+						-- this MoonLoader thread because several original callbacks call wait().
+						-- Wrapping them in pcall/xpcall creates an unsafe yield boundary in Lua 5.1.
+						if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "callback_start", {id=currentRequestId}) end
+						onSuccess(response)
+						if isMarketplaceDiagRequest then arzMarketplaceDiagWrite("MP", "callback_end", {id=currentRequestId}) end
 					else
-						pcall(onError, response)
+						onError(response)
 					end
 					return
 				elseif threadStatus == "cancelled" then
 					clearAsyncRequestState()
-					pcall(onError, "cancelled")
+					onError("cancelled")
 					return
 				end
 			else
 				clearAsyncRequestState()
-				pcall(onError, threadError)
+				onError(threadError)
 				return
 			end
 

@@ -9,6 +9,10 @@
   const initialPage = ['sell','settings','logs','marketplace','mods','storage'].includes(requestedInitialPage) ? requestedInitialPage : 'buy';
   const requestedSettingsSection = urlParams.get('section');
   const initialSettingsSection = ['general','trade','automation','telegram','appearance','configs'].includes(requestedSettingsSection) ? requestedSettingsSection : 'general';
+  const requestedUserModRaw = String(urlParams.get('user_mod') || '').toLowerCase();
+  const requestedUserModId = requestedUserModRaw && requestedUserModRaw.length <= 96 && !requestedUserModRaw.includes('..') && /^[a-z0-9_.-]+$/.test(requestedUserModRaw)
+    ? requestedUserModRaw
+    : null;
   if (previewMode) document.documentElement.classList.add('preview-mode');
   const state = {
     page: initialPage,
@@ -41,7 +45,8 @@
     },
     storage: {search:'', type:'all', place:'all', selectedKey:null, tab:'distribution'},
     settings: {section:initialSettingsSection, mergeSelected:new Set(), pendingScale:null, paletteDragging:false},
-    modsSection: 'scripts',
+    modsSection: requestedUserModId ? 'mine' : 'scripts',
+    openedModuleId: requestedUserModId,
     marketplace: {search:'', selectedShopKey:null, loadingStartedAt:0, bridgeFailures:0},
     interfaceScalePercent: 100,
     minimalMode: false,
@@ -321,7 +326,7 @@
     storageLocationRows: el('storageLocationRows'), storageDistributionTab: el('storageDistributionTab'), storageInfoTab: el('storageInfoTab'), storageDistributionPanel: el('storageDistributionPanel'), storageInfoPanel: el('storageInfoPanel'),
     storageInfoType: el('storageInfoType'), storageInfoId: el('storageInfoId'), storageInfoUpdated: el('storageInfoUpdated'), storageAveragePrices: el('storageAveragePrices'),
     settingsHeaderMeta: el('settingsHeaderMeta'), settingsToolbar: el('settingsToolbar'), settingsWorkspace: el('settingsWorkspace'), settingsContent: el('settingsContent'),
-    modsHeaderMeta: el('modsHeaderMeta'), modsWorkspace: el('modsWorkspace'),
+    modsHeaderMeta: el('modsHeaderMeta'), modsWorkspace: el('modsWorkspace'), modsModuleViewer: el('modsModuleViewer'), modsModuleFrame: el('modsModuleFrame'), modsModuleBackButton: el('modsModuleBackButton'), modsModuleTitle: el('modsModuleTitle'),
     marketplaceHeaderMeta: el('marketplaceHeaderMeta'), marketplaceToolbar: el('marketplaceToolbar'), marketplaceRefreshButton: el('marketplaceRefreshButton'),
     marketplaceShopCount: el('marketplaceShopCount'), marketplaceSearchInput: el('marketplaceSearchInput'), marketplaceServerButton: el('marketplaceServerButton'), marketplaceSortButton: el('marketplaceSortButton'),
     marketplaceWorkspace: el('marketplaceWorkspace'), marketplaceStatus: el('marketplaceStatus'), marketplaceBrowse: el('marketplaceBrowse'), marketplaceCards: el('marketplaceCards'), marketplaceBrowseEmpty: el('marketplaceBrowseEmpty'),
@@ -797,11 +802,47 @@
     state.toastTimer = setTimeout(() => refs.toast.classList.add('hidden'), 2600);
   }
 
+  let marketplaceDiagSequence = 0;
+  const marketplaceDiagBuffer = [];
+  let marketplaceDiagFlushBusy = false;
+  function marketplaceDiag(event, fields = {}) {
+    const row = Object.assign({event:String(event || 'event'), js_ms:Date.now()}, fields || {});
+    marketplaceDiagBuffer.push(row);
+    if (marketplaceDiagBuffer.length > 80) marketplaceDiagBuffer.splice(0, marketplaceDiagBuffer.length - 80);
+    try { console.log('[MP_DIAG]', row); } catch (_) {}
+  }
+  async function flushMarketplaceDiag() {
+    if (marketplaceDiagFlushBusy || marketplaceDiagBuffer.length === 0) return;
+    marketplaceDiagFlushBusy = true;
+    const batch = marketplaceDiagBuffer.splice(0, Math.min(50, marketplaceDiagBuffer.length));
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? window.setTimeout(() => controller.abort(), 1800) : null;
+    try {
+      await fetch('/api/marketplace-diag', {
+        method:'POST', cache:'no-store', signal:controller ? controller.signal : undefined,
+        headers:{'X-ArzMarket-Token':token,'Content-Type':'application/json'},
+        body:JSON.stringify({events:batch})
+      });
+    } catch (_) {
+      marketplaceDiagBuffer.unshift(...batch.slice(-40));
+      if (marketplaceDiagBuffer.length > 80) marketplaceDiagBuffer.length = 80;
+    } finally {
+      if (timer !== null) window.clearTimeout(timer);
+      marketplaceDiagFlushBusy = false;
+    }
+  }
+  window.setInterval(() => { flushMarketplaceDiag().catch(() => null); }, 2000);
+  marketplaceDiag('js_boot', {phase:'app_start'});
+
   async function api(path, options = {}) {
     if (perfEnabled) {
       perfMetrics.apiRequests += 1;
       if (path === '/api/action') { perfMetrics.htmlToLuaMessages += 1; perfMetrics.jsonEncode += 1; }
     }
+    const isMarketplaceState = path.startsWith('/api/state?page=marketplace');
+    const diagSeq = isMarketplaceState ? ++marketplaceDiagSequence : 0;
+    const diagStartedAt = isMarketplaceState ? performance.now() : 0;
+    if (isMarketplaceState) marketplaceDiag('request_start', {seq:diagSeq, phase:'fetch'});
     const headers = Object.assign({}, options.headers || {}, {'X-ArzMarket-Token': token});
     if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
     const timeoutMs = Math.max(1000, Number(options.timeoutMs || 5000));
@@ -827,20 +868,36 @@
           })
         ]);
       }
+      if (isMarketplaceState) marketplaceDiag('headers', {seq:diagSeq, http:response.status, duration_ms:Math.round(performance.now()-diagStartedAt)});
+    } catch (error) {
+      if (isMarketplaceState) marketplaceDiag('fetch_error', {seq:diagSeq, error:String(error?.message || error), duration_ms:Math.round(performance.now()-diagStartedAt)});
+      throw error;
     } finally {
       if (timeoutId !== null) window.clearTimeout(timeoutId);
     }
-    if (response.status === 204) return {unchanged: true};
+    if (response.status === 204) {
+      if (isMarketplaceState) marketplaceDiag('unchanged', {seq:diagSeq, http:204, duration_ms:Math.round(performance.now()-diagStartedAt)});
+      return {unchanged: true};
+    }
     const raw = await response.text();
+    if (isMarketplaceState) marketplaceDiag('body', {seq:diagSeq, http:response.status, bytes:raw.length, duration_ms:Math.round(performance.now()-diagStartedAt)});
     let data;
-    try { if (perfEnabled && raw) perfMetrics.jsonDecode += 1; data = raw ? JSON.parse(raw) : {}; }
-    catch (_) { data = {ok: false, error: raw || `HTTP ${response.status}`}; }
+    try {
+      if (perfEnabled && raw) perfMetrics.jsonDecode += 1;
+      data = raw ? JSON.parse(raw) : {};
+      if (isMarketplaceState) marketplaceDiag('parse_ok', {seq:diagSeq, status:String(data?.data?.status || 'missing'), revision:Number(data?.revision || 0), duration_ms:Math.round(performance.now()-diagStartedAt)});
+    } catch (parseError) {
+      if (isMarketplaceState) marketplaceDiag('parse_error', {seq:diagSeq, error:String(parseError?.message || parseError), bytes:raw.length, duration_ms:Math.round(performance.now()-diagStartedAt)});
+      data = {ok: false, error: raw || `HTTP ${response.status}`};
+    }
     if (!response.ok) {
       const err = new Error(data?.error || `HTTP ${response.status}`);
       err.status = response.status;
+      if (isMarketplaceState) marketplaceDiag('http_error', {seq:diagSeq, http:response.status, error:String(err.message || err)});
       throw err;
     }
     if (perfEnabled && path.startsWith('/api/state')) perfMetrics.luaToHtmlMessages += 1;
+    if (isMarketplaceState) marketplaceDiag('request_end', {seq:diagSeq, status:String(data?.data?.status || 'missing'), revision:Number(data?.revision || 0), duration_ms:Math.round(performance.now()-diagStartedAt)});
     return data;
   }
 
@@ -1573,6 +1630,7 @@
 
   function setMarketplaceLocalError(reason = 'bridge_unavailable', resetRevision = true) {
     if (state.page !== 'marketplace') return;
+    marketplaceDiag('local_error', {status:'error', error:String(reason || 'bridge_unavailable')});
     const current = state.data || emptyPageState('marketplace');
     const data = Object.assign({}, current.data || {}, {status:'error', errorReason:String(reason || 'bridge_unavailable')});
     state.data = Object.assign({}, current, {data});
@@ -1610,6 +1668,7 @@
     if (page === 'marketplace') {
       state.marketplace.bridgeFailures = 0;
       const marketplaceStatus = String(result?.data?.status || 'loading');
+      marketplaceDiag('apply_state', {status:marketplaceStatus, revision:Number(result?.revision || 0)});
       if (marketplaceStatus === 'loading') {
         if (!state.marketplace.loadingStartedAt) state.marketplace.loadingStartedAt = Date.now();
       } else {
@@ -1630,9 +1689,12 @@
     updateVisualScale();
     syncSelected();
     if (baronAssistantUi) baronAssistantUi.render(result?.assistant || {active:false});
+    const marketplaceRenderStartedAt = page === 'marketplace' ? performance.now() : 0;
     try {
       render();
+      if (page === 'marketplace') marketplaceDiag('render_ok', {status:String(state.data?.data?.status || 'missing'), revision:Number(state.data?.revision || 0), duration_ms:Math.round(performance.now()-marketplaceRenderStartedAt)});
     } catch (renderError) {
+      if (page === 'marketplace') marketplaceDiag('render_error', {status:String(state.data?.data?.status || 'missing'), error:String(renderError?.message || renderError), duration_ms:Math.round(performance.now()-marketplaceRenderStartedAt)});
       console.error('[ArzMarket HTML] render failed:', renderError);
       refs.runtimeText.textContent = 'Ошибка интерфейса';
       if (force) showToast(`UI: ${renderError?.message || renderError}`, 'error');
@@ -3524,10 +3586,9 @@
       title.textContent='Нужна авторизация';
       textNode.textContent='Привяжите Telegram или ВКонтакте через ArzMarket, затем обновите Маркетплейс.';
       const actions=div('', 'marketplace-status-actions');
-      const tg=document.createElement('button'); tg.type='button'; tg.textContent='Привязать Telegram'; tg.addEventListener('click',()=>action('marketplace.auth.open',{page:'marketplace',provider:'telegram'}).catch(err=>showToast(err.message,'error')));
-      const vk=document.createElement('button'); vk.type='button'; vk.textContent='Привязать ВКонтакте'; vk.addEventListener('click',()=>action('marketplace.auth.open',{page:'marketplace',provider:'vk'}).catch(err=>showToast(err.message,'error')));
-      const lua=document.createElement('button'); lua.type='button'; lua.textContent='Ввести ключ в Lua'; lua.addEventListener('click',async()=>{ try { await action('ui.switch_mode',{page:'marketplace'}); } catch (err) { showToast(`Переключение на Lua: ${err.message}`,'error'); } });
-      actions.append(tg,vk,lua); copy.append(title,textNode,actions);
+      const tg=document.createElement('button'); tg.type='button'; tg.textContent='Привязать Telegram'; tg.addEventListener('click',async()=>{ try { await action('ui.switch_mode',{page:'marketplace'}); } catch (err) { showToast(`Переключение на Lua: ${err.message}`,'error'); } });
+      const vk=document.createElement('button'); vk.type='button'; vk.textContent='Привязать ВКонтакте'; vk.addEventListener('click',async()=>{ try { await action('ui.switch_mode',{page:'marketplace'}); } catch (err) { showToast(`Переключение на Lua: ${err.message}`,'error'); } });
+      actions.append(tg,vk); copy.append(title,textNode,actions);
     } else if(status==='blocked') {
       title.textContent='Доступ к Маркетплейсу ограничен';
       textNode.textContent='Проверьте уровень аккаунта, авторизацию и то, что вы находитесь на сервере Arizona RP.';
@@ -4140,6 +4201,23 @@
     installWheelScroller(refs.settingsContent);
   }
 
+  function userModuleAssetUrl(moduleInfo) {
+    const id = String(moduleInfo?.id || '');
+    const rel = String(moduleInfo?.ui_path || '');
+    if (!id || !rel) return '';
+    const encodedPath = rel.split('/').filter(Boolean).map(segment => encodeURIComponent(segment)).join('/');
+    return `/user-mod/${encodeURIComponent(id)}/${encodedPath}`;
+  }
+
+  function closeUserModuleViewer() {
+    state.openedModuleId = null;
+    if (refs.modsModuleFrame) {
+      refs.modsModuleFrame.src = 'about:blank';
+      delete refs.modsModuleFrame.dataset.moduleId;
+    }
+    renderMods();
+  }
+
   function renderMods() {
     if (!refs.modsWorkspace) return;
     refs.modsWorkspace.querySelectorAll('[data-mods-section]').forEach(button => {
@@ -4150,15 +4228,163 @@
 
     const content = refs.modsWorkspace.querySelector('.mods-catalog-content');
     if (!content) return;
+    const data = state.data && typeof state.data === 'object' ? state.data : {};
+    const userModules = Array.isArray(data.user_modules) ? data.user_modules : [];
+    const openedModule = state.openedModuleId
+      ? userModules.find(item => String(item?.id || '') === String(state.openedModuleId))
+      : null;
+
+    if (state.openedModuleId && (!openedModule || openedModule.enabled !== true || openedModule.status !== 'loaded' || openedModule.has_ui !== true)) {
+      state.openedModuleId = null;
+      if (refs.modsModuleFrame) {
+        refs.modsModuleFrame.src = 'about:blank';
+        delete refs.modsModuleFrame.dataset.moduleId;
+      }
+    }
+
+    if (state.openedModuleId && openedModule) {
+      const src = userModuleAssetUrl(openedModule);
+      refs.modsWorkspace.classList.add('module-open');
+      content.classList.add('hidden');
+      refs.modsModuleViewer?.classList.remove('hidden');
+      if (refs.modsModuleTitle) refs.modsModuleTitle.textContent = String(openedModule.name || openedModule.id || 'Модуль');
+      if (refs.modsModuleFrame && src && refs.modsModuleFrame.dataset.moduleId !== String(openedModule.id)) {
+        refs.modsModuleFrame.dataset.moduleId = String(openedModule.id);
+        refs.modsModuleFrame.src = src;
+      }
+      return;
+    }
+
+    refs.modsWorkspace.classList.remove('module-open');
+    content.classList.remove('hidden');
+    refs.modsModuleViewer?.classList.add('hidden');
     content.innerHTML = '';
 
-    // "Мои" пока остается пустым. Карточка программы находится только в первом разделе "Скрипты".
-    if (state.modsSection !== 'scripts') return;
+    if (state.modsSection === 'mine') {
+      if (!userModules.length) {
+        const empty = document.createElement('div');
+        empty.className = 'mods-user-empty';
+        const title = document.createElement('strong');
+        title.textContent = 'Пользовательских модулей пока нет';
+        const textNode = document.createElement('span');
+        textNode.textContent = 'Добавьте модуль в ArzMarket/mods/<id> с корректным manifest.json.';
+        empty.append(title, textNode);
+        content.append(empty);
+        return;
+      }
 
-    const data = state.data && typeof state.data === 'object' ? state.data : {};
+      const grid = document.createElement('div');
+      grid.className = 'mods-user-grid';
+      const statusText = {loaded:'Работает',disabled:'Выключен',error:'Ошибка',discovered:'Найден',initializing:'Запуск',shutdown:'Остановлен'};
+
+      for (const moduleInfo of userModules) {
+        if (!moduleInfo || typeof moduleInfo !== 'object') continue;
+        const id = String(moduleInfo.id || '');
+        if (!id) continue;
+        const card = document.createElement('article');
+        card.className = 'mods-user-card';
+
+        const head = document.createElement('div');
+        head.className = 'mods-user-card-head';
+        const copy = document.createElement('div');
+        copy.className = 'mods-user-card-copy';
+        const title = document.createElement('h3');
+        title.textContent = String(moduleInfo.name || id);
+        const meta = document.createElement('div');
+        meta.className = 'mods-user-card-meta';
+        const metaParts = [];
+        if (moduleInfo.version) metaParts.push(`v${moduleInfo.version}`);
+        if (moduleInfo.author) metaParts.push(String(moduleInfo.author));
+        meta.textContent = metaParts.join(' • ') || id;
+        copy.append(title, meta);
+        const badge = document.createElement('span');
+        const status = String(moduleInfo.status || 'unknown');
+        badge.className = `mods-user-status state-${status.replace(/[^a-z0-9_-]/gi,'')}`;
+        badge.textContent = statusText[status] || status;
+        head.append(copy, badge);
+
+        const description = document.createElement('p');
+        description.className = 'mods-user-description';
+        description.textContent = String(moduleInfo.description || 'Без описания.');
+        card.append(head, description);
+
+        if (moduleInfo.last_error) {
+          const error = document.createElement('div');
+          error.className = 'mods-user-error';
+          error.textContent = String(moduleInfo.last_error);
+          card.append(error);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'mods-user-actions';
+
+        const openButton = document.createElement('button');
+        openButton.type = 'button';
+        openButton.className = 'mods-user-button primary';
+        openButton.textContent = 'Открыть';
+        openButton.disabled = moduleInfo.enabled !== true || moduleInfo.has_ui !== true || status !== 'loaded';
+        openButton.addEventListener('click', () => {
+          if (openButton.disabled) return;
+          state.openedModuleId = id;
+          renderMods();
+        });
+
+        const toggleButton = document.createElement('button');
+        toggleButton.type = 'button';
+        toggleButton.className = `mods-user-button toggle ${moduleInfo.enabled === true ? 'enabled' : ''}`;
+        toggleButton.textContent = moduleInfo.enabled === true ? 'Выключить' : 'Включить';
+        toggleButton.disabled = moduleInfo.toggle_supported === false;
+        toggleButton.setAttribute('aria-pressed', moduleInfo.enabled === true ? 'true' : 'false');
+        toggleButton.addEventListener('click', async () => {
+          toggleButton.disabled = true;
+          try {
+            await action('user_mod.set_enabled', {page:'mods', id, enabled:moduleInfo.enabled !== true});
+            if (state.openedModuleId === id && moduleInfo.enabled === true) state.openedModuleId = null;
+            await refresh(true, 'mods');
+          } catch (err) {
+            showToast(`Модуль: ${err.message}`, 'error');
+            await refresh(true, 'mods');
+          } finally {
+            toggleButton.disabled = false;
+          }
+        });
+
+        const reloadButton = document.createElement('button');
+        reloadButton.type = 'button';
+        reloadButton.className = 'mods-user-button';
+        reloadButton.textContent = 'Перезагрузить';
+        reloadButton.disabled = false;
+        reloadButton.addEventListener('click', async () => {
+          reloadButton.disabled = true;
+          try {
+            await action('user_mod.reload', {page:'mods', id});
+            if (state.openedModuleId === id) closeUserModuleViewer();
+            await refresh(true, 'mods');
+          } catch (err) {
+            showToast(`Перезагрузка: ${err.message}`, 'error');
+            await refresh(true, 'mods');
+          } finally {
+            reloadButton.disabled = false;
+          }
+        });
+
+        actions.append(openButton, toggleButton, reloadButton);
+        card.append(actions);
+        grid.append(card);
+      }
+
+      if (!grid.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'mods-user-empty';
+        empty.textContent = 'Нет доступных пользовательских модулей.';
+        content.append(empty);
+      } else {
+        content.append(grid);
+      }
+      return;
+    }
+
     const downloadState = String(data.launcher_download_state || 'idle');
-    const downloadMessage = String(data.launcher_download_message || 'Готово к скачиванию');
-    const downloadTarget = String(data.launcher_download_target || '');
     const busy = downloadState === 'choosing' || downloadState === 'downloading';
 
     const card = document.createElement('article');
@@ -4173,7 +4399,6 @@
 
     const title = document.createElement('h3');
     title.textContent = 'Обход бана маркета';
-
     body.append(title);
 
     const actions = document.createElement('div');
@@ -4510,9 +4735,18 @@
     if (!button || state.page !== 'mods') return;
     const section = String(button.dataset.modsSection || 'scripts');
     if (!['scripts','mine'].includes(section)) return;
+    if (state.modsSection !== section || state.openedModuleId) {
+      state.openedModuleId = null;
+      if (refs.modsModuleFrame) {
+        refs.modsModuleFrame.src = 'about:blank';
+        delete refs.modsModuleFrame.dataset.moduleId;
+      }
+    }
     state.modsSection = section;
     renderMods();
   });
+
+  refs.modsModuleBackButton?.addEventListener('click', closeUserModuleViewer);
 
   let listSearchTimer = 0;
   const scheduleListSearch = callback => {
@@ -4979,7 +5213,8 @@
   if (previewMode) applyPreviewScale();
   if (state.page === 'marketplace') {
     state.data = emptyPageState('marketplace');
-    try { render(); refs.runtimeText.textContent = 'Загрузка маркетплейса...'; } catch (err) { console.error('[ArzMarket HTML] initial marketplace shell failed:', err); }
+    marketplaceDiag('initial_loading', {status:'loading'});
+    try { render(); refs.runtimeText.textContent = 'Загрузка маркетплейса...'; } catch (err) { marketplaceDiag('initial_render_error', {error:String(err?.message || err)}); console.error('[ArzMarket HTML] initial marketplace shell failed:', err); }
   } else if (state.page === 'mods') {
     state.data = emptyPageState('mods');
     try { render(); refs.runtimeText.textContent = 'Загрузка модификаций...'; } catch (err) { console.error('[ArzMarket HTML] initial mods shell failed:', err); }

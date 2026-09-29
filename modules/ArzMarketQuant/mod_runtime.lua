@@ -1,4 +1,4 @@
-local M = { api_version = 1, module_version = 1 }
+local M = { api_version = 1, module_version = 2 }
 
 function M.init(ctx)
 local context = type(ctx) == "table" and ctx or {}
@@ -101,6 +101,7 @@ local cache = {
 	triangles = {},
 	batches = {},
 	nextScan = 0,
+	lastScanAt = 0,
 	nextGridBuild = 0,
 	zonesRevision = 0,
 	builtRevision = -1,
@@ -142,6 +143,7 @@ local function clearCache()
 	cache.triangles = {}
 	cache.batches = {}
 	cache.nextScan = 0
+	cache.lastScanAt = 0
 	cache.nextGridBuild = 0
 	cache.zonesRevision = 0
 	cache.builtRevision = -1
@@ -307,6 +309,7 @@ local function scanZones(now)
 	end
 
 	local scanDelay = now < (cache.fastRescanUntil or 0) and 0.35 or LAVKA_HELPER_SCAN_INTERVAL
+	cache.lastScanAt = now
 	cache.nextScan = now + scanDelay
 end
 
@@ -1111,6 +1114,61 @@ local function invalidateImpl(fullReset)
 	cache.lastRenderRadius = nil
 	cache.lastCellSize = nil
 	cache.nextGridBuild = 0
+end
+
+M.getLavkaPlacementSnapshot = function(px, py, pz, radius)
+	px, py, pz = tonumber(px), tonumber(py), tonumber(pz)
+	radius = math.max(0, tonumber(radius) or 80.0)
+	if px == nil or py == nil or pz == nil then
+		return { revision = cache.zonesRevision, zones = {}, scanned_at = cache.lastScanAt or 0 }
+	end
+
+	local sampReady = true
+	if type(isSampAvailable) == "function" then
+		local okReady, value = pcall(isSampAvailable)
+		sampReady = okReady and value == true
+	end
+	local now = getGameTimer() * 0.001
+	if sampReady and (now >= (cache.nextScan or 0) or #cache.zones == 0) then
+		pcall(scanZones, now)
+	end
+
+	local zones = {}
+	for i = 1, #cache.zones do
+		local zone = cache.zones[i]
+		local dx = (tonumber(zone.x) or 0) - px
+		local dy = (tonumber(zone.y) or 0) - py
+		local dz = math.abs((tonumber(zone.z) or 0) - pz)
+		local maxDistance = radius + (tonumber(zone.radius) or 0)
+		if dz <= LAVKA_HELPER_Z_THRESHOLD and dx * dx + dy * dy <= maxDistance * maxDistance then
+			zones[#zones + 1] = {
+				type = tostring(zone.type or ""),
+				x = tonumber(zone.x) or 0,
+				y = tonumber(zone.y) or 0,
+				z = tonumber(zone.z) or 0,
+				radius = tonumber(zone.radius) or 0
+			}
+		end
+	end
+	return {
+		revision = tonumber(cache.zonesRevision) or 0,
+		zones = zones,
+		scanned_at = tonumber(cache.lastScanAt) or 0
+	}
+end
+
+M.resolveLavkaGround = function(x, y, referenceZ)
+	x, y, referenceZ = tonumber(x), tonumber(y), tonumber(referenceZ)
+	if x == nil or y == nil or referenceZ == nil then return nil, false end
+	local ok, z, fromWorld = pcall(resolveGround, x, y, referenceZ, math.floor(referenceZ / 5), 1.0)
+	if not ok then return nil, false end
+	return z, fromWorld == true
+end
+
+M.invalidateLavkaPlacementCache = function()
+	cache.nextScan = 0
+	invalidateImpl(false)
+	return true
 end
 
 lavkaHelperApplyVisualSettings = function()

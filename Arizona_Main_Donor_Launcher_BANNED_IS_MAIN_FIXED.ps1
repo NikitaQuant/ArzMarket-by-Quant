@@ -28,8 +28,8 @@ $OnboardingCompletedPath = Join-Path $SettingsDir 'onboarding_v1_completed.flag'
 $LogsDir = Join-Path $ScriptDir 'logs'
 [IO.Directory]::CreateDirectory($LogsDir) | Out-Null
 $DeveloperLogPath = Join-Path $LogsDir ('launcher_{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))
-$LauncherBuild = 'prepare-launch-wpf-v2-github-layout-fix2-self-update-v1-bootstrap-chain-v1-tutorial-warnings-v1-auth-backup-v2'
-$LauncherSelfUpdateVersion = '1.0.5'
+$LauncherBuild = 'prepare-launch-wpf-v2-github-layout-fix2-self-update-v1-bootstrap-chain-v1-tutorial-warnings-v1-auth-backup-v2-same-version-preserve-v1'
+$LauncherSelfUpdateVersion = '1.0.6'
 $LauncherSelfUpdateUrl = 'https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/Arizona_Main_Donor_Launcher_BANNED_IS_MAIN_FIXED.ps1'
 $LauncherSelfUpdateTimeoutSeconds = 8
 
@@ -2265,7 +2265,7 @@ function Get-RemotePayloadManifest($Config) {
     return @($files | Sort-Object -Property LocalRelativePath)
 }
 
-function Test-LocalPayload($Manifest, [string]$GameRoot) {
+function Test-LocalPayload($Manifest, [string]$GameRoot, [switch]$MissingOnly) {
     $changed = @()
     foreach ($entry in @($Manifest)) {
         if ($null -eq $entry) { continue }
@@ -2274,6 +2274,14 @@ function Test-LocalPayload($Manifest, [string]$GameRoot) {
             $changed += $entry
             continue
         }
+
+        # When the installed ArzMarket declares exactly the same version as GitHub,
+        # keep local development files intact. This prevents the launcher from
+        # replacing same-version HTML/Lua changes only because their Git blob SHA
+        # differs. Missing files are still restored from GitHub. A genuinely newer
+        # GitHub version disables this mode and performs the normal full hash sync.
+        if ($MissingOnly) { continue }
+
         $local = Get-Item -LiteralPath $target -ErrorAction Stop
         $expectedSize = [Convert]::ToInt64($entry.Size, [Globalization.CultureInfo]::InvariantCulture)
         if ([long]$local.Length -ne $expectedSize) {
@@ -2352,10 +2360,10 @@ function Download-MissingOrChangedFiles($Entries, $Config, [string]$StageRoot) {
     Download-ManifestFiles $Entries $Config $StageRoot
 }
 
-function Update-ArzMarketPayload($Manifest, [string[]]$GameRoots, $Config, [string]$StageRoot) {
+function Update-ArzMarketPayload($Manifest, [string[]]$GameRoots, $Config, [string]$StageRoot, [switch]$PreserveSameVersionFiles) {
     $bySha = @{}
     foreach ($root in @($GameRoots)) {
-        $missing = @(Test-LocalPayload $Manifest ([string]$root))
+        $missing = @(Test-LocalPayload $Manifest ([string]$root) -MissingOnly:$PreserveSameVersionFiles)
         foreach ($entry in $missing) {
             if ($null -ne $entry) { $bySha[[string]$entry.Sha] = $entry }
         }
@@ -2368,7 +2376,7 @@ function Update-ArzMarketPayload($Manifest, [string[]]$GameRoots, $Config, [stri
         Install-StagedFilesTransactional $changes $GameRoots $StageRoot
     }
     foreach ($root in @($GameRoots)) {
-        $remaining = @(Test-LocalPayload $Manifest ([string]$root))
+        $remaining = @(Test-LocalPayload $Manifest ([string]$root) -MissingOnly:$PreserveSameVersionFiles)
         if ($remaining.Count -ne 0) { throw "Проверка ArzMarket после установки не пройдена: $root" }
     }
     return [int]$changes.Count
@@ -2484,6 +2492,19 @@ function Get-CustomArzMarketVersion($Config) {
     }
 }
 
+function Get-InstalledArzMarketVersion([string]$GameRoot) {
+    try {
+        $luaPath = Join-Path $GameRoot 'moonloader\by_Quant_ArzMarket[3_57].lua'
+        if (-not (Test-Path -LiteralPath $luaPath -PathType Leaf)) { return $null }
+        $text = (Get-TextDocument $luaPath).Text
+        if ($text -match 'ARZ_UPDATE_VERSION\s*=\s*["'']([^"'']+)["'']') {
+            $version = $matches[1].Trim()
+            if ($version -match '^\d+(?:[._-]\d+)*$') { return $version }
+        }
+    } catch {}
+    return $null
+}
+
 function Compare-ArzMarketVersions([string]$Left, [string]$Right) {
     $leftParts = @($Left -split '[^0-9]+' | Where-Object { $_ -ne '' } | ForEach-Object { [long]$_ })
     $rightParts = @($Right -split '[^0-9]+' | Where-Object { $_ -ne '' } | ForEach-Object { [long]$_ })
@@ -2517,7 +2538,20 @@ function Invoke-PrepareLaunch($Config) {
     try {
         Write-PreparationProgress 'Проверка файлов ArzMarket...'
         $manifest = Get-RemotePayloadManifest $Config
-        $payloadCount = Update-ArzMarketPayload $manifest $roots $Config $stageRoot
+
+        $preserveSameVersionFiles = $true
+        foreach ($root in $roots) {
+            $installedVersion = Get-InstalledArzMarketVersion ([string]$root)
+            if ([string]::IsNullOrWhiteSpace($installedVersion) -or (Compare-ArzMarketVersions $installedVersion $custom) -ne 0) {
+                $preserveSameVersionFiles = $false
+                break
+            }
+        }
+        if ($preserveSameVersionFiles) {
+            Write-DevLog "Payload sync: installed ArzMarket version equals GitHub ($custom); preserving existing same-version files and restoring only missing files."
+        }
+
+        $payloadCount = Update-ArzMarketPayload $manifest $roots $Config $stageRoot -PreserveSameVersionFiles:$preserveSameVersionFiles
 
         Write-PreparationProgress 'Проверка Anti-AFK...'
         $antiInfo = Get-RemoteAntiAfkInfo $Config

@@ -1,6 +1,6 @@
 local M = {
     api_version = 1,
-    module_version = 80,
+    module_version = 81,
     id = "arz_html_ui",
     title = "HTML",
     section = "Интерфейс",
@@ -20,11 +20,12 @@ local previewOpen, previewSignature = false, ""
 local htmlTemporaryMode = false
 local cefCursorOwned = false
 local cursorWasActiveBeforeHtml = false
-local clients, token, htmlRoot, currentPage, currentSettingsSection = {}, "", "", "buy", nil
+local clients, token, htmlRoot, currentPage, currentSettingsSection, currentUserModId = {}, "", "", "buy", nil, nil
 local requestQueue = {}
 local requestWorkerState = {
     running=false,generation=0,thread=nil,heartbeatAt=0,jobStartedAt=0,jobPath="",
     recoveries=0,lastRecoveryAt=0,lastError=nil,lastWatchdogAt=0,
+    restartPending=false,retireReason=nil,
     queueLimit=32,jobTimeoutMs=32000,idleTimeoutMs=15000
 }
 local serverGeneration = 0
@@ -60,11 +61,40 @@ local lastServiceAt = 0
 
 local function log(v) print("[ArzMarket HTML] " .. tostring(v)) end
 
--- The HTML bridge runs inside a MoonLoader lua_thread. In this runtime an
--- xpcall frame around a request that later yields can leave the scheduler
--- trying to resume a coroutine that is no longer suspended. Keep traceback
--- formatting for ordinary errors, but use pcall on the yield-capable request
--- path. xpcall is only used below for init-only code that never yields.
+
+local marketplaceDiagSeq = 0
+local function marketplaceDiagWrite(layer,eventName,fields)
+    pcall(function()
+        local path=getWorkingDirectory().."/ArzMarket/UsersInfo/logs/marketplace_diag.txt"
+        local file=io.open(path,"a")
+        if not file then return end
+        local function clean(value)
+            local text=tostring(value==nil and "" or value):gsub("[\r\n\t]"," ")
+            if #text>500 then text=text:sub(1,500) end
+            return text
+        end
+        local parts={"ts="..os.date("%Y-%m-%dT%H:%M:%S"),"session="..clean(ARZ_MARKETPLACE_DIAG_SESSION or ""),"layer="..clean(layer),"event="..clean(eventName),"build="..clean(ARZ_LOCAL_BUILD_ID or ""),"bridge_ver="..tostring(M.module_version)}
+        if type(fields)=="table" then
+            local keys={}
+            for key in pairs(fields) do keys[#keys+1]=tostring(key) end
+            table.sort(keys)
+            for _,key in ipairs(keys) do parts[#parts+1]=clean(key).."="..clean(fields[key]) end
+        end
+        file:write(table.concat(parts," ").."\n")
+        file:flush(); file:close()
+    end)
+end
+
+local function normalizeUserModId(value)
+    local id=tostring(value or ""):lower()
+    if id=="" or #id>96 or id:find("..",1,true) or not id:match("^[a-z0-9_.%-]+$") then return nil end
+    return id
+end
+
+-- The HTML bridge runs inside a MoonLoader lua_thread. Request handlers kept
+-- behind pcall must stay non-yielding. Yield-capable network callbacks are
+-- executed by their own MoonLoader threads in the main script, matching the
+-- original ArzMarket behavior. xpcall is only used below for init-only code.
 local function bridgeTraceback(err)
     local message=tostring(err or "unknown_error")
     if debug and type(debug.traceback)=="function" then return debug.traceback(message,2) end
@@ -103,13 +133,19 @@ end
 local bridgePerf = {
     startedAt=nowMs(), luaToHtmlRequests=0, luaToHtmlResponses=0,
     htmlToLuaMessages=0, jsonEncode=0, jsonDecode=0,
-    stateBuilds=0, totalStateBuildMs=0, maxStateBuildMs=0
+    stateBuilds=0, totalStateBuildMs=0, maxStateBuildMs=0,
+    jsonEncodeFailures=0,lastJsonEncodeError=""
 }
 local function encode(v)
     bridgePerf.jsonEncode=bridgePerf.jsonEncode+1
     if type(globalEncodeJson)=="function" then
         local ok,out=pcall(globalEncodeJson,v)
         if ok and type(out)=="string" then return out end
+        bridgePerf.jsonEncodeFailures=bridgePerf.jsonEncodeFailures+1
+        bridgePerf.lastJsonEncodeError=ok and ("invalid_type:"..tostring(type(out))) or tostring(out)
+    else
+        bridgePerf.jsonEncodeFailures=bridgePerf.jsonEncodeFailures+1
+        bridgePerf.lastJsonEncodeError="encoder_unavailable"
     end
     return "{}"
 end
@@ -1188,7 +1224,9 @@ local function marketplaceState()
     local raw={}
     if ctx and type(ctx.getMarketplaceSnapshot)=="function" then
         local ok,value=callCore(ctx.getMarketplaceSnapshot)
-        if ok and type(value)=="table" then raw=value end
+        if ok and type(value)=="table" then raw=value
+        elseif not ok then marketplaceDiagWrite("BR","snapshot_core_error",{error=tostring(value)})
+        else marketplaceDiagWrite("BR","snapshot_core_invalid",{value_type=type(value)}) end
     end
     local servers={}
     if type(raw.servers)=="table" then
@@ -1229,7 +1267,11 @@ local function marketplaceState()
         lastUpdated=math.floor(saneNumber(raw.lastUpdated,0) or 0),publishing=raw.publishing==true,publishedShopId=saneNumber(raw.publishedShopId,nil),
         unbanAvailable=raw.unbanAvailable==true
     }
+    local encodeFailuresBefore=bridgePerf.jsonEncodeFailures
     local fp=encode(data)
+    if bridgePerf.jsonEncodeFailures>encodeFailuresBefore then
+        marketplaceDiagWrite("BR","encode_failed",{stage="fingerprint",status=tostring(data.status),shops=tostring(#shops),error=tostring(bridgePerf.lastJsonEncodeError)})
+    end
     if fp~=fingerprints.marketplace then fingerprints.marketplace=fp; revision.marketplace=revision.marketplace+1 end
     return {revision=revision.marketplace,page="marketplace",common={uiMode="html",htmlWindow=htmlWindowState,menuScalePercent=currentMenuScalePercent()},data=data}
 end
@@ -1911,10 +1953,13 @@ local function previewFrameBootstrap(url,bounds,options)
 end
 
 local function buildUiUrl(preview)
-    local url="http://127.0.0.1:"..tostring(port).."/ui?"..(preview and "preview=1&" or "").."page="..tostring(currentPage or "buy").."&ui_rev=268&session="..tostring(token or "")
+    local url="http://127.0.0.1:"..tostring(port).."/ui?"..(preview and "preview=1&" or "").."page="..tostring(currentPage or "buy").."&ui_rev=269&session="..tostring(token or "")
     if (not preview) and htmlTemporaryMode then url=url.."&temporary=1" end
     if currentPage=="settings" and type(currentSettingsSection)=="string" and currentSettingsSection~="" then
         url=url.."&section="..tostring(currentSettingsSection)
+    end
+    if (not preview) and currentPage=="mods" and type(currentUserModId)=="string" and currentUserModId~="" then
+        url=url.."&user_mod="..tostring(currentUserModId)
     end
     return url
 end
@@ -2012,7 +2057,7 @@ local function readFile(path,binary)
     if not f then return nil end
     local data=f:read("*a"); f:close(); return data
 end
-local mime={html="text/html; charset=utf-8",css="text/css; charset=utf-8",js="application/javascript; charset=utf-8",svg="image/svg+xml",webp="image/webp",png="image/png",jpg="image/jpeg",jpeg="image/jpeg"}
+local mime={html="text/html; charset=utf-8",css="text/css; charset=utf-8",js="application/javascript; charset=utf-8",json="application/json; charset=utf-8",txt="text/plain; charset=utf-8",svg="image/svg+xml",webp="image/webp",png="image/png",jpg="image/jpeg",jpeg="image/jpeg",gif="image/gif",ico="image/x-icon"}
 local reasons={[200]="OK",[204]="No Content",[400]="Bad Request",[403]="Forbidden",[404]="Not Found",[405]="Method Not Allowed",[409]="Conflict",[413]="Payload Too Large",[500]="Internal Server Error"}
 local function response(status,body,contentType,cacheControl)
     body=body or ""
@@ -2304,6 +2349,21 @@ local function doAction(req)
         local ok,result,coreErr=callCore(ctx.findMarketplaceStall,data.uid,data.serverId)
         local success=ok and result~=false
         return jsonResponse(success and 200 or 400,{ok=success,error=success and nil or (ok and coreErr or tostring(result))})
+    elseif action=="marketplace.auth.submit" then
+        if not ctx or type(ctx.submitMarketplaceAuthKey)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
+        local ok,result,coreErr=callCore(ctx.submitMarketplaceAuthKey,tostring(data.key or ""))
+        local success=ok and result~=false
+        local authState=nil
+        if type(ctx.getMarketplaceAuthStatus)=="function" then
+            local statusOk,statusValue=callCore(ctx.getMarketplaceAuthStatus)
+            if statusOk and type(statusValue)=="table" then authState=statusValue end
+        end
+        return jsonResponse(success and 200 or 400,{ok=success,auth=authState,error=success and nil or (ok and coreErr or tostring(result))})
+    elseif action=="marketplace.auth.status" then
+        if not ctx or type(ctx.getMarketplaceAuthStatus)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
+        local ok,result=callCore(ctx.getMarketplaceAuthStatus)
+        if not ok or type(result)~="table" then return jsonResponse(500,{ok=false,error=tostring(result or "auth_status_failed")}) end
+        return jsonResponse(200,{ok=true,auth=result})
     elseif action=="marketplace.auth.open" then
         if not ctx or type(ctx.openMarketplaceAuthProvider)~="function" then return jsonResponse(400,{ok=false,error="marketplace_unavailable"}) end
         local ok,result,coreErr=callCore(ctx.openMarketplaceAuthProvider,tostring(data.provider or "telegram"))
@@ -2316,6 +2376,32 @@ local function doAction(req)
         htmlWindowState={}
         if htmlWindowStatePath then pcall(os.remove,htmlWindowStatePath) end
         return jsonResponse(200,{ok=true,window=htmlWindowState})
+    elseif action=="user_mod.state" then
+        if not ctx or type(ctx.userModState)~="function" then return jsonResponse(400,{ok=false,error="runtime_unavailable"}) end
+        local ok,result,stateValue,moduleInfo=callCore(ctx.userModState,tostring(data.id or ""))
+        local success=ok and result~=false
+        fingerprints.mods=""; fingerprints.settings=""; stateResponseCache.mods=nil; stateResponseCache.settings=nil
+        return jsonResponse(success and 200 or 400,{ok=success,state=success and stateValue or nil,module=success and moduleInfo or nil,error=success and nil or (ok and tostring(stateValue or "module_state_failed") or tostring(result))})
+    elseif action=="user_mod.action" then
+        if not ctx or type(ctx.userModAction)~="function" then return jsonResponse(400,{ok=false,error="runtime_unavailable"}) end
+        local ok,result,value,extra=callCore(ctx.userModAction,tostring(data.id or ""),tostring(data.action or ""),type(data.payload)=="table" and data.payload or {})
+        local success=ok and result~=false
+        local output=nil
+        if success then output=result==true and value or result end
+        fingerprints.mods=""; fingerprints.settings=""; stateResponseCache.mods=nil; stateResponseCache.settings=nil
+        return jsonResponse(success and 200 or 400,{ok=success,result=output,extra=success and extra or nil,error=success and nil or (ok and tostring(value or "module_action_failed") or tostring(result))})
+    elseif action=="user_mod.set_enabled" then
+        if not ctx or type(ctx.userModSetEnabled)~="function" then return jsonResponse(400,{ok=false,error="runtime_unavailable"}) end
+        local ok,result,moduleInfo=callCore(ctx.userModSetEnabled,tostring(data.id or ""),data.enabled==true)
+        local success=ok and result~=false
+        fingerprints.mods=""; fingerprints.settings=""; stateResponseCache.mods=nil; stateResponseCache.settings=nil
+        return jsonResponse(success and 200 or 400,{ok=success,module=success and moduleInfo or nil,error=success and nil or (ok and tostring(moduleInfo or "module_toggle_failed") or tostring(result))})
+    elseif action=="user_mod.reload" then
+        if not ctx or type(ctx.userModReload)~="function" then return jsonResponse(400,{ok=false,error="runtime_unavailable"}) end
+        local ok,result,moduleInfo=callCore(ctx.userModReload,tostring(data.id or ""))
+        local success=ok and result~=false
+        fingerprints.mods=""; fingerprints.settings=""; stateResponseCache.mods=nil; stateResponseCache.settings=nil
+        return jsonResponse(success and 200 or 400,{ok=success,module=success and moduleInfo or nil,error=success and nil or (ok and tostring(moduleInfo or "module_reload_failed") or tostring(result))})
     elseif action=="mods.set" then
         if not ctx or type(ctx.setModsValue)~="function" then return jsonResponse(400,{ok=false,error="mods_unavailable"}) end
         local ok,result,coreErr=callCore(ctx.setModsValue,tostring(data.key or ""),data.value)
@@ -2632,14 +2718,58 @@ local function handle(req)
         local body=readFile(htmlRoot.."\\"..rel:gsub("/","\\"),true); if not body then return response(404,"not_found") end
         return response(200,body,mime[rel:match("%.([%w]+)$") or ""] or "application/octet-stream","no-store")
     end
+    local userModId,userModRelative=req.path:match("^/user%-mod/([^/]+)/(.+)$")
+    if userModId then
+        if req.method~="GET" then return response(405,"method_not_allowed") end
+        if not ctx or type(ctx.userModResolveAsset)~="function" then return response(404,"module_runtime_unavailable") end
+        local ok,resolved,fullPath,safeRel=callCore(ctx.userModResolveAsset,userModId,userModRelative)
+        if not ok then return response(500,"module_asset_error") end
+        if resolved~=true or type(fullPath)~="string" or type(safeRel)~="string" then
+            local assetError=tostring(fullPath or "not_found")
+            local status=(assetError=="invalid_asset_path" or assetError=="asset_outside_ui_root") and 403 or 404
+            return response(status,assetError)
+        end
+        local body=readFile(fullPath,true)
+        if not body then return response(404,"not_found") end
+        local extension=(safeRel:match("%.([%w]+)$") or ""):lower()
+        if extension=="html" then body=body:gsub("__ARZMARKET_TOKEN__",token) end
+        return response(200,body,mime[extension] or "application/octet-stream","no-store")
+    end
+    if req.path=="/api/marketplace-diag" then
+        if req.method~="POST" then return response(405,"method_not_allowed") end
+        if not validToken(req) then return response(403,"forbidden") end
+        local payload=decode(req.body or "")
+        if type(payload)=="table" and type(payload.events)=="table" then
+            local count=math.min(#payload.events,50)
+            for i=1,count do
+                local row=payload.events[i]
+                if type(row)=="table" then
+                    marketplaceDiagWrite("JS",row.event or "event",{
+                        seq=row.seq,status=row.status,http=row.http,bytes=row.bytes,duration_ms=row.duration_ms,
+                        error=row.error,phase=row.phase,revision=row.revision,js_ms=row.js_ms
+                    })
+                end
+            end
+        end
+        return response(200,"ok","text/plain; charset=utf-8","no-store")
+    end
     if req.path=="/api/state" then
         if req.method~="GET" then return response(405,"method_not_allowed") end
         if not validToken(req) then return response(403,"forbidden") end
         bridgePerf.luaToHtmlRequests=bridgePerf.luaToHtmlRequests+1
         local requested=req.query.page=="settings" and "settings" or req.query.page=="logs" and "logs" or req.query.page=="marketplace" and "marketplace" or req.query.page=="mods" and "mods" or req.query.page=="storage" and "storage" or req.query.page=="sell" and "sell" or "buy"
         local marketplaceCacheKey=nil
+        local marketplaceDiagId=nil
+        local marketplaceDiagStartedAt=nil
         if requested=="marketplace" then
-            if ctx and type(ctx.pumpMarketplaceHtml)=="function" then callCore(ctx.pumpMarketplaceHtml) end
+            marketplaceDiagSeq=marketplaceDiagSeq+1
+            marketplaceDiagId=marketplaceDiagSeq
+            marketplaceDiagStartedAt=nowMs()
+            marketplaceDiagWrite("BR","state_start",{seq=marketplaceDiagId,since=tostring(req.query.since or ""),queue=tostring(#requestQueue),worker_job=tostring(requestWorkerState.jobPath or "")})
+            if ctx and type(ctx.pumpMarketplaceHtml)=="function" then
+                local pumpOk,pumpValue=callCore(ctx.pumpMarketplaceHtml)
+                if not pumpOk then marketplaceDiagWrite("BR","pump_error",{seq=marketplaceDiagId,error=tostring(pumpValue)}) end
+            end
             if ctx and type(ctx.getMarketplaceRevisionKey)=="function" then
                 local keyOk,keyValue=callCore(ctx.getMarketplaceRevisionKey)
                 if keyOk then marketplaceCacheKey=tostring(keyValue or "") end
@@ -2662,7 +2792,11 @@ local function handle(req)
         end
         local cachedState=stateResponseCache[requested]
         if requested=="marketplace" and cachedState and marketplaceCacheKey~=nil and cachedState.sourceKey==marketplaceCacheKey then
-            if tonumber(req.query.since)==tonumber(cachedState.revision) then return response(204,"","application/json; charset=utf-8") end
+            if tonumber(req.query.since)==tonumber(cachedState.revision) then
+                marketplaceDiagWrite("BR","state_end",{seq=marketplaceDiagId,http="204",cache="1",revision=tostring(cachedState.revision),bytes="0",duration_ms=tostring(nowMs()-(marketplaceDiagStartedAt or nowMs()))})
+                return response(204,"","application/json; charset=utf-8")
+            end
+            marketplaceDiagWrite("BR","state_end",{seq=marketplaceDiagId,http="200",cache="1",revision=tostring(cachedState.revision),bytes=tostring(#(cachedState.body or "")),duration_ms=tostring(nowMs()-(marketplaceDiagStartedAt or nowMs()))})
             return response(200,cachedState.body,"application/json; charset=utf-8","no-store")
         end
         if not focusIsStable() and requested~="marketplace" then
@@ -2685,10 +2819,23 @@ local function handle(req)
             local okAssistant,assistant=callCore(ctx.getAssistantSnapshot,requested,"html")
             if okAssistant and type(assistant)=="table" then value.assistant=assistant end
         end
+        local encodeFailuresBefore=bridgePerf.jsonEncodeFailures
         local body=encode(value)
+        local encodeFailed=bridgePerf.jsonEncodeFailures>encodeFailuresBefore
         stateResponseCache[requested]={revision=tonumber(value.revision) or 0,body=body,sourceKey=marketplaceCacheKey}
-        if tonumber(req.query.since)==tonumber(value.revision) then return response(204,"","application/json; charset=utf-8") end
+        if requested=="marketplace" then
+            marketplaceDiagWrite("BR",encodeFailed and "encode_failed" or "snapshot_encoded",{
+                seq=marketplaceDiagId,stage="state",status=tostring(value.data and value.data.status or "missing"),
+                shops=tostring(type(value.data) == "table" and type(value.data.shops) == "table" and #value.data.shops or 0),
+                bytes=tostring(#body),revision=tostring(value.revision or 0),error=encodeFailed and tostring(bridgePerf.lastJsonEncodeError) or ""
+            })
+        end
+        if tonumber(req.query.since)==tonumber(value.revision) then
+            if requested=="marketplace" then marketplaceDiagWrite("BR","state_end",{seq=marketplaceDiagId,http="204",cache="0",revision=tostring(value.revision or 0),bytes="0",duration_ms=tostring(nowMs()-(marketplaceDiagStartedAt or nowMs()))}) end
+            return response(204,"","application/json; charset=utf-8")
+        end
         bridgePerf.luaToHtmlResponses=bridgePerf.luaToHtmlResponses+1
+        if requested=="marketplace" then marketplaceDiagWrite("BR","state_end",{seq=marketplaceDiagId,http="200",cache="0",revision=tostring(value.revision or 0),bytes=tostring(#body),duration_ms=tostring(nowMs()-(marketplaceDiagStartedAt or nowMs()))}) end
         return response(200,body,"application/json; charset=utf-8","no-store")
     end
     if req.path=="/api/action" then return doAction(req) end
@@ -2764,6 +2911,9 @@ local function requestWorker(generation)
                 if not okHandle then
                     local detail=bridgeTraceback(out)
                     log("request handler failed: "..tostring(detail))
+                    if job.req and job.req.path=="/api/state" and tostring(job.req.query and job.req.query.page or "")=="marketplace" then
+                        marketplaceDiagWrite("BR","handler_exception",{error=tostring(detail),queue=tostring(#requestQueue)})
+                    end
                     out=response(500,"internal_error")
                 elseif type(out)~="string" then
                     out=response(500,"invalid_handler_response")
@@ -2791,6 +2941,13 @@ end
 
 function __arzHtmlStartRequestWorker(generation)
     if not running or not requestWorkerState.running then return false,"worker_disabled" end
+    if requestWorkerState.thread then
+        local statusOk,status=pcall(function() return requestWorkerState.thread:status() end)
+        if not statusOk or (status~="dead" and status~="terminated") then
+            return false,"worker_already_running:"..tostring(statusOk and status or "unknown")
+        end
+        requestWorkerState.thread=nil
+    end
     requestWorkerState.generation=generation
     requestWorkerState.heartbeatAt=nowMs()
     requestWorkerState.jobStartedAt=0
@@ -2871,25 +3028,55 @@ end
 function __arzHtmlRecoverRequestWorker(reason)
     if not running or not requestWorkerState.running then return false,"worker_disabled" end
     local now=nowMs()
+    if requestWorkerState.restartPending then return false,"worker_retiring" end
     if now-requestWorkerState.lastRecoveryAt<1000 then return false,"recovery_cooldown" end
     requestWorkerState.lastRecoveryAt=now
     requestWorkerState.recoveries=requestWorkerState.recoveries+1
     requestWorkerState.lastError=tostring(reason or "worker_unhealthy")
-    log("request worker recovery #"..tostring(requestWorkerState.recoveries)..": "..requestWorkerState.lastError)
-    __arzHtmlRecoverServiceClients()
-    stateResponseCache={}
+    requestWorkerState.retireReason=requestWorkerState.lastError
+    requestWorkerState.restartPending=true
+    log("request worker retirement #"..tostring(requestWorkerState.recoveries)..": "..requestWorkerState.lastError)
+    marketplaceDiagWrite("BR","worker_retire",{recoveries=tostring(requestWorkerState.recoveries),reason=requestWorkerState.lastError,job=tostring(requestWorkerState.jobPath or ""),queue=tostring(#requestQueue)})
+
+    -- Never terminate a live MoonLoader LuaThread from another coroutine.
+    -- A forced terminate while the worker is inside Lua/C code can corrupt the
+    -- Lua 5.1 coroutine state and lead to C0000005 inside lua51.dll. Instead,
+    -- invalidate its generation and let it return naturally at the next yield.
     serverGeneration=serverGeneration+1
     requestWorkerState.generation=0
-    requestWorkerState.thread=nil
+    __arzHtmlRecoverServiceClients()
+    stateResponseCache={}
     requestWorkerState.jobStartedAt=0
     requestWorkerState.jobPath=""
     requestWorkerState.heartbeatAt=now
-    return __arzHtmlStartRequestWorker(serverGeneration)
+    return false,"worker_retiring"
 end
 
 function __arzHtmlEnsureRequestWorkerHealthy()
     if not running or not requestWorkerState.running then return true end
     local now=nowMs()
+
+    if requestWorkerState.restartPending then
+        local thread=requestWorkerState.thread
+        if thread then
+            local statusOk,status=pcall(function() return thread:status() end)
+            if not statusOk then
+                requestWorkerState.lastError="worker_status_failed:"..tostring(status)
+                return false,requestWorkerState.lastError
+            end
+            if status~="dead" and status~="terminated" then
+                return false,"worker_retiring:"..tostring(status)
+            end
+            requestWorkerState.thread=nil
+        end
+        requestWorkerState.restartPending=false
+        requestWorkerState.retireReason=nil
+        requestWorkerState.generation=0
+        local ok,err=__arzHtmlStartRequestWorker(serverGeneration)
+        if ok then marketplaceDiagWrite("BR","worker_restart",{recoveries=tostring(requestWorkerState.recoveries)}) end
+        return ok,err
+    end
+
     if requestWorkerState.generation~=serverGeneration then
         local ok,err=__arzHtmlRecoverRequestWorker("worker_missing")
         return ok,err
@@ -2899,10 +3086,10 @@ function __arzHtmlEnsureRequestWorkerHealthy()
         local ok,err=__arzHtmlRecoverRequestWorker("handler_timeout:"..path)
         return ok,err
     end
-    if requestWorkerState.jobStartedAt==0 and requestWorkerState.heartbeatAt>0 and now-requestWorkerState.heartbeatAt>requestWorkerState.idleTimeoutMs then
-        local ok,err=__arzHtmlRecoverRequestWorker("worker_heartbeat_timeout")
-        return ok,err
-    end
+
+    -- Do not recycle an idle worker only because its heartbeat paused. GTA/
+    -- MoonLoader can stop scheduling auxiliary threads while focus/minimize
+    -- state changes. Treating that as a dead worker caused false recoveries.
     return true
 end
 
@@ -3095,6 +3282,15 @@ end
 function __arzHtmlStartServer()
     if running then return true end
 
+    if requestWorkerState.thread then
+        local statusOk,status=pcall(function() return requestWorkerState.thread:status() end)
+        if statusOk and (status=="dead" or status=="terminated") then
+            requestWorkerState.thread=nil
+        else
+            return false,"worker_retiring:"..tostring(statusOk and status or "unknown")
+        end
+    end
+
     local socket=nil
     local luaSocketOk,luaSocket=pcall(require,"socket")
     if luaSocketOk and type(luaSocket)=="table" and type(luaSocket.bind)=="function" then
@@ -3148,6 +3344,8 @@ function __arzHtmlStartServer()
     requestWorkerState.jobPath=""
     requestWorkerState.lastError=nil
     requestWorkerState.lastWatchdogAt=0
+    requestWorkerState.restartPending=false
+    requestWorkerState.retireReason=nil
     serviceBusy=false
 
     local workerOk,workerError=__arzHtmlStartRequestWorker(generation)
@@ -3169,7 +3367,10 @@ function __arzHtmlStopServer()
     running=false
     requestWorkerState.running=false
     requestWorkerState.generation=0
-    requestWorkerState.thread=nil
+    requestWorkerState.restartPending=false
+    requestWorkerState.retireReason="server_stop"
+    -- Do not force-terminate the LuaThread. The generation/running guards make
+    -- the worker leave naturally on its next scheduler resume.
     requestWorkerState.heartbeatAt=0
     requestWorkerState.jobStartedAt=0
     requestWorkerState.jobPath=""
@@ -3234,6 +3435,11 @@ function M.open_html(page,settingsSection,options)
     local validSettingsSection = settingsSection=="general" or settingsSection=="trade" or settingsSection=="automation"
         or settingsSection=="telegram" or settingsSection=="appearance" or settingsSection=="configs"
     if currentPage=="settings" and validSettingsSection then currentSettingsSection=settingsSection else currentSettingsSection=nil end
+    if currentPage=="mods" and type(options)=="table" then
+        currentUserModId=normalizeUserModId(options.user_mod_id)
+    else
+        currentUserModId=nil
+    end
     local temporary=type(options)=="table" and options.temporary==true
     htmlTemporaryMode=temporary
     suppressAutoOpen=false
@@ -3526,7 +3732,7 @@ function M.pump()
     if now-requestWorkerState.lastWatchdogAt>=250 then
         requestWorkerState.lastWatchdogAt=now
         local workerOk,workerErr=__arzHtmlEnsureRequestWorkerHealthy()
-        if not workerOk and workerErr~="recovery_cooldown" then
+        if not workerOk and workerErr~="recovery_cooldown" and not tostring(workerErr or ""):find("^worker_retiring") then
             ok,err=false,workerErr
         end
     end

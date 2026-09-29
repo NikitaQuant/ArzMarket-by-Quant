@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "bundle_version": 302,
+  "bundle_version": 303,
   "base_url": "https://raw.githubusercontent.com/NikitaQuant/ArzMarket-by-Quant/main/",
   "files": [
     {
@@ -287,8 +287,8 @@
     },
     {
       "path": "ArzMarket/html/css/mods-catalog-v250.css",
-      "size": 5813,
-      "crc32": "2F054794",
+      "size": 11744,
+      "crc32": "415C2D2F",
       "required": true
     },
     {
@@ -485,14 +485,14 @@
     },
     {
       "path": "ArzMarket/html/index.html",
-      "size": 38095,
-      "crc32": "2C7D5F0F",
+      "size": 38667,
+      "crc32": "5E30B9A3",
       "required": true
     },
     {
       "path": "ArzMarket/html/js/app.js",
-      "size": 263881,
-      "crc32": "941D2730",
+      "size": 275927,
+      "crc32": "A74C010E",
       "required": true
     },
     {
@@ -551,14 +551,20 @@
     },
     {
       "path": "modules/ArzMarketQuant/mod_runtime.lua",
-      "size": 71918,
-      "crc32": "C3468181",
+      "size": 73762,
+      "crc32": "8A97FB32",
+      "required": true
+    },
+    {
+      "path": "modules/ArzMarketQuant/user_mod_runtime.lua",
+      "size": 26202,
+      "crc32": "F8CDE2DE",
       "required": true
     },
     {
       "path": "modules/ArzMarketQuant/telegram_runtime.lua",
-      "size": 15745,
-      "crc32": "DFE13633",
+      "size": 15722,
+      "crc32": "E6FEE5E9",
       "required": true
     },
     {
@@ -581,8 +587,8 @@
     },
     {
       "path": "modules/arz_html_ui.lua",
-      "size": 167032,
-      "crc32": "30AB977E",
+      "size": 180897,
+      "crc32": "44E640E7",
       "required": true
     },
     {
